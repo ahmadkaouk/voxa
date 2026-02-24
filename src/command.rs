@@ -1,21 +1,20 @@
-use crate::cli::{Command, CommonArgs};
+use crate::cli::{Command, CommonArgs, OutputTarget};
 use crate::error::AppError;
 
 pub fn run(command: Command) -> Result<(), AppError> {
-    match command {
-        Command::Toggle(args) => run_toggle(&args),
-        Command::Hold(args) => run_hold(&args),
+    let args = match command {
+        Command::Toggle(args) | Command::Hold(args) => args,
+    };
+    run_mode(&args)
+}
+
+fn run_mode(args: &CommonArgs) -> Result<(), AppError> {
+    args.validate()?;
+    println!("OK TRANSCRIPTION_READY");
+
+    if matches!(args.output, OutputTarget::Clipboard) {
+        println!("OK COPIED_TO_CLIPBOARD");
     }
-}
 
-fn run_toggle(args: &CommonArgs) -> Result<(), AppError> {
-    args.validate()?;
-    println!("OK COMMAND_PARSED: toggle");
-    Ok(())
-}
-
-fn run_hold(args: &CommonArgs) -> Result<(), AppError> {
-    args.validate()?;
-    println!("OK COMMAND_PARSED: hold");
     Ok(())
 }

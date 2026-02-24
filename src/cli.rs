@@ -2,7 +2,6 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::error::AppError;
 
-const DEFAULT_MODEL: &str = "gpt-4o-mini-transcribe";
 const DEFAULT_MAX_SECONDS: u32 = 90;
 
 #[derive(Debug, Parser)]
@@ -28,8 +27,8 @@ pub struct CommonArgs {
     #[arg(long, value_enum, default_value_t = Language::Auto)]
     pub language: Language,
 
-    #[arg(long, default_value = DEFAULT_MODEL)]
-    pub model: String,
+    #[arg(long, value_enum, default_value_t = Model::Gpt4oMiniTranscribe)]
+    pub model: Model,
 
     #[arg(long = "max-seconds", default_value_t = DEFAULT_MAX_SECONDS)]
     pub max_seconds: u32,
@@ -40,16 +39,20 @@ pub struct CommonArgs {
 
 impl CommonArgs {
     pub fn validate(&self) -> Result<(), AppError> {
-        if self.model.trim().is_empty() {
-            return Err(AppError::InvalidModel);
-        }
-
         if self.max_seconds == 0 {
             return Err(AppError::InvalidMaxSeconds);
         }
 
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum Model {
+    #[value(name = "gpt-4o-mini-transcribe")]
+    Gpt4oMiniTranscribe,
+    #[value(name = "gpt-4o-transcribe")]
+    Gpt4oTranscribe,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
