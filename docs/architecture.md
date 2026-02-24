@@ -9,7 +9,7 @@ Build a local macOS tool for personal dictation that converts speech to text wit
 - Interaction modes:
   - `toggle`: press `Enter` to start, press `Enter` again to stop.
   - `hold`: hold `Space` to record, release to stop.
-- If `hold` key-release is unsupported in the current terminal, return `E_INPUT_MODE_UNSUPPORTED` and suggest `toggle`.
+- If `hold` key-release is unsupported in the current terminal, return `INPUT_MODE_UNSUPPORTED` and suggest `toggle`.
 - Output behavior:
   - Always print transcript to stdout.
   - Copy transcript to clipboard by default.
@@ -150,42 +150,46 @@ Environment variables:
 - Error lines start with `ERROR`.
 - Warning lines start with `WARN`.
 - Success lines start with `OK`.
+- IDs do not use one-letter type prefixes.
 - Include one short remediation line when relevant.
 
 ### Fatal (`exit 1`: user/config/input)
 | Error ID | Condition | Primary Message | Remediation Message |
 |---|---|---|---|
-| `E_CFG_API_KEY_MISSING` | `OPENAI_API_KEY` missing in env or `.env` | `ERROR E_CFG_API_KEY_MISSING: OPENAI_API_KEY is required.` | `Set OPENAI_API_KEY in your environment or .env file.` |
-| `E_CFG_INVALID_MODEL` | model value empty/invalid | `ERROR E_CFG_INVALID_MODEL: model value is invalid.` | `Use gpt-4o-mini-transcribe or gpt-4o-transcribe.` |
-| `E_CFG_INVALID_LANGUAGE` | unsupported language code | `ERROR E_CFG_INVALID_LANGUAGE: language must be auto, en, or fr.` | `Run voico --help for valid options.` |
-| `E_CFG_INVALID_MAX_SECONDS` | non-numeric, zero, or negative max duration | `ERROR E_CFG_INVALID_MAX_SECONDS: max-seconds must be > 0.` | `Use --max-seconds <positive integer>.` |
-| `E_INPUT_MODE_UNSUPPORTED` | `hold` mode key release unsupported | `ERROR E_INPUT_MODE_UNSUPPORTED: hold mode is not supported in this terminal.` | `Use voico toggle instead.` |
-| `E_AUDIO_DEVICE_UNAVAILABLE` | no input device or device open failure | `ERROR E_AUDIO_DEVICE_UNAVAILABLE: microphone input is unavailable.` | `Check input device and retry.` |
-| `E_AUDIO_PERMISSION_DENIED` | macOS microphone access denied | `ERROR E_AUDIO_PERMISSION_DENIED: microphone permission denied.` | `Allow microphone access for your terminal app in System Settings > Privacy & Security > Microphone.` |
-| `E_AUDIO_CAPTURE_FAILED` | stream callback/read failure | `ERROR E_AUDIO_CAPTURE_FAILED: failed while capturing audio.` | `Check microphone device status and retry.` |
-| `E_AUDIO_EMPTY_BUFFER` | no usable frames captured | `ERROR E_AUDIO_EMPTY_BUFFER: no audio captured.` | `Speak after recording starts and retry.` |
+| `CFG_API_KEY_MISSING` | `OPENAI_API_KEY` missing in env or `.env` | `ERROR CFG_API_KEY_MISSING: OPENAI_API_KEY is required.` | `Set OPENAI_API_KEY in your environment or .env file.` |
+| `CFG_INVALID_MODEL` | model value empty/invalid | `ERROR CFG_INVALID_MODEL: model value is invalid.` | `Use gpt-4o-mini-transcribe or gpt-4o-transcribe.` |
+| `CFG_INVALID_LANGUAGE` | unsupported language code | `ERROR CFG_INVALID_LANGUAGE: language must be auto, en, or fr.` | `Run voico --help for valid options.` |
+| `CFG_INVALID_MAX_SECONDS` | non-numeric, zero, or negative max duration | `ERROR CFG_INVALID_MAX_SECONDS: max-seconds must be > 0.` | `Use --max-seconds <positive integer>.` |
+| `INPUT_MODE_UNSUPPORTED` | `hold` mode key release unsupported | `ERROR INPUT_MODE_UNSUPPORTED: hold mode is not supported in this terminal.` | `Use voico toggle instead.` |
+| `AUDIO_DEVICE_UNAVAILABLE` | no input device or device open failure | `ERROR AUDIO_DEVICE_UNAVAILABLE: microphone input is unavailable.` | `Check input device and retry.` |
+| `AUDIO_PERMISSION_DENIED` | macOS microphone access denied | `ERROR AUDIO_PERMISSION_DENIED: microphone permission denied.` | `Allow microphone access for your terminal app in System Settings > Privacy & Security > Microphone.` |
+| `AUDIO_CAPTURE_FAILED` | stream callback/read failure | `ERROR AUDIO_CAPTURE_FAILED: failed while capturing audio.` | `Check microphone device status and retry.` |
+| `AUDIO_EMPTY_BUFFER` | no usable frames captured | `ERROR AUDIO_EMPTY_BUFFER: no audio captured.` | `Speak after recording starts and retry.` |
 
 ### Fatal (`exit 2`: provider/network/transcription)
 | Error ID | Condition | Primary Message | Remediation Message |
 |---|---|---|---|
-| `E_API_AUTH_FAILED` | invalid API key or unauthorized request | `ERROR E_API_AUTH_FAILED: authentication failed with STT provider.` | `Verify OPENAI_API_KEY and retry.` |
-| `E_API_RATE_LIMITED` | provider rate limit response | `ERROR E_API_RATE_LIMITED: request was rate-limited.` | `Wait and retry.` |
-| `E_API_REQUEST_FAILED` | provider returns non-auth request error | `ERROR E_API_REQUEST_FAILED: transcription request failed.` | `Check model/language/options and retry.` |
-| `E_API_NETWORK_FAILED` | DNS/TLS/connectivity/timeout failure | `ERROR E_API_NETWORK_FAILED: network error during transcription.` | `Check internet connection and retry.` |
-| `E_API_RESPONSE_INVALID` | malformed response or missing transcript field | `ERROR E_API_RESPONSE_INVALID: provider response could not be parsed.` | `Retry; if persistent, switch model and re-test.` |
-| `E_API_EMPTY_TRANSCRIPT` | provider returns empty transcript | `ERROR E_API_EMPTY_TRANSCRIPT: transcript is empty.` | `Retry in a quieter environment or speak longer.` |
+| `API_AUTH_FAILED` | invalid API key or unauthorized request | `ERROR API_AUTH_FAILED: authentication failed with STT provider.` | `Verify OPENAI_API_KEY and retry.` |
+| `API_RATE_LIMITED` | provider rate limit response | `ERROR API_RATE_LIMITED: request was rate-limited.` | `Wait and retry.` |
+| `API_REQUEST_FAILED` | provider returns non-auth request error | `ERROR API_REQUEST_FAILED: transcription request failed.` | `Check model/language/options and retry.` |
+| `API_NETWORK_FAILED` | DNS/TLS/connectivity/timeout failure | `ERROR API_NETWORK_FAILED: network error during transcription.` | `Check internet connection and retry.` |
+| `API_RESPONSE_INVALID` | malformed response or missing transcript field | `ERROR API_RESPONSE_INVALID: provider response could not be parsed.` | `Retry; if persistent, switch model and re-test.` |
+| `API_EMPTY_TRANSCRIPT` | provider returns empty transcript | `ERROR API_EMPTY_TRANSCRIPT: transcript is empty.` | `Retry in a quieter environment or speak longer.` |
 
 ### Non-Fatal Warnings (`exit 0`)
 | Warning ID | Condition | Primary Message | Behavior |
 |---|---|---|---|
-| `W_OUTPUT_CLIPBOARD_FAILED` | transcript exists but clipboard copy fails | `WARN W_OUTPUT_CLIPBOARD_FAILED: transcript created but clipboard copy failed.` | Print transcript to stdout and keep `exit 0`. |
-| `W_AUDIO_MAX_DURATION_REACHED` | recording auto-stops at max duration | `WARN W_AUDIO_MAX_DURATION_REACHED: recording reached max duration and was stopped.` | Continue to transcription. |
+| `OUTPUT_CLIPBOARD_FAILED` | transcript exists but clipboard copy fails | `WARN OUTPUT_CLIPBOARD_FAILED: transcript created but clipboard copy failed.` | Print transcript to stdout and keep `exit 0`. |
+| `AUDIO_MAX_DURATION_REACHED` | recording auto-stops at max duration | `WARN AUDIO_MAX_DURATION_REACHED: recording reached max duration and was stopped.` | Continue to transcription. |
 
-### Success Messages
-- `OK RECORDING_STARTED`
-- `OK RECORDING_STOPPED`
-- `OK TRANSCRIPTION_READY`
-- `OK COPIED_TO_CLIPBOARD`
+### Success IDs
+- `RECORDING_STARTED`
+- `RECORDING_STOPPED`
+- `TRANSCRIPTION_READY`
+- `COPIED_TO_CLIPBOARD`
+
+Runtime line format:
+- `OK <SUCCESS_ID>`
 
 ## Privacy Contract
 - The app does not persist transcript history or audio history.
