@@ -1,7 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-const DEFAULT_MAX_SECONDS: u32 = 90;
-
 #[derive(Debug, Parser)]
 #[command(
     name = "voico",
@@ -22,21 +20,17 @@ pub enum Command {
 
 #[derive(Debug, Clone, Args)]
 pub struct CommonArgs {
-    #[arg(long, value_enum, default_value_t = Language::Auto)]
-    pub language: Language,
+    #[arg(long, value_enum)]
+    pub language: Option<Language>,
 
-    #[arg(long, value_enum, default_value_t = Model::Gpt4oMiniTranscribe)]
-    pub model: Model,
+    #[arg(long, value_enum)]
+    pub model: Option<Model>,
 
-    #[arg(
-        long = "max-seconds",
-        default_value_t = DEFAULT_MAX_SECONDS,
-        value_parser = clap::value_parser!(u32).range(1..)
-    )]
-    pub max_seconds: u32,
+    #[arg(long = "max-seconds")]
+    pub max_seconds: Option<u32>,
 
-    #[arg(long, value_enum, default_value_t = OutputTarget::Clipboard)]
-    pub output: OutputTarget,
+    #[arg(long, value_enum)]
+    pub output: Option<OutputTarget>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
