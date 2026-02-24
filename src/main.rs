@@ -1,6 +1,5 @@
 mod cli;
 mod command;
-mod error;
 
 use clap::{Parser, error::ErrorKind};
 
@@ -21,11 +20,6 @@ fn run() -> i32 {
         }
     };
 
-    match command::run(cli.command) {
-        Ok(()) => 0,
-        Err(err) => {
-            err.print();
-            1
-        }
-    }
+    command::run(cli.command);
+    0
 }

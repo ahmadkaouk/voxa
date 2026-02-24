@@ -1,7 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use crate::error::AppError;
-
 const DEFAULT_MAX_SECONDS: u32 = 90;
 
 #[derive(Debug, Parser)]
@@ -30,21 +28,15 @@ pub struct CommonArgs {
     #[arg(long, value_enum, default_value_t = Model::Gpt4oMiniTranscribe)]
     pub model: Model,
 
-    #[arg(long = "max-seconds", default_value_t = DEFAULT_MAX_SECONDS)]
+    #[arg(
+        long = "max-seconds",
+        default_value_t = DEFAULT_MAX_SECONDS,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
     pub max_seconds: u32,
 
     #[arg(long, value_enum, default_value_t = OutputTarget::Clipboard)]
     pub output: OutputTarget,
-}
-
-impl CommonArgs {
-    pub fn validate(&self) -> Result<(), AppError> {
-        if self.max_seconds == 0 {
-            return Err(AppError::InvalidMaxSeconds);
-        }
-
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]

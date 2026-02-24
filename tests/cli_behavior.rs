@@ -19,13 +19,14 @@ fn invalid_model_is_rejected_at_parse_time() {
 }
 
 #[test]
-fn invalid_max_seconds_uses_cfg_error_id_format() {
+fn invalid_max_seconds_is_rejected_at_parse_time() {
     let output = run(&["toggle", "--max-seconds", "0"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("ERROR CFG_INVALID_MAX_SECONDS"));
-    assert!(!stderr.contains("ERROR E_CFG_INVALID_MAX_SECONDS"));
+    assert!(stderr.contains("--max-seconds"));
+    assert!(stderr.contains("0"));
+    assert!(!stderr.contains("CFG_INVALID_MAX_SECONDS"));
 }
 
 #[test]
