@@ -26,7 +26,7 @@ pub struct CommonArgs {
     #[arg(long, value_enum)]
     pub model: Option<Model>,
 
-    #[arg(long = "max-seconds")]
+    #[arg(long = "max-seconds", value_parser = clap::value_parser!(u32).range(1..))]
     pub max_seconds: Option<u32>,
 
     #[arg(long, value_enum)]

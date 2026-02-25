@@ -2,6 +2,11 @@ use std::process::{Command, Output};
 
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_voico"))
+        .env("OPENAI_API_KEY", "test-key")
+        .env_remove("VOICO_MODEL")
+        .env_remove("VOICO_LANGUAGE")
+        .env_remove("VOICO_MAX_SECONDS")
+        .env_remove("VOICO_OUTPUT")
         .args(args)
         .output()
         .expect("failed to execute voico")

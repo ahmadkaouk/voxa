@@ -46,9 +46,15 @@ Build a local macOS tool for personal dictation that converts speech to text wit
   - Resolves values from CLI, environment, and `.env`.
 
 ## Rust Module Layout
-- `src/main.rs`: CLI entrypoint.
-- `src/app.rs`: orchestration and state machine wiring.
+Current scaffold:
+- `src/main.rs`: CLI entrypoint and exit code handling.
+- `src/cli.rs`: command and flag definitions.
+- `src/command.rs`: shared command execution path.
 - `src/config.rs`: config loading and validation.
+- `src/error.rs`: app error types and printable contract messages.
+
+Planned `v1` expansion modules:
+- `src/app.rs`: orchestration and state machine wiring.
 - `src/audio.rs`: capture and WAV conversion.
 - `src/stt/mod.rs`: STT trait and provider implementation.
 - `src/output.rs`: stdout and clipboard output.

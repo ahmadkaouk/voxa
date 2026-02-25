@@ -22,23 +22,18 @@ pub fn load(args: &CommonArgs) -> Result<AppConfig, AppError> {
     let _ = dotenvy::dotenv();
 
     let api_key = resolve_api_key()?;
-    let model = match args.model {
-        Some(model) => model,
-        None => resolve_model_env()?.unwrap_or(DEFAULT_MODEL),
-    };
-    let language = match args.language {
-        Some(language) => language,
-        None => resolve_language_env()?.unwrap_or(DEFAULT_LANGUAGE),
-    };
-    let max_seconds = match args.max_seconds {
-        Some(max_seconds) if max_seconds > 0 => max_seconds,
-        Some(_) => return Err(AppError::CfgInvalidMaxSeconds),
-        None => resolve_max_seconds_env()?.unwrap_or(DEFAULT_MAX_SECONDS),
-    };
-    let output = match args.output {
-        Some(output) => output,
-        None => resolve_output_env()?.unwrap_or(DEFAULT_OUTPUT),
-    };
+    let model = args
+        .model
+        .unwrap_or(resolve_model_env()?.unwrap_or(DEFAULT_MODEL));
+    let language = args
+        .language
+        .unwrap_or(resolve_language_env()?.unwrap_or(DEFAULT_LANGUAGE));
+    let max_seconds = args
+        .max_seconds
+        .unwrap_or(resolve_max_seconds_env()?.unwrap_or(DEFAULT_MAX_SECONDS));
+    let output = args
+        .output
+        .unwrap_or(resolve_output_env()?.unwrap_or(DEFAULT_OUTPUT));
 
     Ok(AppConfig {
         api_key,
@@ -52,67 +47,74 @@ pub fn load(args: &CommonArgs) -> Result<AppConfig, AppError> {
 fn resolve_api_key() -> Result<String, AppError> {
     match env::var("OPENAI_API_KEY") {
         Ok(value) if !value.trim().is_empty() => Ok(value),
-        _ => Err(AppError::CfgApiKeyMissing),
+        _ => Err(AppError::ApiKeyMissing),
     }
 }
 
 fn resolve_model_env() -> Result<Option<Model>, AppError> {
-    let value = match env::var("VOICO_MODEL") {
-        Ok(value) => value,
-        Err(env::VarError::NotPresent) => return Ok(None),
-        Err(env::VarError::NotUnicode(_)) => return Err(AppError::CfgInvalidModel),
-    };
-
-    match value.trim() {
-        "gpt-4o-mini-transcribe" => Ok(Some(Model::Gpt4oMiniTranscribe)),
-        "gpt-4o-transcribe" => Ok(Some(Model::Gpt4oTranscribe)),
-        _ => Err(AppError::CfgInvalidModel),
-    }
+    resolve_optional_env("VOICO_MODEL", parse_model, AppError::InvalidModel)
 }
 
 fn resolve_language_env() -> Result<Option<Language>, AppError> {
-    let value = match env::var("VOICO_LANGUAGE") {
-        Ok(value) => value,
-        Err(env::VarError::NotPresent) => return Ok(None),
-        Err(env::VarError::NotUnicode(_)) => return Err(AppError::CfgInvalidLanguage),
-    };
-
-    match value.trim() {
-        "auto" => Ok(Some(Language::Auto)),
-        "en" => Ok(Some(Language::En)),
-        "fr" => Ok(Some(Language::Fr)),
-        _ => Err(AppError::CfgInvalidLanguage),
-    }
+    resolve_optional_env("VOICO_LANGUAGE", parse_language, AppError::InvalidLanguage)
 }
 
 fn resolve_max_seconds_env() -> Result<Option<u32>, AppError> {
-    let value = match env::var("VOICO_MAX_SECONDS") {
-        Ok(value) => value,
-        Err(env::VarError::NotPresent) => return Ok(None),
-        Err(env::VarError::NotUnicode(_)) => return Err(AppError::CfgInvalidMaxSeconds),
-    };
-
-    let parsed = value
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| AppError::CfgInvalidMaxSeconds)?;
-    if parsed == 0 {
-        return Err(AppError::CfgInvalidMaxSeconds);
-    }
-
-    Ok(Some(parsed))
+    resolve_optional_env(
+        "VOICO_MAX_SECONDS",
+        parse_max_seconds,
+        AppError::InvalidMaxSeconds,
+    )
 }
 
 fn resolve_output_env() -> Result<Option<OutputTarget>, AppError> {
-    let value = match env::var("VOICO_OUTPUT") {
+    resolve_optional_env("VOICO_OUTPUT", parse_output, AppError::InvalidOutput)
+}
+
+fn resolve_optional_env<T>(
+    key: &str,
+    parse: fn(&str) -> Option<T>,
+    parse_error: AppError,
+) -> Result<Option<T>, AppError> {
+    let value = match env::var(key) {
         Ok(value) => value,
         Err(env::VarError::NotPresent) => return Ok(None),
-        Err(env::VarError::NotUnicode(_)) => return Err(AppError::CfgInvalidOutput),
+        Err(env::VarError::NotUnicode(_)) => return Err(parse_error),
     };
 
-    match value.trim() {
-        "clipboard" => Ok(Some(OutputTarget::Clipboard)),
-        "stdout" => Ok(Some(OutputTarget::Stdout)),
-        _ => Err(AppError::CfgInvalidOutput),
+    parse(value.trim()).ok_or(parse_error).map(Some)
+}
+
+fn parse_model(value: &str) -> Option<Model> {
+    match value {
+        "gpt-4o-mini-transcribe" => Some(Model::Gpt4oMiniTranscribe),
+        "gpt-4o-transcribe" => Some(Model::Gpt4oTranscribe),
+        _ => None,
+    }
+}
+
+fn parse_language(value: &str) -> Option<Language> {
+    match value {
+        "auto" => Some(Language::Auto),
+        "en" => Some(Language::En),
+        "fr" => Some(Language::Fr),
+        _ => None,
+    }
+}
+
+fn parse_max_seconds(value: &str) -> Option<u32> {
+    let parsed = value.parse::<u32>().ok()?;
+    if parsed == 0 {
+        return None;
+    }
+
+    Some(parsed)
+}
+
+fn parse_output(value: &str) -> Option<OutputTarget> {
+    match value {
+        "clipboard" => Some(OutputTarget::Clipboard),
+        "stdout" => Some(OutputTarget::Stdout),
+        _ => None,
     }
 }
