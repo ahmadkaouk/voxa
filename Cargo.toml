@@ -2,6 +2,8 @@
 name = "voico"
 version = "0.1.0"
 edition = "2024"
+description = "Local macOS voice-to-text CLI."
+readme = "README.md"
 
 [dependencies]
 clap = { version = "4.5.32", features = ["derive"] }
