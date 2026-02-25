@@ -162,11 +162,11 @@ Environment variables:
 ### Fatal (`exit 1`: user/config/input)
 | Error ID | Condition | Primary Message | Remediation Message |
 |---|---|---|---|
-| `CFG_API_KEY_MISSING` | `OPENAI_API_KEY` missing in env or `.env` | `ERROR CFG_API_KEY_MISSING: OPENAI_API_KEY is required.` | `Set OPENAI_API_KEY in your environment or .env file.` |
-| `CFG_INVALID_MODEL` | model value empty/invalid | `ERROR CFG_INVALID_MODEL: model value is invalid.` | `Use gpt-4o-mini-transcribe or gpt-4o-transcribe.` |
-| `CFG_INVALID_LANGUAGE` | unsupported language code | `ERROR CFG_INVALID_LANGUAGE: language must be auto, en, or fr.` | `Run voico --help for valid options.` |
-| `CFG_INVALID_MAX_SECONDS` | non-numeric, zero, or negative max duration | `ERROR CFG_INVALID_MAX_SECONDS: max-seconds must be > 0.` | `Use --max-seconds <positive integer>.` |
-| `CFG_INVALID_OUTPUT` | unsupported output target | `ERROR CFG_INVALID_OUTPUT: output must be clipboard or stdout.` | `Use --output <clipboard|stdout>.` |
+| `CONFIG_API_KEY_MISSING` | `OPENAI_API_KEY` missing in env or `.env` | `ERROR CONFIG_API_KEY_MISSING: OPENAI_API_KEY is required.` | `Set OPENAI_API_KEY in your environment or .env file.` |
+| `CONFIG_INVALID_MODEL` | model value empty/invalid | `ERROR CONFIG_INVALID_MODEL: model value is invalid.` | `Use gpt-4o-mini-transcribe or gpt-4o-transcribe.` |
+| `CONFIG_INVALID_LANGUAGE` | unsupported language code | `ERROR CONFIG_INVALID_LANGUAGE: language must be auto, en, or fr.` | `Run voico --help for valid options.` |
+| `CONFIG_INVALID_MAX_SECONDS` | non-numeric, zero, or negative max duration | `ERROR CONFIG_INVALID_MAX_SECONDS: max-seconds must be > 0.` | `Use --max-seconds <positive integer>.` |
+| `CONFIG_INVALID_OUTPUT` | unsupported output target | `ERROR CONFIG_INVALID_OUTPUT: output must be clipboard or stdout.` | `Use --output <clipboard|stdout>.` |
 | `INPUT_MODE_UNSUPPORTED` | `hold` mode key release unsupported | `ERROR INPUT_MODE_UNSUPPORTED: hold mode is not supported in this terminal.` | `Use voico toggle instead.` |
 | `AUDIO_DEVICE_UNAVAILABLE` | no input device or device open failure | `ERROR AUDIO_DEVICE_UNAVAILABLE: microphone input is unavailable.` | `Check input device and retry.` |
 | `AUDIO_PERMISSION_DENIED` | macOS microphone access denied | `ERROR AUDIO_PERMISSION_DENIED: microphone permission denied.` | `Allow microphone access for your terminal app in System Settings > Privacy & Security > Microphone.` |

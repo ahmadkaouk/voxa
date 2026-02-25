@@ -1,3 +1,4 @@
+mod audio;
 mod cli;
 mod command;
 mod config;

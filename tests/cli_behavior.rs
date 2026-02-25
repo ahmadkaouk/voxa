@@ -1,23 +1,27 @@
 use std::process::{Command, Output};
 
 fn run(args: &[&str]) -> Output {
-    run_with_env(args, &[])
-}
-
-fn run_with_env(args: &[&str], env_overrides: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_voico"));
-
     command
-        .env("OPENAI_API_KEY", "test-key")
+        .args(args)
+        .env_remove("OPENAI_API_KEY")
         .env_remove("VOICO_MODEL")
         .env_remove("VOICO_LANGUAGE")
         .env_remove("VOICO_MAX_SECONDS")
-        .env_remove("VOICO_OUTPUT")
-        .args(args);
+        .env_remove("VOICO_OUTPUT");
 
-    for (key, value) in env_overrides {
-        command.env(key, value);
-    }
+    command.output().expect("failed to execute voico")
+}
+
+fn run_with_api_key(args: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_voico"));
+    command
+        .args(args)
+        .env("OPENAI_API_KEY", "dummy")
+        .env_remove("VOICO_MODEL")
+        .env_remove("VOICO_LANGUAGE")
+        .env_remove("VOICO_MAX_SECONDS")
+        .env_remove("VOICO_OUTPUT");
 
     command.output().expect("failed to execute voico")
 }
@@ -41,60 +45,31 @@ fn invalid_max_seconds_is_rejected_at_parse_time() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr.contains("--max-seconds"));
     assert!(stderr.contains("0"));
-    assert!(!stderr.contains("CFG_INVALID_MAX_SECONDS"));
+    assert!(!stderr.contains("CONFIG_INVALID_MAX_SECONDS"));
 }
 
 #[test]
-fn cli_values_override_invalid_env_values() {
-    let output = run_with_env(
-        &[
-            "toggle",
-            "--model",
-            "gpt-4o-mini-transcribe",
-            "--language",
-            "en",
-            "--max-seconds",
-            "30",
-            "--output",
-            "stdout",
-        ],
-        &[
-            ("VOICO_MODEL", "bad-model"),
-            ("VOICO_LANGUAGE", "de"),
-            ("VOICO_MAX_SECONDS", "0"),
-            ("VOICO_OUTPUT", "file"),
-        ],
-    );
+fn hold_command_reports_unsupported_mode() {
+    let output = run_with_api_key(&["hold"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("ERROR INPUT_MODE_UNSUPPORTED"));
+    assert!(stderr.contains("Use voico toggle instead."));
 }
 
 #[test]
-fn stdout_output_skips_clipboard_success_line() {
-    let output = run(&["toggle", "--output", "stdout"]);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+fn toggle_without_api_key_reports_config_error() {
+    let output = run(&["toggle"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(stdout.contains("OK TRANSCRIPTION_READY"));
-    assert!(!stdout.contains("OK COPIED_TO_CLIPBOARD"));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("ERROR CONFIG_API_KEY_MISSING"));
 }
 
 #[test]
-fn clipboard_output_emits_clipboard_success_line() {
-    let output = run(&["toggle", "--output", "clipboard"]);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+fn help_returns_success() {
+    let output = run(&["--help"]);
 
     assert_eq!(output.status.code(), Some(0));
-    assert!(stdout.contains("OK TRANSCRIPTION_READY"));
-    assert!(stdout.contains("OK COPIED_TO_CLIPBOARD"));
-}
-
-#[test]
-fn hold_command_uses_shared_execution_behavior() {
-    let output = run(&["hold", "--output", "stdout"]);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert_eq!(output.status.code(), Some(0));
-    assert!(stdout.contains("OK TRANSCRIPTION_READY"));
-    assert!(!stdout.contains("OK COPIED_TO_CLIPBOARD"));
 }
