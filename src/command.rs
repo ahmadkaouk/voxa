@@ -4,6 +4,7 @@ use crate::audio;
 use crate::cli::Command;
 use crate::config;
 use crate::error::AppError;
+use crate::stt;
 
 pub fn run(command: Command) -> Result<(), AppError> {
     match command {
@@ -23,6 +24,15 @@ pub fn run(command: Command) -> Result<(), AppError> {
                     "WARN AUDIO_MAX_DURATION_REACHED: recording reached max duration and was stopped."
                 );
             }
+
+            let transcript = stt::transcribe(
+                &config.api_key,
+                config.model,
+                config.language,
+                &captured.wav_bytes,
+            )?;
+            println!("OK TRANSCRIPTION_READY");
+            println!("{transcript}");
 
             Ok(())
         }

@@ -8,3 +8,8 @@ clap = { version = "4.5.32", features = ["derive"] }
 dotenvy = "0.15.7"
 cpal = "0.15.3"
 hound = "3.5.1"
+reqwest = { version = "0.12.23", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
+serde = { version = "1.0.228", features = ["derive"] }
+
+[dev-dependencies]
+mockito = "1.7.0"

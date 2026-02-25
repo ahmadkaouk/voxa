@@ -45,7 +45,7 @@ fn invalid_max_seconds_is_rejected_at_parse_time() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr.contains("--max-seconds"));
     assert!(stderr.contains("0"));
-    assert!(!stderr.contains("CONFIG_INVALID_MAX_SECONDS"));
+    assert!(!stderr.contains("MAX_SECONDS_INVALID"));
 }
 
 #[test]
@@ -59,12 +59,12 @@ fn hold_command_reports_unsupported_mode() {
 }
 
 #[test]
-fn toggle_without_api_key_reports_config_error() {
+fn toggle_without_api_key_reports_missing_key_error() {
     let output = run(&["toggle"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("ERROR CONFIG_API_KEY_MISSING"));
+    assert!(stderr.contains("ERROR OPENAI_API_KEY_MISSING"));
 }
 
 #[test]

@@ -3,6 +3,7 @@ mod cli;
 mod command;
 mod config;
 mod error;
+mod stt;
 
 use clap::{Parser, error::ErrorKind};
 
@@ -27,7 +28,7 @@ fn run() -> i32 {
         Ok(()) => 0,
         Err(err) => {
             err.print();
-            1
+            err.exit_code()
         }
     }
 }

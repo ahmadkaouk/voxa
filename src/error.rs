@@ -10,29 +10,47 @@ pub enum AppError {
     AudioPermissionDenied,
     AudioCaptureFailed,
     AudioEmptyBuffer,
+    ApiAuthFailed,
+    ApiRateLimited,
+    ApiRequestFailed,
+    ApiNetworkFailed,
+    ApiResponseInvalid,
+    ApiEmptyTranscript,
 }
 
 impl AppError {
+    pub fn exit_code(self) -> i32 {
+        match self {
+            Self::ApiAuthFailed
+            | Self::ApiRateLimited
+            | Self::ApiRequestFailed
+            | Self::ApiNetworkFailed
+            | Self::ApiResponseInvalid
+            | Self::ApiEmptyTranscript => 2,
+            _ => 1,
+        }
+    }
+
     pub fn print(self) {
         match self {
             Self::ApiKeyMissing => {
-                eprintln!("ERROR CONFIG_API_KEY_MISSING: OPENAI_API_KEY is required.");
+                eprintln!("ERROR OPENAI_API_KEY_MISSING: OPENAI_API_KEY is required.");
                 eprintln!("Set OPENAI_API_KEY in your environment or .env file.");
             }
             Self::InvalidModel => {
-                eprintln!("ERROR CONFIG_INVALID_MODEL: model value is invalid.");
+                eprintln!("ERROR MODEL_INVALID: model value is invalid.");
                 eprintln!("Use gpt-4o-mini-transcribe or gpt-4o-transcribe.");
             }
             Self::InvalidLanguage => {
-                eprintln!("ERROR CONFIG_INVALID_LANGUAGE: language must be auto, en, or fr.");
+                eprintln!("ERROR LANGUAGE_INVALID: language must be auto, en, or fr.");
                 eprintln!("Run voico --help for valid options.");
             }
             Self::InvalidMaxSeconds => {
-                eprintln!("ERROR CONFIG_INVALID_MAX_SECONDS: max-seconds must be > 0.");
+                eprintln!("ERROR MAX_SECONDS_INVALID: max-seconds must be > 0.");
                 eprintln!("Use --max-seconds <positive integer>.");
             }
             Self::InvalidOutput => {
-                eprintln!("ERROR CONFIG_INVALID_OUTPUT: output must be clipboard or stdout.");
+                eprintln!("ERROR OUTPUT_INVALID: output must be clipboard or stdout.");
                 eprintln!("Use --output <clipboard|stdout>.");
             }
             Self::InputModeUnsupported => {
@@ -59,6 +77,71 @@ impl AppError {
                 eprintln!("ERROR AUDIO_EMPTY_BUFFER: no audio captured.");
                 eprintln!("Speak after recording starts and retry.");
             }
+            Self::ApiAuthFailed => {
+                eprintln!("ERROR API_AUTH_FAILED: authentication failed with STT provider.");
+                eprintln!("Verify OPENAI_API_KEY and retry.");
+            }
+            Self::ApiRateLimited => {
+                eprintln!("ERROR API_RATE_LIMITED: request was rate-limited.");
+                eprintln!("Wait and retry.");
+            }
+            Self::ApiRequestFailed => {
+                eprintln!("ERROR API_REQUEST_FAILED: transcription request failed.");
+                eprintln!("Check model/language/options and retry.");
+            }
+            Self::ApiNetworkFailed => {
+                eprintln!("ERROR API_NETWORK_FAILED: network error during transcription.");
+                eprintln!("Check internet connection and retry.");
+            }
+            Self::ApiResponseInvalid => {
+                eprintln!("ERROR API_RESPONSE_INVALID: provider response could not be parsed.");
+                eprintln!("Retry; if persistent, switch model and re-test.");
+            }
+            Self::ApiEmptyTranscript => {
+                eprintln!("ERROR API_EMPTY_TRANSCRIPT: transcript is empty.");
+                eprintln!("Retry in a quieter environment or speak longer.");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+
+    #[test]
+    fn provider_errors_use_exit_code_two() {
+        let provider_errors = [
+            AppError::ApiAuthFailed,
+            AppError::ApiRateLimited,
+            AppError::ApiRequestFailed,
+            AppError::ApiNetworkFailed,
+            AppError::ApiResponseInvalid,
+            AppError::ApiEmptyTranscript,
+        ];
+
+        for error in provider_errors {
+            assert_eq!(error.exit_code(), 2);
+        }
+    }
+
+    #[test]
+    fn non_provider_errors_use_exit_code_one() {
+        let non_provider_errors = [
+            AppError::ApiKeyMissing,
+            AppError::InvalidModel,
+            AppError::InvalidLanguage,
+            AppError::InvalidMaxSeconds,
+            AppError::InvalidOutput,
+            AppError::InputModeUnsupported,
+            AppError::AudioDeviceUnavailable,
+            AppError::AudioPermissionDenied,
+            AppError::AudioCaptureFailed,
+            AppError::AudioEmptyBuffer,
+        ];
+
+        for error in non_provider_errors {
+            assert_eq!(error.exit_code(), 1);
         }
     }
 }
