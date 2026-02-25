@@ -17,6 +17,14 @@ pub struct CapturedAudio {
 }
 
 pub fn record_toggle(max_seconds: u32) -> Result<CapturedAudio, AppError> {
+    let stop_rx = spawn_stop_listener();
+    record_until_stop(max_seconds, stop_rx)
+}
+
+pub fn record_until_stop(
+    max_seconds: u32,
+    stop_rx: mpsc::Receiver<()>,
+) -> Result<CapturedAudio, AppError> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -42,7 +50,6 @@ pub fn record_toggle(max_seconds: u32) -> Result<CapturedAudio, AppError> {
     )?;
     stream.play().map_err(map_play_stream_error)?;
 
-    let stop_rx = spawn_stop_listener();
     let deadline = Instant::now() + Duration::from_secs(max_seconds as u64);
     let mut max_duration_reached = false;
 

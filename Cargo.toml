@@ -11,6 +11,7 @@ hound = "3.5.1"
 reqwest = { version = "0.12.23", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 arboard = "3.6.1"
+crossterm = "0.29.0"
 
 [dev-dependencies]
 mockito = "1.7.0"
