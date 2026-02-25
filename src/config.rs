@@ -1,5 +1,7 @@
 use std::env;
 
+use clap::ValueEnum;
+
 use crate::cli::{CommonArgs, Language, Model, OutputTarget};
 use crate::error::AppError;
 
@@ -22,18 +24,14 @@ pub fn load(args: &CommonArgs) -> Result<AppConfig, AppError> {
     let _ = dotenvy::dotenv();
 
     let api_key = resolve_api_key()?;
-    let model = args
-        .model
-        .unwrap_or(resolve_model_env()?.unwrap_or(DEFAULT_MODEL));
-    let language = args
-        .language
-        .unwrap_or(resolve_language_env()?.unwrap_or(DEFAULT_LANGUAGE));
-    let max_seconds = args
-        .max_seconds
-        .unwrap_or(resolve_max_seconds_env()?.unwrap_or(DEFAULT_MAX_SECONDS));
-    let output = args
-        .output
-        .unwrap_or(resolve_output_env()?.unwrap_or(DEFAULT_OUTPUT));
+    let model = resolve_value(args.model, resolve_model_env, DEFAULT_MODEL)?;
+    let language = resolve_value(args.language, resolve_language_env, DEFAULT_LANGUAGE)?;
+    let max_seconds = resolve_value(
+        args.max_seconds,
+        resolve_max_seconds_env,
+        DEFAULT_MAX_SECONDS,
+    )?;
+    let output = resolve_value(args.output, resolve_output_env, DEFAULT_OUTPUT)?;
 
     Ok(AppConfig {
         api_key,
@@ -44,6 +42,16 @@ pub fn load(args: &CommonArgs) -> Result<AppConfig, AppError> {
     })
 }
 
+fn resolve_value<T, F>(cli_value: Option<T>, env_loader: F, default: T) -> Result<T, AppError>
+where
+    F: FnOnce() -> Result<Option<T>, AppError>,
+{
+    match cli_value {
+        Some(value) => Ok(value),
+        None => Ok(env_loader()?.unwrap_or(default)),
+    }
+}
+
 fn resolve_api_key() -> Result<String, AppError> {
     match env::var("OPENAI_API_KEY") {
         Ok(value) if !value.trim().is_empty() => Ok(value),
@@ -52,30 +60,45 @@ fn resolve_api_key() -> Result<String, AppError> {
 }
 
 fn resolve_model_env() -> Result<Option<Model>, AppError> {
-    resolve_optional_env("VOICO_MODEL", parse_model, AppError::InvalidModel)
+    resolve_optional_env(
+        "VOICO_MODEL",
+        parse_value_enum::<Model>,
+        AppError::InvalidModel,
+    )
 }
 
 fn resolve_language_env() -> Result<Option<Language>, AppError> {
-    resolve_optional_env("VOICO_LANGUAGE", parse_language, AppError::InvalidLanguage)
+    resolve_optional_env(
+        "VOICO_LANGUAGE",
+        parse_value_enum::<Language>,
+        AppError::InvalidLanguage,
+    )
 }
 
 fn resolve_max_seconds_env() -> Result<Option<u32>, AppError> {
     resolve_optional_env(
         "VOICO_MAX_SECONDS",
-        parse_max_seconds,
+        parse_positive_u32,
         AppError::InvalidMaxSeconds,
     )
 }
 
 fn resolve_output_env() -> Result<Option<OutputTarget>, AppError> {
-    resolve_optional_env("VOICO_OUTPUT", parse_output, AppError::InvalidOutput)
+    resolve_optional_env(
+        "VOICO_OUTPUT",
+        parse_value_enum::<OutputTarget>,
+        AppError::InvalidOutput,
+    )
 }
 
-fn resolve_optional_env<T>(
+fn resolve_optional_env<T, F>(
     key: &str,
-    parse: fn(&str) -> Option<T>,
+    parse: F,
     parse_error: AppError,
-) -> Result<Option<T>, AppError> {
+) -> Result<Option<T>, AppError>
+where
+    F: FnOnce(&str) -> Option<T>,
+{
     let value = match env::var(key) {
         Ok(value) => value,
         Err(env::VarError::NotPresent) => return Ok(None),
@@ -85,36 +108,10 @@ fn resolve_optional_env<T>(
     parse(value.trim()).ok_or(parse_error).map(Some)
 }
 
-fn parse_model(value: &str) -> Option<Model> {
-    match value {
-        "gpt-4o-mini-transcribe" => Some(Model::Gpt4oMiniTranscribe),
-        "gpt-4o-transcribe" => Some(Model::Gpt4oTranscribe),
-        _ => None,
-    }
+fn parse_value_enum<T: ValueEnum>(value: &str) -> Option<T> {
+    T::from_str(value, false).ok()
 }
 
-fn parse_language(value: &str) -> Option<Language> {
-    match value {
-        "auto" => Some(Language::Auto),
-        "en" => Some(Language::En),
-        "fr" => Some(Language::Fr),
-        _ => None,
-    }
-}
-
-fn parse_max_seconds(value: &str) -> Option<u32> {
-    let parsed = value.parse::<u32>().ok()?;
-    if parsed == 0 {
-        return None;
-    }
-
-    Some(parsed)
-}
-
-fn parse_output(value: &str) -> Option<OutputTarget> {
-    match value {
-        "clipboard" => Some(OutputTarget::Clipboard),
-        "stdout" => Some(OutputTarget::Stdout),
-        _ => None,
-    }
+fn parse_positive_u32(value: &str) -> Option<u32> {
+    value.parse::<u32>().ok().filter(|value| *value > 0)
 }

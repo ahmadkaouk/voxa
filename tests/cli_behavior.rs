@@ -1,15 +1,25 @@
 use std::process::{Command, Output};
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_voico"))
+    run_with_env(args, &[])
+}
+
+fn run_with_env(args: &[&str], env_overrides: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_voico"));
+
+    command
         .env("OPENAI_API_KEY", "test-key")
         .env_remove("VOICO_MODEL")
         .env_remove("VOICO_LANGUAGE")
         .env_remove("VOICO_MAX_SECONDS")
         .env_remove("VOICO_OUTPUT")
-        .args(args)
-        .output()
-        .expect("failed to execute voico")
+        .args(args);
+
+    for (key, value) in env_overrides {
+        command.env(key, value);
+    }
+
+    command.output().expect("failed to execute voico")
 }
 
 #[test]
@@ -32,6 +42,31 @@ fn invalid_max_seconds_is_rejected_at_parse_time() {
     assert!(stderr.contains("--max-seconds"));
     assert!(stderr.contains("0"));
     assert!(!stderr.contains("CFG_INVALID_MAX_SECONDS"));
+}
+
+#[test]
+fn cli_values_override_invalid_env_values() {
+    let output = run_with_env(
+        &[
+            "toggle",
+            "--model",
+            "gpt-4o-mini-transcribe",
+            "--language",
+            "en",
+            "--max-seconds",
+            "30",
+            "--output",
+            "stdout",
+        ],
+        &[
+            ("VOICO_MODEL", "bad-model"),
+            ("VOICO_LANGUAGE", "de"),
+            ("VOICO_MAX_SECONDS", "0"),
+            ("VOICO_OUTPUT", "file"),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(0));
 }
 
 #[test]
