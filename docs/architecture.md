@@ -5,15 +5,16 @@ Build a local macOS tool for personal dictation that converts speech to text wit
 
 ## Scope
 - `v1` is a terminal command.
-- Each command invocation runs one cycle: record -> transcribe -> output -> exit.
+- Foreground commands run one cycle: record -> transcribe -> output -> exit.
+- Background daemon mode keeps running and listens for a global hotkey.
 - Interaction modes:
   - `toggle`: press `Enter` to start, press `Enter` again to stop.
   - `hold`: hold `Space` to record, release to stop.
 - If `hold` key-release is unsupported in the current terminal, return `INPUT_MODE_UNSUPPORTED` and suggest `toggle`.
 - Output behavior:
   - Always print transcript to stdout.
-  - Copy transcript to clipboard by default.
-  - No auto-typing in `v1`.
+  - Foreground mode copies transcript to clipboard by default.
+  - Daemon mode supports `clipboard` and `autopaste` output targets.
 - `v2` adds a menu bar UI over the same core modules.
 
 ## Locked Decisions (v1)
@@ -73,6 +74,11 @@ Candidate crates:
 ### Commands
 - `voico toggle [--language <auto|en|fr>] [--model <model>] [--max-seconds <n>] [--output <clipboard|stdout>]`
 - `voico hold [--language <auto|en|fr>] [--model <model>] [--max-seconds <n>] [--output <clipboard|stdout>]`
+- `voico daemon`
+- `voico service <install|uninstall|status>`
+- `voico config show`
+- `voico config set hotkey <right_option|cmd_space|fn>`
+- `voico config set output <clipboard|autopaste>`
 - `voico --help`
 
 ### Defaults
@@ -222,7 +228,7 @@ Runtime line format:
 5. Implement stdout and clipboard output.
 6. Implement `hold` mode and unsupported-terminal handling.
 7. Package as local binary command.
-8. Add menu bar adapter in `v2` using the same core modules.
+8. Add background daemon mode with global hotkey and LaunchAgent service controls.
 
 ## v2 Menu Bar Preview
 - Keep `audio`, `stt`, `output`, and `config` UI-agnostic.

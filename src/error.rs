@@ -5,6 +5,14 @@ pub enum AppError {
     InvalidLanguage,
     InvalidMaxSeconds,
     InvalidOutput,
+    DaemonConfigPathUnavailable,
+    DaemonConfigReadFailed,
+    DaemonConfigWriteFailed,
+    DaemonConfigInvalid,
+    DaemonListenerUnavailable,
+    ServiceInstallFailed,
+    ServiceUninstallFailed,
+    ServiceStatusFailed,
     InputModeUnsupported,
     AudioDeviceUnavailable,
     AudioPermissionDenied,
@@ -52,6 +60,42 @@ impl AppError {
             Self::InvalidOutput => {
                 eprintln!("ERROR OUTPUT_INVALID: output must be clipboard or stdout.");
                 eprintln!("Use --output <clipboard|stdout>.");
+            }
+            Self::DaemonConfigPathUnavailable => {
+                eprintln!("ERROR DAEMON_CONFIG_PATH_UNAVAILABLE: could not resolve HOME path.");
+                eprintln!("Set HOME and retry.");
+            }
+            Self::DaemonConfigReadFailed => {
+                eprintln!("ERROR DAEMON_CONFIG_READ_FAILED: failed to read daemon configuration.");
+                eprintln!("Run voico config show or recreate the config file.");
+            }
+            Self::DaemonConfigWriteFailed => {
+                eprintln!(
+                    "ERROR DAEMON_CONFIG_WRITE_FAILED: failed to write daemon configuration."
+                );
+                eprintln!("Check file permissions and retry.");
+            }
+            Self::DaemonConfigInvalid => {
+                eprintln!("ERROR DAEMON_CONFIG_INVALID: daemon config values are invalid.");
+                eprintln!("Run voico config set hotkey right_option to reset values.");
+            }
+            Self::DaemonListenerUnavailable => {
+                eprintln!("ERROR DAEMON_LISTENER_UNAVAILABLE: global hotkey listener failed.");
+                eprintln!(
+                    "Allow Accessibility permissions for voico/terminal in System Settings > Privacy & Security > Accessibility."
+                );
+            }
+            Self::ServiceInstallFailed => {
+                eprintln!("ERROR SERVICE_INSTALL_FAILED: failed to install LaunchAgent.");
+                eprintln!("Run voico service install again and check launchctl output.");
+            }
+            Self::ServiceUninstallFailed => {
+                eprintln!("ERROR SERVICE_UNINSTALL_FAILED: failed to uninstall LaunchAgent.");
+                eprintln!("Run voico service uninstall again.");
+            }
+            Self::ServiceStatusFailed => {
+                eprintln!("ERROR SERVICE_STATUS_FAILED: failed to inspect LaunchAgent status.");
+                eprintln!("Verify launchctl is available and retry.");
             }
             Self::InputModeUnsupported => {
                 eprintln!(
@@ -133,6 +177,14 @@ mod tests {
             AppError::InvalidLanguage,
             AppError::InvalidMaxSeconds,
             AppError::InvalidOutput,
+            AppError::DaemonConfigPathUnavailable,
+            AppError::DaemonConfigReadFailed,
+            AppError::DaemonConfigWriteFailed,
+            AppError::DaemonConfigInvalid,
+            AppError::DaemonListenerUnavailable,
+            AppError::ServiceInstallFailed,
+            AppError::ServiceUninstallFailed,
+            AppError::ServiceStatusFailed,
             AppError::InputModeUnsupported,
             AppError::AudioDeviceUnavailable,
             AppError::AudioPermissionDenied,

@@ -52,3 +52,49 @@ Run in hold mode:
 ```bash
 voico hold
 ```
+
+## Background Mode (Global Hotkey)
+
+Show daemon config:
+
+```bash
+voico config show
+```
+
+Set global hotkey:
+
+```bash
+voico config set hotkey right_option
+# or: cmd_space, fn
+```
+
+Set output mode:
+
+```bash
+voico config set output clipboard
+# or: autopaste
+```
+
+Run daemon in foreground:
+
+```bash
+voico daemon
+```
+
+Install as macOS LaunchAgent:
+
+```bash
+voico service install
+voico service status
+```
+
+Remove service:
+
+```bash
+voico service uninstall
+```
+
+Notes:
+- Daemon hotkey acts as toggle: press once to start recording, press again to stop and transcribe.
+- `autopaste` copies transcript then sends `Cmd+V`.
+- macOS may require Accessibility permission for global hotkey capture and auto-paste.

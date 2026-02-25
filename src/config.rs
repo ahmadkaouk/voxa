@@ -42,6 +42,15 @@ pub fn load(args: &CommonArgs) -> Result<AppConfig, AppError> {
     })
 }
 
+pub fn load_defaults() -> Result<AppConfig, AppError> {
+    load(&CommonArgs {
+        language: None,
+        model: None,
+        max_seconds: None,
+        output: None,
+    })
+}
+
 fn resolve_value<T, F>(cli_value: Option<T>, env_loader: F, default: T) -> Result<T, AppError>
 where
     F: FnOnce() -> Result<Option<T>, AppError>,

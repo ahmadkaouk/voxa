@@ -13,14 +13,20 @@ use crossterm::{execute, terminal::supports_keyboard_enhancement};
 use crate::audio;
 use crate::cli::Command;
 use crate::config;
+use crate::daemon;
+use crate::daemon_config;
 use crate::error::AppError;
 use crate::output;
+use crate::service;
 use crate::stt;
 
 pub fn run(command: Command) -> Result<(), AppError> {
     match command {
         Command::Toggle(args) => run_toggle(args),
         Command::Hold(args) => run_hold(args),
+        Command::Daemon => daemon::run(),
+        Command::Service(args) => service::run(args.command),
+        Command::Config(args) => daemon_config::run(args.command),
     }
 }
 

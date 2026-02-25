@@ -1,0 +1,260 @@
+use std::env;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::cli::{ConfigCommand, ConfigSetCommand, DaemonHotkeyArg, DaemonOutputArg};
+use crate::error::AppError;
+
+const CONFIG_DIR_RELATIVE: &str = "Library/Application Support/voico";
+const CONFIG_FILE_NAME: &str = "config.toml";
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonHotkey {
+    RightOption,
+    CmdSpace,
+    Fn,
+}
+
+impl DaemonHotkey {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RightOption => "right_option",
+            Self::CmdSpace => "cmd_space",
+            Self::Fn => "fn",
+        }
+    }
+}
+
+impl From<DaemonHotkeyArg> for DaemonHotkey {
+    fn from(value: DaemonHotkeyArg) -> Self {
+        match value {
+            DaemonHotkeyArg::RightOption => Self::RightOption,
+            DaemonHotkeyArg::CmdSpace => Self::CmdSpace,
+            DaemonHotkeyArg::Fn => Self::Fn,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonOutput {
+    Clipboard,
+    Autopaste,
+}
+
+impl DaemonOutput {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Clipboard => "clipboard",
+            Self::Autopaste => "autopaste",
+        }
+    }
+}
+
+impl From<DaemonOutputArg> for DaemonOutput {
+    fn from(value: DaemonOutputArg) -> Self {
+        match value {
+            DaemonOutputArg::Clipboard => Self::Clipboard,
+            DaemonOutputArg::Autopaste => Self::Autopaste,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct DaemonConfig {
+    pub hotkey: DaemonHotkey,
+    pub output: DaemonOutput,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            hotkey: DaemonHotkey::RightOption,
+            output: DaemonOutput::Clipboard,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DaemonConfigFile {
+    hotkey: Option<DaemonHotkey>,
+    output: Option<DaemonOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct StoredDaemonConfig {
+    hotkey: DaemonHotkey,
+    output: DaemonOutput,
+}
+
+pub fn run(command: ConfigCommand) -> Result<(), AppError> {
+    match command {
+        ConfigCommand::Show => run_show(),
+        ConfigCommand::Set(args) => run_set(args.command),
+    }
+}
+
+fn run_show() -> Result<(), AppError> {
+    let path = config_path()?;
+    let config = load()?;
+
+    println!("config_path = {}", path.display());
+    println!("hotkey = {}", config.hotkey.as_str());
+    println!("output = {}", config.output.as_str());
+
+    Ok(())
+}
+
+fn run_set(command: ConfigSetCommand) -> Result<(), AppError> {
+    let mut config = load()?;
+
+    match command {
+        ConfigSetCommand::Hotkey { value } => {
+            config.hotkey = value.into();
+        }
+        ConfigSetCommand::Output { value } => {
+            config.output = value.into();
+        }
+    }
+
+    save(config)?;
+    println!("OK CONFIG_UPDATED");
+
+    run_show()
+}
+
+pub fn load() -> Result<DaemonConfig, AppError> {
+    load_from_path(&config_path()?)
+}
+
+pub fn save(config: DaemonConfig) -> Result<(), AppError> {
+    save_to_path(&config_path()?, config)
+}
+
+pub fn config_path() -> Result<PathBuf, AppError> {
+    Ok(config_dir()?.join(CONFIG_FILE_NAME))
+}
+
+fn config_dir() -> Result<PathBuf, AppError> {
+    Ok(home_dir()?.join(CONFIG_DIR_RELATIVE))
+}
+
+fn home_dir() -> Result<PathBuf, AppError> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or(AppError::DaemonConfigPathUnavailable)
+}
+
+fn load_from_path(path: &Path) -> Result<DaemonConfig, AppError> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(DaemonConfig::default()),
+        Err(_) => return Err(AppError::DaemonConfigReadFailed),
+    };
+
+    let parsed: DaemonConfigFile =
+        toml::from_str(&raw).map_err(|_| AppError::DaemonConfigInvalid)?;
+
+    Ok(DaemonConfig {
+        hotkey: parsed.hotkey.unwrap_or(DaemonHotkey::RightOption),
+        output: parsed.output.unwrap_or(DaemonOutput::Clipboard),
+    })
+}
+
+fn save_to_path(path: &Path, config: DaemonConfig) -> Result<(), AppError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| AppError::DaemonConfigWriteFailed)?;
+    }
+
+    let stored = StoredDaemonConfig {
+        hotkey: config.hotkey,
+        output: config.output,
+    };
+
+    let serialized = toml::to_string(&stored).map_err(|_| AppError::DaemonConfigWriteFailed)?;
+    fs::write(path, serialized).map_err(|_| AppError::DaemonConfigWriteFailed)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{DaemonConfig, DaemonHotkey, DaemonOutput, load_from_path, save_to_path};
+    use crate::error::AppError;
+
+    fn temp_config_path(name: &str) -> PathBuf {
+        let pid = std::process::id();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time should be after epoch")
+            .as_nanos();
+
+        std::env::temp_dir()
+            .join(format!("voico-{name}-{pid}-{nanos}"))
+            .join("config.toml")
+    }
+
+    fn cleanup(path: &PathBuf) {
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn load_returns_defaults_when_file_missing() {
+        let path = temp_config_path("missing");
+        let config = load_from_path(&path).expect("missing config should load defaults");
+
+        assert_eq!(config, DaemonConfig::default());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn load_parses_valid_file() {
+        let path = temp_config_path("parse");
+        fs::create_dir_all(path.parent().expect("temp path should have parent"))
+            .expect("failed to create temp dir");
+        fs::write(&path, "hotkey = \"cmd_space\"\noutput = \"autopaste\"\n")
+            .expect("failed to write config");
+
+        let config = load_from_path(&path).expect("valid config should parse");
+        assert_eq!(config.hotkey, DaemonHotkey::CmdSpace);
+        assert_eq!(config.output, DaemonOutput::Autopaste);
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn save_and_load_round_trip() {
+        let path = temp_config_path("roundtrip");
+        let expected = DaemonConfig {
+            hotkey: DaemonHotkey::Fn,
+            output: DaemonOutput::Clipboard,
+        };
+
+        save_to_path(&path, expected).expect("save should succeed");
+        let actual = load_from_path(&path).expect("load should succeed");
+
+        assert_eq!(actual, expected);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn invalid_toml_returns_config_error() {
+        let path = temp_config_path("invalid");
+        fs::create_dir_all(path.parent().expect("temp path should have parent"))
+            .expect("failed to create temp dir");
+        fs::write(&path, "hotkey = [\n").expect("failed to write config");
+
+        let result = load_from_path(&path);
+        assert!(matches!(result, Err(AppError::DaemonConfigInvalid)));
+
+        cleanup(&path);
+    }
+}

@@ -2,8 +2,12 @@ mod audio;
 mod cli;
 mod command;
 mod config;
+mod daemon;
+mod daemon_config;
 mod error;
+mod hotkey;
 mod output;
+mod service;
 mod stt;
 
 use clap::{Parser, error::ErrorKind};
