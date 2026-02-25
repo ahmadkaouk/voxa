@@ -3,6 +3,7 @@ mod cli;
 mod command;
 mod config;
 mod error;
+mod output;
 mod stt;
 
 use clap::{Parser, error::ErrorKind};

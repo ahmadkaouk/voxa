@@ -4,6 +4,7 @@ use crate::audio;
 use crate::cli::Command;
 use crate::config;
 use crate::error::AppError;
+use crate::output;
 use crate::stt;
 
 pub fn run(command: Command) -> Result<(), AppError> {
@@ -32,7 +33,7 @@ pub fn run(command: Command) -> Result<(), AppError> {
                 &captured.wav_bytes,
             )?;
             println!("OK TRANSCRIPTION_READY");
-            println!("{transcript}");
+            output::emit(&transcript, config.output);
 
             Ok(())
         }
