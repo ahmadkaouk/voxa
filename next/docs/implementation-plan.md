@@ -30,13 +30,13 @@
 
 ## Phase 1: Contract-First Design
 ### Tasks
-- [ ] Write `next/docs/ipc.md` with JSON request/response/event schemas.
-- [ ] Define protocol versioning strategy (`api_version` handshake).
-- [ ] Define daemon error model (stable error codes + user-safe messages).
-- [ ] Define event ordering and reconnect semantics.
+- [x] Write `next/docs/ipc.md` with JSON request/response/event schemas.
+- [x] Define protocol versioning strategy (`api_version` handshake).
+- [x] Define daemon error model (stable error codes + user-safe messages).
+- [x] Define event ordering and reconnect semantics.
 
 ### Deliverables
-- [ ] Frozen v1 IPC spec for implementation.
+- [ ] Frozen v0 IPC spec for implementation.
 
 ### Acceptance Criteria
 - [ ] Team signoff on `ipc.md` before server/client coding.
@@ -62,11 +62,10 @@
 - [ ] Add daemon process entrypoint (`voico-daemon`).
 - [ ] Integrate adapters: hotkey, audio capture, STT, output.
 - [ ] Expose IPC endpoints:
-  - [ ] `health`
   - [ ] `get_state`
   - [ ] `start_recording`
   - [ ] `stop_recording`
-  - [ ] `set_config` / `get_config`
+  - [ ] `subscribe`
 - [ ] Add event broadcast subscription channel.
 
 ### Deliverables
@@ -110,6 +109,7 @@
 ## Phase 6: Thin `voicoctl` (Optional but Recommended)
 ### Tasks
 - [ ] Implement minimal commands: `status`, `health`, `config get/set`, `start`, `stop`.
+- [ ] Implement minimal commands: `status`, `config get/set`, `start`, `stop`.
 - [ ] Ensure `voicoctl` uses IPC only (no direct business logic).
 - [ ] Add short troubleshooting docs for this tool.
 
@@ -157,7 +157,7 @@
 
 ## Suggested Milestone Sequence
 1. M1: Phase 0 + Phase 1
-2. M2: Phase 2 + basic Phase 3 (`health`, `get_state`, `start/stop`)
+2. M2: Phase 2 + basic Phase 3 (`get_state`, `start/stop`, `subscribe`)
 3. M3: Full Phase 3 + Phase 4
 4. M4: Phase 5 + Phase 6
 5. M5: Phase 7 + Phase 8
