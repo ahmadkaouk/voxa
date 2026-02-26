@@ -100,7 +100,7 @@ fn finalize_recording_and_transcription(
         &captured.wav_bytes,
     )?;
     println!("OK TRANSCRIPTION_READY");
-    output::emit(&transcript, config.output);
+    output::emit(&transcript, config.output)?;
 
     Ok(())
 }

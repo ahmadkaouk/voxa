@@ -1,7 +1,9 @@
 use std::env;
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -202,9 +204,10 @@ fn load_from_path(path: &Path) -> Result<DaemonConfig, AppError> {
 }
 
 fn save_to_path(path: &Path, config: DaemonConfig) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|_| AppError::DaemonConfigWriteFailed)?;
-    }
+    let Some(parent) = path.parent() else {
+        return Err(AppError::DaemonConfigWriteFailed);
+    };
+    fs::create_dir_all(parent).map_err(|_| AppError::DaemonConfigWriteFailed)?;
 
     let stored = StoredDaemonConfig {
         hotkey: config.hotkey,
@@ -213,13 +216,39 @@ fn save_to_path(path: &Path, config: DaemonConfig) -> Result<(), AppError> {
     };
 
     let serialized = toml::to_string(&stored).map_err(|_| AppError::DaemonConfigWriteFailed)?;
-    fs::write(path, serialized).map_err(|_| AppError::DaemonConfigWriteFailed)
+    let temp_path = temp_config_write_path(parent);
+    let mut temp_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .map_err(|_| AppError::DaemonConfigWriteFailed)?;
+
+    if temp_file.write_all(serialized.as_bytes()).is_err() || temp_file.sync_all().is_err() {
+        let _ = fs::remove_file(&temp_path);
+        return Err(AppError::DaemonConfigWriteFailed);
+    }
+    drop(temp_file);
+
+    if fs::rename(&temp_path, path).is_err() {
+        let _ = fs::remove_file(&temp_path);
+        return Err(AppError::DaemonConfigWriteFailed);
+    }
+
+    Ok(())
+}
+
+fn temp_config_write_path(parent: &Path) -> PathBuf {
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    parent.join(format!(".{CONFIG_FILE_NAME}.{pid}.{nanos}.tmp"))
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
@@ -239,7 +268,7 @@ mod tests {
             .join("config.toml")
     }
 
-    fn cleanup(path: &PathBuf) {
+    fn cleanup(path: &Path) {
         if let Some(parent) = path.parent() {
             let _ = fs::remove_dir_all(parent);
         }

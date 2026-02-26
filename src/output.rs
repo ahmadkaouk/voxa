@@ -7,26 +7,31 @@ use rdev::{EventType, Key, simulate};
 
 use crate::cli::OutputTarget;
 use crate::daemon_config::DaemonOutput;
+use crate::error::AppError;
 
 const CLIPBOARD_FAILED_WARNING: &str =
     "WARN OUTPUT_CLIPBOARD_FAILED: transcript created but clipboard copy failed.";
 const AUTOPASTE_FAILED_WARNING: &str =
     "WARN OUTPUT_AUTOPASTE_FAILED: transcript copied but auto-paste failed.";
 
-pub fn emit(transcript: &str, target: OutputTarget) {
+pub fn emit(transcript: &str, target: OutputTarget) -> Result<(), AppError> {
     let mut stdout = io::stdout();
-    let _ = emit_with(transcript, target, copy_to_clipboard, &mut stdout);
+    emit_with(transcript, target, copy_to_clipboard, &mut stdout)
+        .map(|_| ())
+        .map_err(|_| AppError::OutputWriteFailed)
 }
 
-pub fn emit_daemon(transcript: &str, target: DaemonOutput) {
+pub fn emit_daemon(transcript: &str, target: DaemonOutput) -> Result<(), AppError> {
     let mut stdout = io::stdout();
-    let _ = emit_daemon_with(
+    emit_daemon_with(
         transcript,
         target,
         copy_to_clipboard,
         send_autopaste_shortcut,
         &mut stdout,
-    );
+    )
+    .map(|_| ())
+    .map_err(|_| AppError::OutputWriteFailed)
 }
 
 fn emit_with<W, F>(

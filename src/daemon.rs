@@ -1,7 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
 use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -97,6 +97,7 @@ fn acquire_daemon_lock_at_path(path: &Path) -> Result<DaemonLock, AppError> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)
         .map_err(|_| AppError::DaemonConfigWriteFailed)?;
 
@@ -109,11 +110,13 @@ fn acquire_daemon_lock_at_path(path: &Path) -> Result<DaemonLock, AppError> {
     }
 
     // Keep current owner PID for observability/debugging.
-    file.set_len(0).map_err(|_| AppError::DaemonConfigWriteFailed)?;
+    file.set_len(0)
+        .map_err(|_| AppError::DaemonConfigWriteFailed)?;
     file.seek(SeekFrom::Start(0))
         .map_err(|_| AppError::DaemonConfigWriteFailed)?;
     writeln!(file, "{}", std::process::id()).map_err(|_| AppError::DaemonConfigWriteFailed)?;
-    file.sync_all().map_err(|_| AppError::DaemonConfigWriteFailed)?;
+    file.sync_all()
+        .map_err(|_| AppError::DaemonConfigWriteFailed)?;
 
     Ok(DaemonLock { file })
 }
@@ -223,7 +226,7 @@ fn run_session(
     )?;
 
     println!("OK TRANSCRIPTION_READY");
-    output::emit_daemon(&transcript, daemon_config.output);
+    output::emit_daemon(&transcript, daemon_config.output)?;
 
     Ok(())
 }
@@ -354,8 +357,7 @@ mod tests {
         let lock_path = temp_lock_path("reacquire");
 
         {
-            let first =
-                acquire_daemon_lock_at_path(&lock_path).expect("first lock should succeed");
+            let first = acquire_daemon_lock_at_path(&lock_path).expect("first lock should succeed");
             drop(first);
         }
 

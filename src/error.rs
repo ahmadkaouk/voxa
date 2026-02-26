@@ -5,6 +5,7 @@ pub enum AppError {
     InvalidLanguage,
     InvalidMaxSeconds,
     InvalidOutput,
+    OutputWriteFailed,
     DaemonConfigPathUnavailable,
     DaemonConfigReadFailed,
     DaemonConfigWriteFailed,
@@ -61,6 +62,10 @@ impl AppError {
             Self::InvalidOutput => {
                 eprintln!("ERROR OUTPUT_INVALID: output must be clipboard or stdout.");
                 eprintln!("Use --output <clipboard|stdout>.");
+            }
+            Self::OutputWriteFailed => {
+                eprintln!("ERROR OUTPUT_WRITE_FAILED: failed to write command output.");
+                eprintln!("Check stdout/stderr pipes and retry.");
             }
             Self::DaemonConfigPathUnavailable => {
                 eprintln!("ERROR DAEMON_CONFIG_PATH_UNAVAILABLE: could not resolve HOME path.");
@@ -184,6 +189,7 @@ mod tests {
             AppError::InvalidLanguage,
             AppError::InvalidMaxSeconds,
             AppError::InvalidOutput,
+            AppError::OutputWriteFailed,
             AppError::DaemonConfigPathUnavailable,
             AppError::DaemonConfigReadFailed,
             AppError::DaemonConfigWriteFailed,

@@ -43,11 +43,7 @@ fn install() -> Result<(), AppError> {
         .arg("(^|/)voico daemon$")
         .status();
 
-    let _ = Command::new("launchctl")
-        .arg("bootout")
-        .arg(&domain)
-        .arg(&plist_path)
-        .status();
+    let _ = bootout_service(&domain, &plist_path);
 
     let bootstrap = Command::new("launchctl")
         .arg("bootstrap")
@@ -76,11 +72,7 @@ fn uninstall() -> Result<(), AppError> {
     let plist_path = plist_path()?;
     let domain = launch_domain().map_err(|_| AppError::ServiceUninstallFailed)?;
 
-    let _ = Command::new("launchctl")
-        .arg("bootout")
-        .arg(&domain)
-        .arg(&plist_path)
-        .status();
+    bootout_service(&domain, &plist_path).map_err(|_| AppError::ServiceUninstallFailed)?;
 
     if plist_path.exists() {
         fs::remove_file(&plist_path).map_err(|_| AppError::ServiceUninstallFailed)?;
@@ -97,12 +89,12 @@ fn status() -> Result<(), AppError> {
     let domain = launch_domain().map_err(|_| AppError::ServiceStatusFailed)?;
     let service_target = format!("{domain}/{SERVICE_LABEL}");
 
-    let loaded = Command::new("launchctl")
+    let output = Command::new("launchctl")
         .arg("print")
         .arg(&service_target)
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
+        .output()
+        .map_err(|_| AppError::ServiceStatusFailed)?;
+    let loaded = parse_loaded_status(&output)?;
 
     println!("service = {SERVICE_LABEL}");
     println!("plist_path = {}", plist_path.display());
@@ -139,13 +131,18 @@ fn launch_domain() -> Result<String, std::io::Error> {
 }
 
 fn build_plist(binary_path: &Path, stdout_log: &Path, stderr_log: &Path) -> String {
+    let service_label = xml_escape(SERVICE_LABEL);
+    let binary = xml_escape(&binary_path.display().to_string());
+    let stdout = xml_escape(&stdout_log.display().to_string());
+    let stderr = xml_escape(&stderr_log.display().to_string());
+
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>{SERVICE_LABEL}</string>
+  <string>{service_label}</string>
   <key>ProgramArguments</key>
   <array>
     <string>{binary}</string>
@@ -162,17 +159,73 @@ fn build_plist(binary_path: &Path, stdout_log: &Path, stderr_log: &Path) -> Stri
 </dict>
 </plist>
 "#,
-        binary = binary_path.display(),
-        stdout = stdout_log.display(),
-        stderr = stderr_log.display(),
+        service_label = service_label,
+        binary = binary,
+        stdout = stdout,
+        stderr = stderr,
     )
+}
+
+fn parse_loaded_status(output: &std::process::Output) -> Result<bool, AppError> {
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lower = stderr.to_ascii_lowercase();
+    let is_not_loaded = output.status.code() == Some(113)
+        || stderr_lower.contains("could not find service")
+        || stderr_lower.contains("service not found");
+
+    if is_not_loaded {
+        Ok(false)
+    } else {
+        Err(AppError::ServiceStatusFailed)
+    }
+}
+
+fn bootout_service(domain: &str, plist_path: &Path) -> Result<(), io::Error> {
+    let output = Command::new("launchctl")
+        .arg("bootout")
+        .arg(domain)
+        .arg(plist_path)
+        .output()?;
+
+    if output.status.success() || is_bootout_not_loaded(&output) {
+        return Ok(());
+    }
+
+    Err(io::Error::other("launchctl bootout failed"))
+}
+
+fn is_bootout_not_loaded(output: &std::process::Output) -> bool {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lower = stderr.to_ascii_lowercase();
+    output.status.code() == Some(5)
+        || stderr_lower.contains("input/output error")
+        || stderr_lower.contains("could not find service")
+        || stderr_lower.contains("service not found")
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::process::ExitStatusExt;
     use std::path::Path;
+    use std::process::Output;
 
-    use super::{SERVICE_LABEL, build_plist};
+    use super::{
+        SERVICE_LABEL, build_plist, is_bootout_not_loaded, parse_loaded_status,
+    };
+    use crate::error::AppError;
 
     #[test]
     fn plist_contains_required_fields() {
@@ -187,5 +240,65 @@ mod tests {
         assert!(plist.contains("<string>daemon</string>"));
         assert!(plist.contains("/tmp/out.log"));
         assert!(plist.contains("/tmp/err.log"));
+    }
+
+    #[test]
+    fn plist_escapes_xml_special_characters() {
+        let plist = build_plist(
+            Path::new("/tmp/voice&<\"'"),
+            Path::new("/tmp/out&<\"'.log"),
+            Path::new("/tmp/err&<\"'.log"),
+        );
+
+        assert!(plist.contains("/tmp/voice&amp;&lt;&quot;&apos;"));
+        assert!(plist.contains("/tmp/out&amp;&lt;&quot;&apos;.log"));
+        assert!(plist.contains("/tmp/err&amp;&lt;&quot;&apos;.log"));
+    }
+
+    #[test]
+    fn parse_loaded_status_maps_missing_service_to_false() {
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(113 << 8),
+            stdout: Vec::new(),
+            stderr: b"Could not find service".to_vec(),
+        };
+
+        assert!(matches!(parse_loaded_status(&output), Ok(false)));
+    }
+
+    #[test]
+    fn parse_loaded_status_maps_other_failures_to_error() {
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: Vec::new(),
+            stderr: b"Operation not permitted".to_vec(),
+        };
+
+        assert!(matches!(
+            parse_loaded_status(&output),
+            Err(AppError::ServiceStatusFailed)
+        ));
+    }
+
+    #[test]
+    fn bootout_not_loaded_is_treated_as_non_fatal() {
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(5 << 8),
+            stdout: Vec::new(),
+            stderr: b"Boot-out failed: 5: Input/output error".to_vec(),
+        };
+
+        assert!(is_bootout_not_loaded(&output));
+    }
+
+    #[test]
+    fn bootout_unrelated_failures_are_not_treated_as_not_loaded() {
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: Vec::new(),
+            stderr: b"Operation not permitted".to_vec(),
+        };
+
+        assert!(!is_bootout_not_loaded(&output));
     }
 }
