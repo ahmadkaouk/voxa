@@ -5,8 +5,6 @@ use std::time::Duration;
 
 use rdev::{EventType, Key, simulate};
 
-use crate::cli::OutputTarget;
-use crate::daemon_config::DaemonOutput;
 use crate::error::AppError;
 
 const CLIPBOARD_FAILED_WARNING: &str =
@@ -14,43 +12,16 @@ const CLIPBOARD_FAILED_WARNING: &str =
 const AUTOPASTE_FAILED_WARNING: &str =
     "WARN OUTPUT_AUTOPASTE_FAILED: transcript copied but auto-paste failed.";
 
-pub fn emit(transcript: &str, target: OutputTarget) -> Result<(), AppError> {
-    let mut stdout = io::stdout();
-    emit_with(transcript, target, copy_to_clipboard, &mut stdout)
-        .map(|_| ())
-        .map_err(|_| AppError::OutputWriteFailed)
-}
-
-pub fn emit_daemon(transcript: &str, target: DaemonOutput) -> Result<(), AppError> {
+pub fn emit_daemon(transcript: &str) -> Result<(), AppError> {
     let mut stdout = io::stdout();
     emit_daemon_with(
         transcript,
-        target,
         copy_to_clipboard,
         send_autopaste_shortcut,
         &mut stdout,
     )
     .map(|_| ())
     .map_err(|_| AppError::OutputWriteFailed)
-}
-
-fn emit_with<W, F>(
-    transcript: &str,
-    target: OutputTarget,
-    copy: F,
-    writer: &mut W,
-) -> io::Result<ClipboardOutcome>
-where
-    W: Write,
-    F: Fn(&str) -> bool,
-{
-    writeln!(writer, "{transcript}")?;
-
-    if matches!(target, OutputTarget::Clipboard) {
-        return emit_clipboard_status(transcript, copy, writer);
-    }
-
-    Ok(ClipboardOutcome::Skipped)
 }
 
 fn copy_to_clipboard(text: &str) -> bool {
@@ -120,7 +91,6 @@ where
 
 fn emit_daemon_with<W, C, P>(
     transcript: &str,
-    target: DaemonOutput,
     copy: C,
     autopaste: P,
     writer: &mut W,
@@ -131,10 +101,6 @@ where
     P: Fn() -> bool,
 {
     let clipboard_outcome = emit_clipboard_status(transcript, copy, writer)?;
-
-    if !matches!(target, DaemonOutput::Autopaste) {
-        return Ok((clipboard_outcome, AutopasteOutcome::Skipped));
-    }
 
     if !matches!(clipboard_outcome, ClipboardOutcome::Copied) {
         return Ok((clipboard_outcome, AutopasteOutcome::Skipped));
@@ -153,7 +119,6 @@ where
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum ClipboardOutcome {
-    Skipped,
     Copied,
     Failed,
 }
@@ -169,88 +134,14 @@ enum AutopasteOutcome {
 mod tests {
     use super::{
         AUTOPASTE_FAILED_WARNING, AutopasteOutcome, CLIPBOARD_FAILED_WARNING, ClipboardOutcome,
-        emit_daemon_with, emit_with,
+        emit_daemon_with,
     };
-    use crate::cli::OutputTarget;
-    use crate::daemon_config::DaemonOutput;
 
     #[test]
-    fn stdout_target_prints_transcript_only() {
+    fn daemon_copies_and_autopastes_when_copy_works() {
         let mut out = Vec::new();
-        let result = emit_with("hello", OutputTarget::Stdout, |_| true, &mut out)
-            .expect("output emit should succeed");
-
-        assert_eq!(result, ClipboardOutcome::Skipped);
-        assert_eq!(String::from_utf8(out).unwrap_or_default(), "hello\n");
-    }
-
-    #[test]
-    fn clipboard_target_prints_success_when_copy_works() {
-        let mut out = Vec::new();
-        let result = emit_with("hello", OutputTarget::Clipboard, |_| true, &mut out)
-            .expect("output emit should succeed");
-
-        assert_eq!(result, ClipboardOutcome::Copied);
-        assert_eq!(
-            String::from_utf8(out).unwrap_or_default(),
-            "hello\nOK COPIED_TO_CLIPBOARD\n"
-        );
-    }
-
-    #[test]
-    fn clipboard_target_prints_warning_when_copy_fails() {
-        let mut out = Vec::new();
-        let result = emit_with("hello", OutputTarget::Clipboard, |_| false, &mut out)
-            .expect("output emit should succeed");
-
-        assert_eq!(result, ClipboardOutcome::Failed);
-        assert_eq!(
-            String::from_utf8(out).unwrap_or_default(),
-            format!("hello\n{CLIPBOARD_FAILED_WARNING}\n")
-        );
-    }
-
-    #[test]
-    fn empty_transcript_is_still_emitted() {
-        let mut out = Vec::new();
-        let result = emit_with("", OutputTarget::Stdout, |_| true, &mut out)
-            .expect("output emit should succeed");
-
-        assert_eq!(result, ClipboardOutcome::Skipped);
-        assert_eq!(String::from_utf8(out).unwrap_or_default(), "\n");
-    }
-
-    #[test]
-    fn daemon_clipboard_target_only_copies() {
-        let mut out = Vec::new();
-        let (clipboard, autopaste) = emit_daemon_with(
-            "hello",
-            DaemonOutput::Clipboard,
-            |_| true,
-            || true,
-            &mut out,
-        )
-        .expect("daemon output should succeed");
-
-        assert_eq!(clipboard, ClipboardOutcome::Copied);
-        assert_eq!(autopaste, AutopasteOutcome::Skipped);
-        assert_eq!(
-            String::from_utf8(out).unwrap_or_default(),
-            "OK COPIED_TO_CLIPBOARD\n"
-        );
-    }
-
-    #[test]
-    fn daemon_autopaste_sends_shortcut_after_copy() {
-        let mut out = Vec::new();
-        let (clipboard, autopaste) = emit_daemon_with(
-            "hello",
-            DaemonOutput::Autopaste,
-            |_| true,
-            || true,
-            &mut out,
-        )
-        .expect("daemon output should succeed");
+        let (clipboard, autopaste) = emit_daemon_with("hello", |_| true, || true, &mut out)
+            .expect("daemon output should succeed");
 
         assert_eq!(clipboard, ClipboardOutcome::Copied);
         assert_eq!(autopaste, AutopasteOutcome::Sent);
@@ -263,20 +154,28 @@ mod tests {
     #[test]
     fn daemon_autopaste_warns_on_shortcut_failure() {
         let mut out = Vec::new();
-        let (clipboard, autopaste) = emit_daemon_with(
-            "hello",
-            DaemonOutput::Autopaste,
-            |_| true,
-            || false,
-            &mut out,
-        )
-        .expect("daemon output should succeed");
+        let (clipboard, autopaste) = emit_daemon_with("hello", |_| true, || false, &mut out)
+            .expect("daemon output should succeed");
 
         assert_eq!(clipboard, ClipboardOutcome::Copied);
         assert_eq!(autopaste, AutopasteOutcome::Failed);
         assert_eq!(
             String::from_utf8(out).unwrap_or_default(),
             format!("OK COPIED_TO_CLIPBOARD\n{AUTOPASTE_FAILED_WARNING}\n")
+        );
+    }
+
+    #[test]
+    fn daemon_skips_autopaste_when_copy_fails() {
+        let mut out = Vec::new();
+        let (clipboard, autopaste) = emit_daemon_with("hello", |_| false, || true, &mut out)
+            .expect("daemon output should succeed");
+
+        assert_eq!(clipboard, ClipboardOutcome::Failed);
+        assert_eq!(autopaste, AutopasteOutcome::Skipped);
+        assert_eq!(
+            String::from_utf8(out).unwrap_or_default(),
+            format!("{CLIPBOARD_FAILED_WARNING}\n")
         );
     }
 }

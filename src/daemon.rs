@@ -10,7 +10,7 @@ use rdev::{EventType, Key, listen};
 
 use crate::audio;
 use crate::config;
-use crate::daemon_config::{ConfigStore, DaemonConfig, DaemonHotkey, DaemonMode};
+use crate::daemon_config::{ConfigStore, DaemonHotkey};
 use crate::error::AppError;
 use crate::hotkey::{HotkeyEventKind, HotkeyKey, HotkeyMatcher, HotkeySignal};
 use crate::output;
@@ -21,15 +21,23 @@ const MIN_TOGGLE_RECORDING_MS: u128 = 350;
 const DAEMON_LOCK_FILE_NAME: &str = "daemon.lock";
 
 enum DaemonEvent {
-    StartRecording,
-    StopRecording,
+    ToggleActivated,
+    HoldActivated,
+    HoldDeactivated,
     ListenerFailed,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum RecordingOrigin {
+    Toggle,
+    Hold,
 }
 
 struct ActiveRecording {
     stop_tx: mpsc::Sender<()>,
     stop_requested: bool,
     started_at: Instant,
+    origin: RecordingOrigin,
 }
 
 enum RecordingState {
@@ -38,7 +46,6 @@ enum RecordingState {
 }
 
 struct DaemonRunner {
-    mode: DaemonMode,
     recording_state: RecordingState,
     session_done_tx: mpsc::Sender<Result<(), AppError>>,
 }
@@ -48,15 +55,14 @@ pub fn run() -> Result<(), AppError> {
     let daemon_cfg = ConfigStore::new()?.load()?;
 
     println!("OK DAEMON_STARTED");
-    println!("hotkey = {}", daemon_cfg.hotkey.as_str());
-    println!("mode = {}", daemon_cfg.mode.as_str());
-    println!("output = {}", daemon_cfg.output.as_str());
+    println!("toggle_hotkey = {}", daemon_cfg.toggle_hotkey.as_str());
+    println!("hold_hotkey = {}", daemon_cfg.hold_hotkey.as_str());
 
     let (daemon_tx, daemon_rx) = mpsc::channel::<DaemonEvent>();
-    spawn_hotkey_listener(daemon_cfg.hotkey, daemon_cfg.mode, daemon_tx);
+    spawn_hotkey_listener(daemon_cfg.toggle_hotkey, daemon_cfg.hold_hotkey, daemon_tx);
 
     let (session_done_tx, session_done_rx) = mpsc::channel::<Result<(), AppError>>();
-    let mut runner = DaemonRunner::new(daemon_cfg.mode, session_done_tx);
+    let mut runner = DaemonRunner::new(session_done_tx);
 
     loop {
         while let Ok(result) = session_done_rx.try_recv() {
@@ -144,9 +150,8 @@ impl Drop for DaemonLock {
 }
 
 impl DaemonRunner {
-    fn new(mode: DaemonMode, session_done_tx: mpsc::Sender<Result<(), AppError>>) -> Self {
+    fn new(session_done_tx: mpsc::Sender<Result<(), AppError>>) -> Self {
         Self {
-            mode,
             recording_state: RecordingState::Idle,
             session_done_tx,
         }
@@ -160,35 +165,47 @@ impl DaemonRunner {
     }
 
     fn handle_event(&mut self, event: DaemonEvent) {
-        match event {
-            DaemonEvent::StartRecording => self.on_start_recording(),
-            DaemonEvent::StopRecording => self.on_stop_recording(),
-            DaemonEvent::ListenerFailed => {}
+        match self.action_for_event(event) {
+            RunnerAction::None => {}
+            RunnerAction::Start(origin) => self.start_recording(origin),
+            RunnerAction::Stop => self.on_stop_recording(),
         }
     }
 
-    fn on_start_recording(&mut self) {
-        let mode = self.mode;
-        if let RecordingState::Recording(active) = &mut self.recording_state {
-            if matches!(mode, DaemonMode::Toggle)
-                && !active.stop_requested
-                && active.started_at.elapsed().as_millis() >= MIN_TOGGLE_RECORDING_MS
-            {
-                let _ = active.stop_tx.send(());
-                active.stop_requested = true;
-            }
+    fn action_for_event(&self, event: DaemonEvent) -> RunnerAction {
+        match event {
+            DaemonEvent::ToggleActivated => match &self.recording_state {
+                RecordingState::Idle => RunnerAction::Start(RecordingOrigin::Toggle),
+                RecordingState::Recording(active)
+                    if !active.stop_requested
+                        && active.started_at.elapsed().as_millis() >= MIN_TOGGLE_RECORDING_MS =>
+                {
+                    RunnerAction::Stop
+                }
+                _ => RunnerAction::None,
+            },
+            DaemonEvent::HoldActivated => match &self.recording_state {
+                RecordingState::Idle => RunnerAction::Start(RecordingOrigin::Hold),
+                RecordingState::Recording(_) => RunnerAction::None,
+            },
+            DaemonEvent::HoldDeactivated => match &self.recording_state {
+                RecordingState::Recording(active)
+                    if !active.stop_requested && active.origin == RecordingOrigin::Hold =>
+                {
+                    RunnerAction::Stop
+                }
+                _ => RunnerAction::None,
+            },
+            DaemonEvent::ListenerFailed => RunnerAction::None,
+        }
+    }
+
+    fn start_recording(&mut self, origin: RecordingOrigin) {
+        if matches!(self.recording_state, RecordingState::Recording(_)) {
             return;
         }
 
         let app_config = match config::load_defaults() {
-            Ok(config) => config,
-            Err(err) => {
-                err.print();
-                return;
-            }
-        };
-
-        let daemon_cfg = match ConfigStore::new().and_then(|store| store.load()) {
             Ok(config) => config,
             Err(err) => {
                 err.print();
@@ -202,7 +219,7 @@ impl DaemonRunner {
         println!("OK RECORDING_STARTED");
 
         thread::spawn(move || {
-            let result = run_session(app_config, daemon_cfg, stop_rx);
+            let result = run_session(app_config, stop_rx);
             let _ = done_tx.send(result);
         });
 
@@ -210,6 +227,7 @@ impl DaemonRunner {
             stop_tx,
             stop_requested: false,
             started_at: Instant::now(),
+            origin,
         });
     }
 
@@ -225,12 +243,14 @@ impl DaemonRunner {
     }
 }
 
-fn run_session(
-    config: config::AppConfig,
-    daemon_config: DaemonConfig,
-    stop_rx: mpsc::Receiver<()>,
-) -> Result<(), AppError> {
-    let captured = audio::record_until_stop(config.max_seconds, stop_rx)?;
+enum RunnerAction {
+    None,
+    Start(RecordingOrigin),
+    Stop,
+}
+
+fn run_session(config: config::AppConfig, stop_rx: mpsc::Receiver<()>) -> Result<(), AppError> {
+    let captured = audio::record_until_stop(stop_rx)?;
     println!("OK RECORDING_STOPPED");
 
     if captured.max_duration_reached {
@@ -239,18 +259,23 @@ fn run_session(
         );
     }
 
-    let stt_client = stt::SttClient::new(&config.api_key, config.model, config.language)?;
+    let stt_client = stt::SttClient::new(&config.api_key, config.model)?;
     let transcript = stt_client.transcribe(&captured.wav_bytes)?;
 
     println!("OK TRANSCRIPTION_READY");
-    output::emit_daemon(&transcript, daemon_config.output)?;
+    output::emit_daemon(&transcript)?;
 
     Ok(())
 }
 
-fn spawn_hotkey_listener(hotkey: DaemonHotkey, mode: DaemonMode, tx: mpsc::Sender<DaemonEvent>) {
+fn spawn_hotkey_listener(
+    toggle_hotkey: DaemonHotkey,
+    hold_hotkey: DaemonHotkey,
+    tx: mpsc::Sender<DaemonEvent>,
+) {
     thread::spawn(move || {
-        let matcher = Arc::new(Mutex::new(HotkeyMatcher::new(hotkey)));
+        let toggle_matcher = Arc::new(Mutex::new(HotkeyMatcher::new(toggle_hotkey)));
+        let hold_matcher = Arc::new(Mutex::new(HotkeyMatcher::new(hold_hotkey)));
         let tx_for_callback = tx.clone();
 
         let result = listen(move |event| {
@@ -258,16 +283,19 @@ fn spawn_hotkey_listener(hotkey: DaemonHotkey, mode: DaemonMode, tx: mpsc::Sende
                 return;
             };
 
-            let signal = match matcher.lock() {
+            let toggle_signal = match toggle_matcher.lock() {
+                Ok(mut matcher) => matcher.on_event(kind, key),
+                Err(_) => None,
+            };
+            let hold_signal = match hold_matcher.lock() {
                 Ok(mut matcher) => matcher.on_event(kind, key),
                 Err(_) => None,
             };
 
-            let mapped_event = match (mode, signal) {
-                (_, Some(HotkeySignal::Activated)) => Some(DaemonEvent::StartRecording),
-                (DaemonMode::Hold, Some(HotkeySignal::Deactivated)) => {
-                    Some(DaemonEvent::StopRecording)
-                }
+            let mapped_event = match (toggle_signal, hold_signal) {
+                (Some(HotkeySignal::Activated), _) => Some(DaemonEvent::ToggleActivated),
+                (_, Some(HotkeySignal::Activated)) => Some(DaemonEvent::HoldActivated),
+                (_, Some(HotkeySignal::Deactivated)) => Some(DaemonEvent::HoldDeactivated),
                 _ => None,
             };
 
@@ -304,11 +332,16 @@ fn map_key(key: Key) -> HotkeyKey {
 mod tests {
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use rdev::{EventType, Key};
 
-    use super::{HotkeyEventKind, HotkeyKey, acquire_daemon_lock_at_path, map_event, map_key};
+    use super::{
+        ActiveRecording, DaemonEvent, DaemonRunner, HotkeyEventKind, HotkeyKey,
+        MIN_TOGGLE_RECORDING_MS, RecordingOrigin, RecordingState, RunnerAction,
+        acquire_daemon_lock_at_path, map_event, map_key,
+    };
     use crate::error::AppError;
 
     fn temp_lock_path(name: &str) -> PathBuf {
@@ -381,5 +414,90 @@ mod tests {
         assert!(second.is_ok());
         drop(second);
         let _ = fs::remove_file(lock_path);
+    }
+
+    fn idle_runner() -> DaemonRunner {
+        let (done_tx, _done_rx) = mpsc::channel();
+        DaemonRunner::new(done_tx)
+    }
+
+    fn runner_with_active_recording(
+        origin: RecordingOrigin,
+        started_ms_ago: u64,
+    ) -> (DaemonRunner, mpsc::Receiver<()>) {
+        let (done_tx, _done_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel();
+
+        let runner = DaemonRunner {
+            recording_state: RecordingState::Recording(ActiveRecording {
+                stop_tx,
+                stop_requested: false,
+                started_at: Instant::now() - Duration::from_millis(started_ms_ago),
+                origin,
+            }),
+            session_done_tx: done_tx,
+        };
+
+        (runner, stop_rx)
+    }
+
+    #[test]
+    fn toggle_activation_starts_when_idle() {
+        let runner = idle_runner();
+
+        let action = runner.action_for_event(DaemonEvent::ToggleActivated);
+        assert!(matches!(
+            action,
+            RunnerAction::Start(RecordingOrigin::Toggle)
+        ));
+    }
+
+    #[test]
+    fn hold_activation_starts_when_idle() {
+        let runner = idle_runner();
+
+        let action = runner.action_for_event(DaemonEvent::HoldActivated);
+        assert!(matches!(action, RunnerAction::Start(RecordingOrigin::Hold)));
+    }
+
+    #[test]
+    fn hold_release_stops_hold_started_recording() {
+        let (mut runner, stop_rx) = runner_with_active_recording(RecordingOrigin::Hold, 0);
+
+        runner.handle_event(DaemonEvent::HoldDeactivated);
+
+        assert!(stop_rx.recv_timeout(Duration::from_millis(25)).is_ok());
+    }
+
+    #[test]
+    fn hold_release_ignored_for_toggle_started_recording() {
+        let (mut runner, stop_rx) = runner_with_active_recording(RecordingOrigin::Toggle, 0);
+
+        runner.handle_event(DaemonEvent::HoldDeactivated);
+
+        assert!(matches!(
+            stop_rx.recv_timeout(Duration::from_millis(25)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+    }
+
+    #[test]
+    fn toggle_activation_stops_hold_started_recording_after_debounce() {
+        let (mut runner, stop_rx) = runner_with_active_recording(
+            RecordingOrigin::Hold,
+            (MIN_TOGGLE_RECORDING_MS + 1) as u64,
+        );
+
+        runner.handle_event(DaemonEvent::ToggleActivated);
+
+        assert!(stop_rx.recv_timeout(Duration::from_millis(25)).is_ok());
+    }
+
+    #[test]
+    fn toggle_activation_respects_debounce_threshold() {
+        let (runner, _stop_rx) = runner_with_active_recording(RecordingOrigin::Toggle, 0);
+
+        let action = runner.action_for_event(DaemonEvent::ToggleActivated);
+        assert!(matches!(action, RunnerAction::None));
     }
 }

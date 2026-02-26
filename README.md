@@ -41,19 +41,7 @@ Set your OpenAI API key:
 export OPENAI_API_KEY="your_api_key"
 ```
 
-Run in toggle mode:
-
-```bash
-voico toggle
-```
-
-Run in hold mode:
-
-```bash
-voico hold
-```
-
-## Background Mode (Global Hotkey)
+## Hotkey Mode (Daemon)
 
 Show daemon config:
 
@@ -61,25 +49,18 @@ Show daemon config:
 voico config show
 ```
 
-Set global hotkey:
+Set toggle hotkey:
 
 ```bash
-voico config set hotkey right_option
+voico config set toggle-hotkey right_option
 # or: cmd_space, fn
 ```
 
-Set output mode:
+Set hold hotkey:
 
 ```bash
-voico config set output clipboard
-# or: autopaste
-```
-
-Set input mode:
-
-```bash
-voico config set mode toggle
-# or: hold
+voico config set hold-hotkey fn
+# or: right_option, cmd_space
 ```
 
 Run daemon in foreground:
@@ -102,8 +83,9 @@ voico service uninstall
 ```
 
 Notes:
-- Daemon hotkey acts as toggle: press once to start recording, press again to stop and transcribe.
-- `autopaste` copies transcript then sends `Cmd+V`.
+- Toggle hotkey: press once to start recording, press again to stop and transcribe.
+- Hold hotkey: press to start recording, release to stop and transcribe.
+- Daemon always copies transcript to clipboard, then sends `Cmd+V` (auto-paste).
 - macOS may require Accessibility permission for global hotkey capture and auto-paste.
 
 ## Menu Bar App (MVP)
@@ -123,6 +105,6 @@ swift run
 
 It controls the existing backend using `voico service ...` and `voico config ...`, including:
 - start/stop/reinstall service
-- hotkey, mode, and output changes
+- toggle/hold hotkey changes
 - API key save with `launchctl setenv`
 - log opening and refresh

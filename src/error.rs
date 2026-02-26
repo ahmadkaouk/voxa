@@ -2,20 +2,17 @@
 pub enum AppError {
     ApiKeyMissing,
     InvalidModel,
-    InvalidLanguage,
-    InvalidMaxSeconds,
-    InvalidOutput,
     OutputWriteFailed,
     DaemonConfigPathUnavailable,
     DaemonConfigReadFailed,
     DaemonConfigWriteFailed,
     DaemonConfigInvalid,
+    DaemonConfigHotkeyConflict,
     DaemonAlreadyRunning,
     DaemonListenerUnavailable,
     ServiceInstallFailed,
     ServiceUninstallFailed,
     ServiceStatusFailed,
-    InputModeUnsupported,
     AudioDeviceUnavailable,
     AudioPermissionDenied,
     AudioCaptureFailed,
@@ -51,18 +48,6 @@ impl AppError {
                 eprintln!("ERROR MODEL_INVALID: model value is invalid.");
                 eprintln!("Use gpt-4o-mini-transcribe or gpt-4o-transcribe.");
             }
-            Self::InvalidLanguage => {
-                eprintln!("ERROR LANGUAGE_INVALID: language must be auto, en, or fr.");
-                eprintln!("Run voico --help for valid options.");
-            }
-            Self::InvalidMaxSeconds => {
-                eprintln!("ERROR MAX_SECONDS_INVALID: max-seconds must be > 0.");
-                eprintln!("Use --max-seconds <positive integer>.");
-            }
-            Self::InvalidOutput => {
-                eprintln!("ERROR OUTPUT_INVALID: output must be clipboard or stdout.");
-                eprintln!("Use --output <clipboard|stdout>.");
-            }
             Self::OutputWriteFailed => {
                 eprintln!("ERROR OUTPUT_WRITE_FAILED: failed to write command output.");
                 eprintln!("Check stdout/stderr pipes and retry.");
@@ -83,7 +68,13 @@ impl AppError {
             }
             Self::DaemonConfigInvalid => {
                 eprintln!("ERROR DAEMON_CONFIG_INVALID: daemon config values are invalid.");
-                eprintln!("Run voico config set hotkey right_option to reset values.");
+                eprintln!("Run voico config show and update the invalid values.");
+            }
+            Self::DaemonConfigHotkeyConflict => {
+                eprintln!(
+                    "ERROR DAEMON_CONFIG_HOTKEY_CONFLICT: toggle_hotkey and hold_hotkey cannot be the same."
+                );
+                eprintln!("Set distinct values with voico config set toggle-hotkey/hold-hotkey.");
             }
             Self::DaemonAlreadyRunning => {
                 eprintln!(
@@ -108,12 +99,6 @@ impl AppError {
             Self::ServiceStatusFailed => {
                 eprintln!("ERROR SERVICE_STATUS_FAILED: failed to inspect LaunchAgent status.");
                 eprintln!("Verify launchctl is available and retry.");
-            }
-            Self::InputModeUnsupported => {
-                eprintln!(
-                    "ERROR INPUT_MODE_UNSUPPORTED: hold mode is not supported in this terminal."
-                );
-                eprintln!("Use voico toggle instead.");
             }
             Self::AudioDeviceUnavailable => {
                 eprintln!("ERROR AUDIO_DEVICE_UNAVAILABLE: microphone input is unavailable.");
@@ -143,7 +128,7 @@ impl AppError {
             }
             Self::ApiRequestFailed => {
                 eprintln!("ERROR API_REQUEST_FAILED: transcription request failed.");
-                eprintln!("Check model/language/options and retry.");
+                eprintln!("Check model/options and retry.");
             }
             Self::ApiNetworkFailed => {
                 eprintln!("ERROR API_NETWORK_FAILED: network error during transcription.");
@@ -186,20 +171,17 @@ mod tests {
         let non_provider_errors = [
             AppError::ApiKeyMissing,
             AppError::InvalidModel,
-            AppError::InvalidLanguage,
-            AppError::InvalidMaxSeconds,
-            AppError::InvalidOutput,
             AppError::OutputWriteFailed,
             AppError::DaemonConfigPathUnavailable,
             AppError::DaemonConfigReadFailed,
             AppError::DaemonConfigWriteFailed,
             AppError::DaemonConfigInvalid,
+            AppError::DaemonConfigHotkeyConflict,
             AppError::DaemonAlreadyRunning,
             AppError::DaemonListenerUnavailable,
             AppError::ServiceInstallFailed,
             AppError::ServiceUninstallFailed,
             AppError::ServiceStatusFailed,
-            AppError::InputModeUnsupported,
             AppError::AudioDeviceUnavailable,
             AppError::AudioPermissionDenied,
             AppError::AudioCaptureFailed,

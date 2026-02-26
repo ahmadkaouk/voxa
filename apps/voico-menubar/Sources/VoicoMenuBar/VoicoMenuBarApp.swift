@@ -71,10 +71,10 @@ struct VoicoMenuView: View {
             Divider()
 
             Picker(
-                "Hotkey",
+                "Toggle Hotkey",
                 selection: Binding(
-                    get: { controller.hotkey },
-                    set: { controller.setHotkey($0) }
+                    get: { controller.toggleHotkey },
+                    set: { controller.setToggleHotkey($0) }
                 )
             ) {
                 ForEach(VoicoHotkey.allCases) { hotkey in
@@ -84,27 +84,14 @@ struct VoicoMenuView: View {
             .disabled(controller.isBusy)
 
             Picker(
-                "Output",
+                "Hold Hotkey",
                 selection: Binding(
-                    get: { controller.output },
-                    set: { controller.setOutput($0) }
+                    get: { controller.holdHotkey },
+                    set: { controller.setHoldHotkey($0) }
                 )
             ) {
-                ForEach(VoicoOutput.allCases) { output in
-                    Text(output.label).tag(output)
-                }
-            }
-            .disabled(controller.isBusy)
-
-            Picker(
-                "Mode",
-                selection: Binding(
-                    get: { controller.mode },
-                    set: { controller.setMode($0) }
-                )
-            ) {
-                ForEach(VoicoInputMode.allCases) { mode in
-                    Text(mode.label).tag(mode)
+                ForEach(VoicoHotkey.allCases) { hotkey in
+                    Text(hotkey.label).tag(hotkey)
                 }
             }
             .disabled(controller.isBusy)

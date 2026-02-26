@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use toml::Value;
 
 use crate::cli::{ConfigCommand, ConfigSetCommand};
 use crate::error::AppError;
@@ -36,50 +37,39 @@ impl DaemonHotkey {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, ValueEnum, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum DaemonOutput {
-    #[default]
-    #[value(name = "clipboard")]
-    Clipboard,
-    #[value(name = "autopaste")]
-    Autopaste,
-}
-
-impl DaemonOutput {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Clipboard => "clipboard",
-            Self::Autopaste => "autopaste",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, ValueEnum, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum DaemonMode {
-    #[default]
-    #[value(name = "toggle")]
-    Toggle,
-    #[value(name = "hold")]
-    Hold,
-}
-
-impl DaemonMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Toggle => "toggle",
-            Self::Hold => "hold",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DaemonConfig {
-    pub hotkey: DaemonHotkey,
-    pub mode: DaemonMode,
-    pub output: DaemonOutput,
+    #[serde(default = "default_toggle_hotkey")]
+    pub toggle_hotkey: DaemonHotkey,
+    #[serde(default = "default_hold_hotkey")]
+    pub hold_hotkey: DaemonHotkey,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            toggle_hotkey: default_toggle_hotkey(),
+            hold_hotkey: default_hold_hotkey(),
+        }
+    }
+}
+
+impl DaemonConfig {
+    fn validate(self) -> Result<Self, AppError> {
+        if self.toggle_hotkey == self.hold_hotkey {
+            return Err(AppError::DaemonConfigHotkeyConflict);
+        }
+
+        Ok(self)
+    }
+}
+
+fn default_toggle_hotkey() -> DaemonHotkey {
+    DaemonHotkey::RightOption
+}
+
+fn default_hold_hotkey() -> DaemonHotkey {
+    DaemonHotkey::Fn
 }
 
 pub struct ConfigStore {
@@ -118,9 +108,8 @@ fn run_show() -> Result<(), AppError> {
     let config = store.load()?;
 
     println!("config_path = {}", store.path().display());
-    println!("hotkey = {}", config.hotkey.as_str());
-    println!("mode = {}", config.mode.as_str());
-    println!("output = {}", config.output.as_str());
+    println!("toggle_hotkey = {}", config.toggle_hotkey.as_str());
+    println!("hold_hotkey = {}", config.hold_hotkey.as_str());
 
     Ok(())
 }
@@ -130,18 +119,15 @@ fn run_set(command: ConfigSetCommand) -> Result<(), AppError> {
     let mut config = store.load()?;
 
     match command {
-        ConfigSetCommand::Hotkey { value } => {
-            config.hotkey = value;
+        ConfigSetCommand::ToggleHotkey { value } => {
+            config.toggle_hotkey = value;
         }
-        ConfigSetCommand::Mode { value } => {
-            config.mode = value;
-        }
-        ConfigSetCommand::Output { value } => {
-            config.output = value;
+        ConfigSetCommand::HoldHotkey { value } => {
+            config.hold_hotkey = value;
         }
     }
 
-    store.save(config)?;
+    store.save(config.validate()?)?;
     println!("OK CONFIG_UPDATED");
 
     run_show()
@@ -168,10 +154,26 @@ fn load_from_path(path: &Path) -> Result<DaemonConfig, AppError> {
         Err(_) => return Err(AppError::DaemonConfigReadFailed),
     };
 
-    toml::from_str(&raw).map_err(|_| AppError::DaemonConfigInvalid)
+    let parsed: Value = toml::from_str(&raw).map_err(|_| AppError::DaemonConfigInvalid)?;
+    let Some(table) = parsed.as_table() else {
+        return Err(AppError::DaemonConfigInvalid);
+    };
+
+    let has_new_key = table.contains_key("toggle_hotkey") || table.contains_key("hold_hotkey");
+    let has_legacy_key = table.contains_key("hotkey") || table.contains_key("mode");
+
+    if has_legacy_key && !has_new_key {
+        return Ok(DaemonConfig::default());
+    }
+
+    parsed
+        .try_into::<DaemonConfig>()
+        .map_err(|_| AppError::DaemonConfigInvalid)?
+        .validate()
 }
 
 fn save_to_path(path: &Path, config: DaemonConfig) -> Result<(), AppError> {
+    let config = config.validate()?;
     let Some(parent) = path.parent() else {
         return Err(AppError::DaemonConfigWriteFailed);
     };
@@ -213,9 +215,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{
-        DaemonConfig, DaemonHotkey, DaemonMode, DaemonOutput, load_from_path, save_to_path,
-    };
+    use super::{DaemonConfig, DaemonHotkey, load_from_path, save_to_path};
     use crate::error::AppError;
 
     fn temp_config_path(name: &str) -> PathBuf {
@@ -246,8 +246,26 @@ mod tests {
     }
 
     #[test]
-    fn load_parses_valid_file() {
+    fn load_parses_valid_new_schema() {
         let path = temp_config_path("parse");
+        fs::create_dir_all(path.parent().expect("temp path should have parent"))
+            .expect("failed to create temp dir");
+        fs::write(
+            &path,
+            "toggle_hotkey = \"cmd_space\"\nhold_hotkey = \"fn\"\n",
+        )
+        .expect("failed to write config");
+
+        let config = load_from_path(&path).expect("valid config should parse");
+        assert_eq!(config.toggle_hotkey, DaemonHotkey::CmdSpace);
+        assert_eq!(config.hold_hotkey, DaemonHotkey::Fn);
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn load_legacy_schema_falls_back_to_defaults() {
+        let path = temp_config_path("legacy");
         fs::create_dir_all(path.parent().expect("temp path should have parent"))
             .expect("failed to create temp dir");
         fs::write(
@@ -256,10 +274,8 @@ mod tests {
         )
         .expect("failed to write config");
 
-        let config = load_from_path(&path).expect("valid config should parse");
-        assert_eq!(config.hotkey, DaemonHotkey::CmdSpace);
-        assert_eq!(config.mode, DaemonMode::Hold);
-        assert_eq!(config.output, DaemonOutput::Autopaste);
+        let config = load_from_path(&path).expect("legacy config should fall back to defaults");
+        assert_eq!(config, DaemonConfig::default());
 
         cleanup(&path);
     }
@@ -268,9 +284,8 @@ mod tests {
     fn save_and_load_round_trip() {
         let path = temp_config_path("roundtrip");
         let expected = DaemonConfig {
-            hotkey: DaemonHotkey::Fn,
-            mode: DaemonMode::Toggle,
-            output: DaemonOutput::Clipboard,
+            toggle_hotkey: DaemonHotkey::Fn,
+            hold_hotkey: DaemonHotkey::CmdSpace,
         };
 
         save_to_path(&path, expected).expect("save should succeed");
@@ -290,6 +305,38 @@ mod tests {
         let result = load_from_path(&path);
         assert!(matches!(result, Err(AppError::DaemonConfigInvalid)));
 
+        cleanup(&path);
+    }
+
+    #[test]
+    fn load_rejects_conflicting_hotkeys() {
+        let path = temp_config_path("conflict-load");
+        fs::create_dir_all(path.parent().expect("temp path should have parent"))
+            .expect("failed to create temp dir");
+        fs::write(
+            &path,
+            "toggle_hotkey = \"right_option\"\nhold_hotkey = \"right_option\"\n",
+        )
+        .expect("failed to write config");
+
+        let result = load_from_path(&path);
+        assert!(matches!(result, Err(AppError::DaemonConfigHotkeyConflict)));
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn save_rejects_conflicting_hotkeys() {
+        let path = temp_config_path("conflict-save");
+        let result = save_to_path(
+            &path,
+            DaemonConfig {
+                toggle_hotkey: DaemonHotkey::Fn,
+                hold_hotkey: DaemonHotkey::Fn,
+            },
+        );
+
+        assert!(matches!(result, Err(AppError::DaemonConfigHotkeyConflict)));
         cleanup(&path);
     }
 }

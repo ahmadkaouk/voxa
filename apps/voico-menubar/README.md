@@ -25,7 +25,7 @@ swift run
 This launches a menu bar app (no Dock icon) with controls for:
 
 - service start/stop/reinstall
-- daemon hotkey/mode/output config
+- daemon toggle/hold hotkey config
 - API key save via `launchctl setenv OPENAI_API_KEY ...`
 - log opening and refresh
 

@@ -89,29 +89,23 @@ struct VoicoCLI {
         let output = try runVoico(["config", "show"]).stdout
         let values = parseKeyValueLines(output)
 
-        guard let hotkeyRaw = values["hotkey"],
-              let modeRaw = values["mode"],
-              let outputRaw = values["output"],
-              let hotkey = VoicoHotkey(rawValue: hotkeyRaw),
-              let mode = VoicoInputMode(rawValue: modeRaw),
-              let target = VoicoOutput(rawValue: outputRaw)
+        guard let toggleHotkeyRaw = values["toggle_hotkey"],
+              let holdHotkeyRaw = values["hold_hotkey"],
+              let toggleHotkey = VoicoHotkey(rawValue: toggleHotkeyRaw),
+              let holdHotkey = VoicoHotkey(rawValue: holdHotkeyRaw)
         else {
             throw VoicoCLIError.parseFailed(context: "config show")
         }
 
-        return DaemonSettings(hotkey: hotkey, mode: mode, output: target)
+        return DaemonSettings(toggleHotkey: toggleHotkey, holdHotkey: holdHotkey)
     }
 
-    func setHotkey(_ value: VoicoHotkey) throws {
-        _ = try runVoico(["config", "set", "hotkey", value.rawValue])
+    func setToggleHotkey(_ value: VoicoHotkey) throws {
+        _ = try runVoico(["config", "set", "toggle-hotkey", value.rawValue])
     }
 
-    func setOutput(_ value: VoicoOutput) throws {
-        _ = try runVoico(["config", "set", "output", value.rawValue])
-    }
-
-    func setMode(_ value: VoicoInputMode) throws {
-        _ = try runVoico(["config", "set", "mode", value.rawValue])
+    func setHoldHotkey(_ value: VoicoHotkey) throws {
+        _ = try runVoico(["config", "set", "hold-hotkey", value.rawValue])
     }
 
     func apiKeyIsSet() throws -> Bool {
@@ -147,7 +141,7 @@ struct VoicoCLI {
         if let override = environment["VOICO_BIN"],
            let path = normalizedExecutablePath(override)
         {
-            guard supportsModeConfig(path: path) else {
+            guard supportsDualHotkeyConfig(path: path) else {
                 throw VoicoCLIError.voicoBinaryIncompatible(path: path)
             }
             return path
@@ -155,7 +149,7 @@ struct VoicoCLI {
 
         for candidate in voicoCandidates(pathEnv: environment["PATH"]) {
             if let path = normalizedExecutablePath(candidate) {
-                if !supportsModeConfig(path: path) {
+                if !supportsDualHotkeyConfig(path: path) {
                     if incompatiblePath == nil {
                         incompatiblePath = path
                     }
@@ -201,7 +195,7 @@ struct VoicoCLI {
         return expanded
     }
 
-    private func supportsModeConfig(path: String) -> Bool {
+    private func supportsDualHotkeyConfig(path: String) -> Bool {
         guard let result = try? run(
             executable: path,
             args: ["config", "show"],
@@ -214,7 +208,8 @@ struct VoicoCLI {
             return false
         }
 
-        return result.stdout.contains("mode =")
+        return result.stdout.contains("toggle_hotkey =")
+            && result.stdout.contains("hold_hotkey =")
     }
 
     private func run(

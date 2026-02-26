@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,6 +44,8 @@ impl ServiceManager {
         let binary_path = env::current_exe().map_err(|_| AppError::ServiceInstallFailed)?;
         let stdout_log = log_dir.join("voico-daemon.out.log");
         let stderr_log = log_dir.join("voico-daemon.err.log");
+        prepare_log_file(&stdout_log).map_err(|_| AppError::ServiceInstallFailed)?;
+        prepare_log_file(&stderr_log).map_err(|_| AppError::ServiceInstallFailed)?;
         let plist = build_plist(&binary_path, &stdout_log, &stderr_log);
         fs::write(&self.plist_path, plist).map_err(|_| AppError::ServiceInstallFailed)?;
 
@@ -141,6 +144,15 @@ fn launch_domain() -> Result<String, std::io::Error> {
     Ok(format!("gui/{uid}"))
 }
 
+fn prepare_log_file(path: &Path) -> Result<(), io::Error> {
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map(|_| ())
+}
+
 fn build_plist(binary_path: &Path, stdout_log: &Path, stderr_log: &Path) -> String {
     let service_label = xml_escape(SERVICE_LABEL);
     let binary = xml_escape(&binary_path.display().to_string());
@@ -161,6 +173,10 @@ fn build_plist(binary_path: &Path, stdout_log: &Path, stderr_log: &Path) -> Stri
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
@@ -247,6 +263,10 @@ mod tests {
         assert!(plist.contains(SERVICE_LABEL));
         assert!(plist.contains("/usr/local/bin/voico"));
         assert!(plist.contains("<string>daemon</string>"));
+        assert!(plist.contains("<key>ProcessType</key>"));
+        assert!(plist.contains("<string>Interactive</string>"));
+        assert!(plist.contains("<key>LimitLoadToSessionType</key>"));
+        assert!(plist.contains("<string>Aqua</string>"));
         assert!(plist.contains("/tmp/out.log"));
         assert!(plist.contains("/tmp/err.log"));
     }

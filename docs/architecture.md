@@ -5,16 +5,13 @@ Build a local macOS tool for personal dictation that converts speech to text wit
 
 ## Scope
 - `v1` is a terminal command.
-- Foreground commands run one cycle: record -> transcribe -> output -> exit.
-- Background daemon mode keeps running and listens for a global hotkey.
-- Interaction modes:
-  - `toggle`: press `Enter` to start, press `Enter` again to stop.
-  - `hold`: hold `Space` to record, release to stop.
-- If `hold` key-release is unsupported in the current terminal, return `INPUT_MODE_UNSUPPORTED` and suggest `toggle`.
+- Background daemon keeps running and listens for two global hotkeys.
+- Interaction modes are daemon-only:
+  - `toggle`: press assigned hotkey once to start, press again to stop.
+  - `hold`: press assigned hotkey to start, release to stop.
 - Output behavior:
   - Always print transcript to stdout.
-  - Foreground mode copies transcript to clipboard by default.
-  - Daemon mode supports `clipboard` and `autopaste` output targets.
+  - Daemon always copies to clipboard and attempts auto-paste.
 - `v2` adds a menu bar UI over the same core modules.
 
 ## Locked Decisions (v1)
@@ -23,7 +20,7 @@ Build a local macOS tool for personal dictation that converts speech to text wit
 - Default model: `gpt-4o-mini-transcribe`.
 - Optional model override: `gpt-4o-transcribe`.
 - Transcription mode: batch only (`record -> stop -> upload -> transcript`).
-- Languages: `auto`, `en`, `fr`.
+- Language handling: auto-detect from audio.
 - Error policy: fail fast, no automatic retries.
 - Data policy: no app-managed persistence for transcripts or audio.
 - Packaging: installable binary command.
@@ -31,10 +28,10 @@ Build a local macOS tool for personal dictation that converts speech to text wit
 ## High-Level Architecture
 - `CLI Layer`
   - Parses commands and flags.
-  - Emits mode-specific start/stop events.
+  - Emits command-specific start/stop events.
 - `Input Layer`
   - Captures microphone input from the default device.
-  - Starts/stops capture based on interaction mode.
+  - Starts/stops capture based on command or daemon hotkey events.
 - `Audio Layer`
   - Normalizes captured audio for upload format.
 - `Transcription Layer`
@@ -42,7 +39,7 @@ Build a local macOS tool for personal dictation that converts speech to text wit
   - Encapsulates provider behind a trait/interface.
 - `Output Layer`
   - Prints transcript to stdout.
-  - Copies transcript to clipboard when enabled.
+  - Copies transcript to clipboard.
 - `Config Layer`
   - Resolves values from CLI, environment, and `.env`.
 
@@ -58,7 +55,7 @@ Planned `v1` expansion modules:
 - `src/app.rs`: orchestration and state machine wiring.
 - `src/audio.rs`: capture and WAV conversion.
 - `src/stt/mod.rs`: STT trait and provider implementation.
-- `src/output.rs`: stdout and clipboard output.
+- `src/output.rs`: transcript and clipboard output.
 
 Candidate crates:
 - `tokio`
@@ -72,22 +69,20 @@ Candidate crates:
 
 ## CLI Contract
 ### Commands
-- `voico toggle [--language <auto|en|fr>] [--model <model>] [--max-seconds <n>] [--output <clipboard|stdout>]`
-- `voico hold [--language <auto|en|fr>] [--model <model>] [--max-seconds <n>] [--output <clipboard|stdout>]`
 - `voico daemon`
 - `voico service <install|uninstall|status>`
 - `voico config show`
-- `voico config set hotkey <right_option|cmd_space|fn>`
-- `voico config set mode <toggle|hold>`
-- `voico config set output <clipboard|autopaste>`
+- `voico config set toggle-hotkey <right_option|cmd_space|fn>`
+- `voico config set hold-hotkey <right_option|cmd_space|fn>`
 - `voico --help`
 
 ### Defaults
-- Default mode for onboarding/docs: `toggle`.
+- Default daemon toggle hotkey: `right_option`.
+- Default daemon hold hotkey: `fn`.
 - Default model: `gpt-4o-mini-transcribe`.
-- Default language: `auto`.
-- Default max duration: `90`.
-- Default output: `clipboard`.
+- Language detection: automatic.
+- Max recording duration cap: `300` seconds.
+- Output behavior: always print transcript and attempt clipboard copy.
 
 ### Exit Codes
 - `0`: transcription completed.
@@ -95,28 +90,24 @@ Candidate crates:
 - `2`: provider/network/transcription failure.
 
 ### Examples
-- `voico toggle`
-- `voico toggle --language fr`
-- `voico hold --max-seconds 60`
-- `voico toggle --model gpt-4o-transcribe --output stdout`
+- `voico daemon`
+- `voico service install`
+- `voico config set toggle-hotkey cmd_space`
+- `voico config set hold-hotkey fn`
 
 ## Config Contract
 Source priority (highest first):
-1. CLI flags
-2. Environment variables
-3. `.env`
+1. Environment variables
+2. `.env`
 
 Environment variables:
 - `OPENAI_API_KEY` (required)
 - `VOICO_MODEL` (optional, default `gpt-4o-mini-transcribe`)
-- `VOICO_LANGUAGE` (optional, default `auto`)
-- `VOICO_MAX_SECONDS` (optional, default `90`)
-- `VOICO_OUTPUT` (optional, default `clipboard`, allowed: `clipboard|stdout`)
 
 ## Audio and Transcription Contract
 - Capture source: default macOS input device.
 - Upload encoding: WAV, mono, 16-bit PCM, target 16 kHz.
-- Max recording duration: configurable, default `90` seconds.
+- Max recording duration: fixed cap of `300` seconds.
 - Batch flow: record -> stop -> upload -> final transcript.
 - No streaming partial output in `v1`.
 
@@ -171,10 +162,6 @@ Environment variables:
 |---|---|---|---|
 | `OPENAI_API_KEY_MISSING` | `OPENAI_API_KEY` missing in env or `.env` | `ERROR OPENAI_API_KEY_MISSING: OPENAI_API_KEY is required.` | `Set OPENAI_API_KEY in your environment or .env file.` |
 | `MODEL_INVALID` | model value empty/invalid | `ERROR MODEL_INVALID: model value is invalid.` | `Use gpt-4o-mini-transcribe or gpt-4o-transcribe.` |
-| `LANGUAGE_INVALID` | unsupported language code | `ERROR LANGUAGE_INVALID: language must be auto, en, or fr.` | `Run voico --help for valid options.` |
-| `MAX_SECONDS_INVALID` | non-numeric, zero, or negative max duration | `ERROR MAX_SECONDS_INVALID: max-seconds must be > 0.` | `Use --max-seconds <positive integer>.` |
-| `OUTPUT_INVALID` | unsupported output target | `ERROR OUTPUT_INVALID: output must be clipboard or stdout.` | `Use --output <clipboard|stdout>.` |
-| `INPUT_MODE_UNSUPPORTED` | `hold` mode key release unsupported | `ERROR INPUT_MODE_UNSUPPORTED: hold mode is not supported in this terminal.` | `Use voico toggle instead.` |
 | `AUDIO_DEVICE_UNAVAILABLE` | no input device or device open failure | `ERROR AUDIO_DEVICE_UNAVAILABLE: microphone input is unavailable.` | `Check input device and retry.` |
 | `AUDIO_PERMISSION_DENIED` | macOS microphone access denied | `ERROR AUDIO_PERMISSION_DENIED: microphone permission denied.` | `Allow microphone access for your terminal app in System Settings > Privacy & Security > Microphone.` |
 | `AUDIO_CAPTURE_FAILED` | stream callback/read failure | `ERROR AUDIO_CAPTURE_FAILED: failed while capturing audio.` | `Check microphone device status and retry.` |
@@ -185,7 +172,7 @@ Environment variables:
 |---|---|---|---|
 | `API_AUTH_FAILED` | invalid API key or unauthorized request | `ERROR API_AUTH_FAILED: authentication failed with STT provider.` | `Verify OPENAI_API_KEY and retry.` |
 | `API_RATE_LIMITED` | provider rate limit response | `ERROR API_RATE_LIMITED: request was rate-limited.` | `Wait and retry.` |
-| `API_REQUEST_FAILED` | provider returns non-auth request error | `ERROR API_REQUEST_FAILED: transcription request failed.` | `Check model/language/options and retry.` |
+| `API_REQUEST_FAILED` | provider returns non-auth request error | `ERROR API_REQUEST_FAILED: transcription request failed.` | `Check model/options and retry.` |
 | `API_NETWORK_FAILED` | DNS/TLS/connectivity/timeout failure | `ERROR API_NETWORK_FAILED: network error during transcription.` | `Check internet connection and retry.` |
 | `API_RESPONSE_INVALID` | malformed response or missing transcript field | `ERROR API_RESPONSE_INVALID: provider response could not be parsed.` | `Retry; if persistent, switch model and re-test.` |
 | `API_EMPTY_TRANSCRIPT` | provider returns empty transcript | `ERROR API_EMPTY_TRANSCRIPT: transcript is empty.` | `Retry in a quieter environment or speak longer.` |
@@ -212,12 +199,10 @@ Runtime line format:
 - The app does not send analytics or telemetry.
 
 ## Risks and Mitigations
-- Terminal key-release behavior varies by terminal:
-  - Mitigation: support `toggle` mode and return explicit unsupported error for `hold`.
 - Network dependency can interrupt dictation:
   - Mitigation: clear fatal errors and immediate re-run workflow.
 - Mixed-language dictation may reduce punctuation quality:
-  - Mitigation: allow explicit `--language en|fr`.
+  - Mitigation: keep speech clear and avoid overlapping speakers.
 - `.env` key storage risk:
   - Mitigation: local-use guidance; add optional Keychain support in `v1.1`.
 
@@ -226,10 +211,10 @@ Runtime line format:
 2. Implement config loading and validation.
 3. Implement microphone capture and WAV normalization.
 4. Implement OpenAI batch transcription integration.
-5. Implement stdout and clipboard output.
-6. Implement `hold` mode and unsupported-terminal handling.
+5. Implement transcript and clipboard output.
+6. Finalize daemon dual-hotkey behavior (`toggle` + `hold`).
 7. Package as local binary command.
-8. Add background daemon mode with global hotkey and LaunchAgent service controls.
+8. Add background daemon with global hotkeys and LaunchAgent service controls.
 9. Add a macOS menu bar controller app over existing daemon/config/service commands.
 
 ## v2 Menu Bar Preview

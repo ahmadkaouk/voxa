@@ -4,9 +4,8 @@ import Foundation
 @MainActor
 final class AppController: ObservableObject {
     @Published private(set) var serviceState: ServiceState = .checking
-    @Published private(set) var hotkey: VoicoHotkey = .rightOption
-    @Published private(set) var mode: VoicoInputMode = .toggle
-    @Published private(set) var output: VoicoOutput = .clipboard
+    @Published private(set) var toggleHotkey: VoicoHotkey = .rightOption
+    @Published private(set) var holdHotkey: VoicoHotkey = .functionKey
     @Published private(set) var apiKeySet = false
     @Published private(set) var isBusy = false
     @Published private(set) var statusMessage = "Starting..."
@@ -69,61 +68,42 @@ final class AppController: ObservableObject {
         }
     }
 
-    func setHotkey(_ value: VoicoHotkey) {
-        if value == hotkey {
+    func setToggleHotkey(_ value: VoicoHotkey) {
+        if value == toggleHotkey {
             return
         }
 
-        let previous = hotkey
-        hotkey = value
+        let previous = toggleHotkey
+        toggleHotkey = value
 
         runMutation(
-            startMessage: "Updating hotkey...",
-            successMessage: "Hotkey updated",
+            startMessage: "Updating toggle hotkey...",
+            successMessage: "Toggle hotkey updated",
             onFailure: { [weak self] in
-                self?.hotkey = previous
+                self?.toggleHotkey = previous
             }
         ) { cli in
-            try cli.setHotkey(value)
+            try cli.setToggleHotkey(value)
             try cli.restartService()
         }
     }
 
-    func setOutput(_ value: VoicoOutput) {
-        if value == output {
+    func setHoldHotkey(_ value: VoicoHotkey) {
+        if value == holdHotkey {
             return
         }
 
-        let previous = output
-        output = value
+        let previous = holdHotkey
+        holdHotkey = value
 
         runMutation(
-            startMessage: "Updating output mode...",
-            successMessage: "Output mode updated",
+            startMessage: "Updating hold hotkey...",
+            successMessage: "Hold hotkey updated",
             onFailure: { [weak self] in
-                self?.output = previous
+                self?.holdHotkey = previous
             }
         ) { cli in
-            try cli.setOutput(value)
-        }
-    }
-
-    func setMode(_ value: VoicoInputMode) {
-        if value == mode {
-            return
-        }
-
-        let previous = mode
-        mode = value
-
-        runMutation(
-            startMessage: "Updating input mode...",
-            successMessage: "Input mode updated",
-            onFailure: { [weak self] in
-                self?.mode = previous
-            }
-        ) { cli in
-            try cli.setMode(value)
+            try cli.setHoldHotkey(value)
             try cli.restartService()
         }
     }
@@ -219,9 +199,8 @@ final class AppController: ObservableObject {
     }
 
     private func apply(snapshot: AppSnapshot) {
-        hotkey = snapshot.settings.hotkey
-        mode = snapshot.settings.mode
-        output = snapshot.settings.output
+        toggleHotkey = snapshot.settings.toggleHotkey
+        holdHotkey = snapshot.settings.holdHotkey
         apiKeySet = snapshot.apiKeySet
         serviceState = snapshot.service.loaded ? .running : .stopped
     }

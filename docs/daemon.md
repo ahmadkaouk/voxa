@@ -1,13 +1,17 @@
 # Voico Daemon Mode
 
-`voico daemon` runs a background-ready loop that listens for a global hotkey.
+`voico daemon` runs a background-ready loop that listens for two global hotkeys.
 
 ## Behavior
 
-- Hotkey is toggle-based:
-  - first trigger: start recording
-  - second trigger: stop recording and transcribe
-- If max duration is reached, recording stops automatically and transcription continues.
+- Toggle hotkey:
+  - press while idle: start recording
+  - press while recording: stop recording and transcribe
+- Hold hotkey:
+  - press while idle: start recording
+  - release: stop recording only if the session started from hold
+- Toggle hotkey can stop any active recording session.
+- If the 5-minute recording cap is reached, recording stops automatically and transcription continues.
 
 ## Config
 
@@ -20,24 +24,22 @@ Config file path:
 Supported keys:
 
 ```toml
-hotkey = "right_option" # right_option | cmd_space | fn
-mode = "toggle"         # toggle | hold
-output = "clipboard"    # clipboard | autopaste
+toggle_hotkey = "right_option" # right_option | cmd_space | fn
+hold_hotkey = "fn"             # right_option | cmd_space | fn
 ```
 
 CLI helpers:
 
 ```bash
 voico config show
-voico config set hotkey right_option
-voico config set mode hold
-voico config set output autopaste
+voico config set toggle-hotkey right_option
+voico config set hold-hotkey fn
 ```
 
-## Output Modes
+## Output Behavior
 
-- `clipboard`: copy transcript to clipboard
-- `autopaste`: copy to clipboard, then send `Cmd+V` using AppleScript
+- Daemon always copies transcript to clipboard.
+- Daemon then attempts to auto-paste with `Cmd+V`.
 
 ## LaunchAgent
 

@@ -1,4 +1,3 @@
-use std::io;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -8,6 +7,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crate::error::AppError;
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
+const MAX_RECORDING_SECONDS: u64 = 5 * 60;
 
 #[derive(Debug, Clone)]
 pub struct CapturedAudio {
@@ -15,15 +15,7 @@ pub struct CapturedAudio {
     pub max_duration_reached: bool,
 }
 
-pub fn record_toggle(max_seconds: u32) -> Result<CapturedAudio, AppError> {
-    let stop_rx = spawn_stop_listener();
-    record_until_stop(max_seconds, stop_rx)
-}
-
-pub fn record_until_stop(
-    max_seconds: u32,
-    stop_rx: mpsc::Receiver<()>,
-) -> Result<CapturedAudio, AppError> {
+pub fn record_until_stop(stop_rx: mpsc::Receiver<()>) -> Result<CapturedAudio, AppError> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -49,7 +41,7 @@ pub fn record_until_stop(
     )?;
     stream.play().map_err(map_play_stream_error)?;
 
-    let deadline = Instant::now() + Duration::from_secs(max_seconds as u64);
+    let deadline = Instant::now() + Duration::from_secs(MAX_RECORDING_SECONDS);
     let mut max_duration_reached = false;
 
     loop {
@@ -85,21 +77,6 @@ pub fn record_until_stop(
         wav_bytes,
         max_duration_reached,
     })
-}
-
-fn spawn_stop_listener() -> mpsc::Receiver<()> {
-    let (tx, rx) = mpsc::channel();
-
-    thread::spawn(move || {
-        let mut line = String::new();
-        if let Ok(read) = io::stdin().read_line(&mut line) {
-            if read > 0 {
-                let _ = tx.send(());
-            }
-        }
-    });
-
-    rx
 }
 
 fn build_stream(

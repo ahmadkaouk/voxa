@@ -52,47 +52,14 @@ enum VoicoHotkey: String, CaseIterable, Identifiable {
     }
 }
 
-enum VoicoOutput: String, CaseIterable, Identifiable {
-    case clipboard = "clipboard"
-    case autopaste = "autopaste"
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .clipboard:
-            return "Clipboard"
-        case .autopaste:
-            return "Autopaste"
-        }
-    }
-}
-
-enum VoicoInputMode: String, CaseIterable, Identifiable {
-    case toggle = "toggle"
-    case hold = "hold"
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .toggle:
-            return "Toggle"
-        case .hold:
-            return "Hold"
-        }
-    }
-}
-
 struct ServiceStatus {
     let plistPresent: Bool
     let loaded: Bool
 }
 
 struct DaemonSettings {
-    let hotkey: VoicoHotkey
-    let mode: VoicoInputMode
-    let output: VoicoOutput
+    let toggleHotkey: VoicoHotkey
+    let holdHotkey: VoicoHotkey
 }
 
 struct AppSnapshot {
