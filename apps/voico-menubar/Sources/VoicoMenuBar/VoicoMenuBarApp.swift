@@ -1,8 +1,18 @@
 import AppKit
 import SwiftUI
 
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let cli = VoicoCLI()
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // App-scoped behavior: stop daemon service when quitting the menu app.
+        try? cli.uninstallService()
+    }
+}
+
 @main
 struct VoicoMenuBarApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var controller = AppController()
 
     init() {
@@ -131,7 +141,7 @@ struct VoicoMenuView: View {
                     controller.openStderrLog()
                 }
 
-                Button("Quit") {
+                Button("Quit and Stop Service") {
                     controller.quit()
                 }
             }

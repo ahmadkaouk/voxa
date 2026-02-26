@@ -16,6 +16,7 @@ arboard = "3.6.1"
 crossterm = "0.29.0"
 rdev = "0.5.3"
 toml = "0.8.23"
+libc = "0.2"
 
 [dev-dependencies]
 mockito = "1.7.0"

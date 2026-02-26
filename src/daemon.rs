@@ -1,3 +1,7 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,6 +18,7 @@ use crate::stt;
 
 const LISTENER_POLL_INTERVAL_MS: u64 = 100;
 const MIN_TOGGLE_RECORDING_MS: u128 = 350;
+const DAEMON_LOCK_FILE_NAME: &str = "daemon.lock";
 
 enum DaemonEvent {
     StartRecording,
@@ -28,6 +33,7 @@ struct ActiveRecording {
 }
 
 pub fn run() -> Result<(), AppError> {
+    let _daemon_lock = acquire_daemon_lock()?;
     let daemon_cfg = daemon_config::load()?;
 
     println!("OK DAEMON_STARTED");
@@ -63,6 +69,71 @@ pub fn run() -> Result<(), AppError> {
                 return Err(AppError::DaemonListenerUnavailable);
             }
         }
+    }
+}
+
+fn acquire_daemon_lock() -> Result<DaemonLock, AppError> {
+    let lock_path = daemon_lock_path()?;
+    acquire_daemon_lock_at_path(&lock_path)
+}
+
+fn daemon_lock_path() -> Result<PathBuf, AppError> {
+    let config_path = daemon_config::config_path()?;
+    let Some(config_dir) = config_path.parent() else {
+        return Err(AppError::DaemonConfigPathUnavailable);
+    };
+
+    Ok(config_dir.join(DAEMON_LOCK_FILE_NAME))
+}
+
+fn acquire_daemon_lock_at_path(path: &Path) -> Result<DaemonLock, AppError> {
+    let Some(parent) = path.parent() else {
+        return Err(AppError::DaemonConfigPathUnavailable);
+    };
+
+    fs::create_dir_all(parent).map_err(|_| AppError::DaemonConfigWriteFailed)?;
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+        .map_err(|_| AppError::DaemonConfigWriteFailed)?;
+
+    match try_lock_exclusive(&file) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+            return Err(AppError::DaemonAlreadyRunning);
+        }
+        Err(_) => return Err(AppError::DaemonConfigWriteFailed),
+    }
+
+    // Keep current owner PID for observability/debugging.
+    file.set_len(0).map_err(|_| AppError::DaemonConfigWriteFailed)?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| AppError::DaemonConfigWriteFailed)?;
+    writeln!(file, "{}", std::process::id()).map_err(|_| AppError::DaemonConfigWriteFailed)?;
+    file.sync_all().map_err(|_| AppError::DaemonConfigWriteFailed)?;
+
+    Ok(DaemonLock { file })
+}
+
+fn try_lock_exclusive(file: &File) -> std::io::Result<()> {
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+struct DaemonLock {
+    file: File,
+}
+
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
     }
 }
 
@@ -212,9 +283,24 @@ fn map_key(key: Key) -> HotkeyKey {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use rdev::{EventType, Key};
 
-    use super::{HotkeyEventKind, HotkeyKey, map_event, map_key};
+    use super::{HotkeyEventKind, HotkeyKey, acquire_daemon_lock_at_path, map_event, map_key};
+    use crate::error::AppError;
+
+    fn temp_lock_path(name: &str) -> PathBuf {
+        let pid = std::process::id();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time should be after epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!("voico-{name}-{pid}-{nanos}.lock"))
+    }
 
     #[test]
     fn map_key_maps_supported_keys() {
@@ -239,5 +325,43 @@ mod tests {
 
         assert_eq!(press, Some((HotkeyEventKind::Press, HotkeyKey::Space)));
         assert_eq!(release, Some((HotkeyEventKind::Release, HotkeyKey::Space)));
+    }
+
+    #[test]
+    fn daemon_lock_first_acquisition_succeeds() {
+        let lock_path = temp_lock_path("first-acquire");
+        let lock = acquire_daemon_lock_at_path(&lock_path);
+
+        assert!(lock.is_ok());
+        drop(lock);
+        let _ = fs::remove_file(lock_path);
+    }
+
+    #[test]
+    fn daemon_lock_second_acquisition_fails_while_held() {
+        let lock_path = temp_lock_path("second-fails");
+        let first = acquire_daemon_lock_at_path(&lock_path).expect("first lock should succeed");
+        let second = acquire_daemon_lock_at_path(&lock_path);
+
+        assert!(matches!(second, Err(AppError::DaemonAlreadyRunning)));
+
+        drop(first);
+        let _ = fs::remove_file(lock_path);
+    }
+
+    #[test]
+    fn daemon_lock_can_be_reacquired_after_drop() {
+        let lock_path = temp_lock_path("reacquire");
+
+        {
+            let first =
+                acquire_daemon_lock_at_path(&lock_path).expect("first lock should succeed");
+            drop(first);
+        }
+
+        let second = acquire_daemon_lock_at_path(&lock_path);
+        assert!(second.is_ok());
+        drop(second);
+        let _ = fs::remove_file(lock_path);
     }
 }

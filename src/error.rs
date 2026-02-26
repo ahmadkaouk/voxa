@@ -9,6 +9,7 @@ pub enum AppError {
     DaemonConfigReadFailed,
     DaemonConfigWriteFailed,
     DaemonConfigInvalid,
+    DaemonAlreadyRunning,
     DaemonListenerUnavailable,
     ServiceInstallFailed,
     ServiceUninstallFailed,
@@ -78,6 +79,12 @@ impl AppError {
             Self::DaemonConfigInvalid => {
                 eprintln!("ERROR DAEMON_CONFIG_INVALID: daemon config values are invalid.");
                 eprintln!("Run voico config set hotkey right_option to reset values.");
+            }
+            Self::DaemonAlreadyRunning => {
+                eprintln!(
+                    "ERROR DAEMON_ALREADY_RUNNING: another voico daemon process is already active."
+                );
+                eprintln!("Stop the existing daemon before starting another instance.");
             }
             Self::DaemonListenerUnavailable => {
                 eprintln!("ERROR DAEMON_LISTENER_UNAVAILABLE: global hotkey listener failed.");
@@ -181,6 +188,7 @@ mod tests {
             AppError::DaemonConfigReadFailed,
             AppError::DaemonConfigWriteFailed,
             AppError::DaemonConfigInvalid,
+            AppError::DaemonAlreadyRunning,
             AppError::DaemonListenerUnavailable,
             AppError::ServiceInstallFailed,
             AppError::ServiceUninstallFailed,

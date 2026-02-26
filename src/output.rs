@@ -1,5 +1,9 @@
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
+
+use rdev::{EventType, Key, simulate};
 
 use crate::cli::OutputTarget;
 use crate::daemon_config::DaemonOutput;
@@ -55,12 +59,25 @@ fn copy_to_clipboard(text: &str) -> bool {
 }
 
 fn send_autopaste_shortcut() -> bool {
-    Command::new("osascript")
-        .arg("-e")
-        .arg("tell application \"System Events\" to keystroke \"v\" using command down")
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    send_key_shortcut(&[
+        EventType::KeyPress(Key::MetaLeft),
+        EventType::KeyPress(Key::KeyV),
+        EventType::KeyRelease(Key::KeyV),
+        EventType::KeyRelease(Key::MetaLeft),
+    ])
+}
+
+fn send_key_shortcut(events: &[EventType]) -> bool {
+    for event in events {
+        if simulate(event).is_err() {
+            return false;
+        }
+
+        // macOS can drop synthetic events sent too quickly.
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    true
 }
 
 fn copy_with_arboard(text: &str) -> Result<(), ()> {

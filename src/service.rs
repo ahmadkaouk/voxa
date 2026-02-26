@@ -37,6 +37,12 @@ fn install() -> Result<(), AppError> {
     let domain = launch_domain().map_err(|_| AppError::ServiceInstallFailed)?;
     let service_target = format!("{domain}/{SERVICE_LABEL}");
 
+    // Ensure a previously-started foreground daemon doesn't run alongside the LaunchAgent.
+    let _ = Command::new("/usr/bin/pkill")
+        .arg("-f")
+        .arg("(^|/)voico daemon$")
+        .status();
+
     let _ = Command::new("launchctl")
         .arg("bootout")
         .arg(&domain)

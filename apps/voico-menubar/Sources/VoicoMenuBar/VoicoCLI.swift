@@ -2,6 +2,7 @@ import Foundation
 
 enum VoicoCLIError: Error {
     case voicoBinaryMissing
+    case voicoBinaryIncompatible(path: String)
     case commandFailed(command: String, code: Int32, stderr: String)
     case parseFailed(context: String)
 
@@ -9,6 +10,8 @@ enum VoicoCLIError: Error {
         switch self {
         case .voicoBinaryMissing:
             return "voico binary not found. Run ./scripts/install.sh or set VOICO_BIN to an absolute path."
+        case let .voicoBinaryIncompatible(path):
+            return "voico binary is incompatible at \(path). Reinstall voico from this repo with ./scripts/install.sh."
         case let .commandFailed(command, code, stderr):
             if stderr.isEmpty {
                 return "Command failed (\(code)): \(command)"
@@ -27,7 +30,6 @@ struct CommandResult {
 }
 
 struct VoicoCLI {
-    private static let serviceLabel = "com.voico.daemon"
     private static let preferredVoicoPaths = [
         "~/.cargo/bin/voico",
         "/opt/homebrew/bin/voico",
@@ -45,6 +47,7 @@ struct VoicoCLI {
     func ensureServiceInstalledAndRunning() throws {
         let status = try serviceStatus()
         if status.loaded {
+            try restartService()
             return
         }
 
@@ -79,12 +82,7 @@ struct VoicoCLI {
     }
 
     func restartService() throws {
-        let uid = try currentUID()
-        let target = "gui/\(uid)/\(Self.serviceLabel)"
-        _ = try run(
-            executable: "/bin/launchctl",
-            args: ["kickstart", "-k", target]
-        )
+        try installService()
     }
 
     func configShow() throws -> DaemonSettings {
@@ -92,15 +90,14 @@ struct VoicoCLI {
         let values = parseKeyValueLines(output)
 
         guard let hotkeyRaw = values["hotkey"],
+              let modeRaw = values["mode"],
               let outputRaw = values["output"],
               let hotkey = VoicoHotkey(rawValue: hotkeyRaw),
+              let mode = VoicoInputMode(rawValue: modeRaw),
               let target = VoicoOutput(rawValue: outputRaw)
         else {
             throw VoicoCLIError.parseFailed(context: "config show")
         }
-
-        // Older voico binaries may not print `mode`; default to toggle.
-        let mode = values["mode"].flatMap(VoicoInputMode.init(rawValue:)) ?? .toggle
 
         return DaemonSettings(hotkey: hotkey, mode: mode, output: target)
     }
@@ -145,17 +142,31 @@ struct VoicoCLI {
 
     private func resolveVoicoPath() throws -> String {
         let environment = ProcessInfo.processInfo.environment
+        var incompatiblePath: String?
 
         if let override = environment["VOICO_BIN"],
            let path = normalizedExecutablePath(override)
         {
+            guard supportsModeConfig(path: path) else {
+                throw VoicoCLIError.voicoBinaryIncompatible(path: path)
+            }
             return path
         }
 
         for candidate in voicoCandidates(pathEnv: environment["PATH"]) {
             if let path = normalizedExecutablePath(candidate) {
+                if !supportsModeConfig(path: path) {
+                    if incompatiblePath == nil {
+                        incompatiblePath = path
+                    }
+                    continue
+                }
                 return path
             }
+        }
+
+        if let incompatiblePath {
+            throw VoicoCLIError.voicoBinaryIncompatible(path: incompatiblePath)
         }
 
         throw VoicoCLIError.voicoBinaryMissing
@@ -190,14 +201,20 @@ struct VoicoCLI {
         return expanded
     }
 
-    private func currentUID() throws -> String {
-        let result = try run(executable: "/usr/bin/id", args: ["-u"])
-        let uid = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if uid.isEmpty {
-            throw VoicoCLIError.parseFailed(context: "id -u")
+    private func supportsModeConfig(path: String) -> Bool {
+        guard let result = try? run(
+            executable: path,
+            args: ["config", "show"],
+            allowFailure: true
+        ) else {
+            return false
         }
 
-        return uid
+        guard result.status == 0 else {
+            return false
+        }
+
+        return result.stdout.contains("mode =")
     }
 
     private func run(
