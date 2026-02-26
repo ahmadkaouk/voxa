@@ -1,223 +1,204 @@
-# Voico Architecture (v1)
+# Voico Architecture (Target)
 
-## Product Goal
-Build a local macOS tool for personal dictation that converts speech to text with minimal setup.
+## Goals
+- Keep the product simple: one reliable dictation app for macOS.
+- Make the menu bar app the primary UX.
+- Keep backend behavior deterministic and testable.
+- Avoid duplicate logic across UI surfaces.
 
-## Scope
-- `v1` is a terminal command.
-- Background daemon keeps running and listens for two global hotkeys.
-- Interaction modes are daemon-only:
-  - `toggle`: press assigned hotkey once to start, press again to stop.
-  - `hold`: press assigned hotkey to start, release to stop.
-- Output behavior:
-  - Always print transcript to stdout.
-  - Daemon always copies to clipboard and attempts auto-paste.
-- `v2` adds a menu bar UI over the same core modules.
+## Product Surfaces
+- `voico-menubar` (primary): user-facing control and status UI.
+- `voico-daemon` (core): always-on runtime for hotkeys, recording, transcription, output.
+- `voicoctl` (optional/internal): thin troubleshooting client for support/dev/CI.
 
-## Locked Decisions (v1)
-- Platform: macOS only.
-- Provider: OpenAI speech-to-text.
-- Default model: `gpt-4o-mini-transcribe`.
-- Optional model override: `gpt-4o-transcribe`.
-- Transcription mode: batch only (`record -> stop -> upload -> transcript`).
-- Language handling: auto-detect from audio.
-- Error policy: fail fast, no automatic retries.
-- Data policy: no app-managed persistence for transcripts or audio.
-- Packaging: installable binary command.
+`voicoctl` is intentionally minimal and not the main user experience.
 
-## High-Level Architecture
-- `CLI Layer`
-  - Parses commands and flags.
-  - Emits command-specific start/stop events.
-- `Input Layer`
-  - Captures microphone input from the default device.
-  - Starts/stops capture based on command or daemon hotkey events.
-- `Audio Layer`
-  - Normalizes captured audio for upload format.
-- `Transcription Layer`
-  - Sends audio to provider and parses transcript response.
-  - Encapsulates provider behind a trait/interface.
-- `Output Layer`
-  - Prints transcript to stdout.
-  - Copies transcript to clipboard.
-- `Config Layer`
-  - Resolves values from CLI, environment, and `.env`.
+## Current State (Today)
+- Swift menu bar app invokes `voico` CLI commands as subprocesses.
+- Rust binary includes daemon runtime, service lifecycle, config mutation, and provider calls.
+- Runtime status is currently inferred from logs for some UI signals.
 
-## Rust Module Layout
-Current scaffold:
-- `src/main.rs`: CLI entrypoint and exit code handling.
-- `src/cli.rs`: command and flag definitions.
-- `src/command.rs`: shared command execution path.
-- `src/config.rs`: config loading and validation.
-- `src/error.rs`: app error types and printable contract messages.
+This works for MVP, but coupling through CLI output/log parsing is fragile as features grow.
 
-Planned `v1` expansion modules:
-- `src/app.rs`: orchestration and state machine wiring.
-- `src/audio.rs`: capture and WAV conversion.
-- `src/stt/mod.rs`: STT trait and provider implementation.
-- `src/output.rs`: transcript and clipboard output.
+## Target System Architecture
+Daemon-first, API-first architecture:
 
-Candidate crates:
-- `tokio`
-- `clap`
-- `cpal`
-- `hound`
-- `reqwest`
-- `serde`
-- `arboard` (or `pbcopy` fallback)
-- `dotenvy`
+1. One daemon process owns runtime state and executes all recording/transcription work.
+2. Clients (menu bar app, optional `voicoctl`) communicate with daemon over local IPC.
+3. Logs are observability only, never an app control channel.
+4. Shared domain logic lives in backend core, not in clients.
 
-## CLI Contract
-### Commands
-- `voico daemon`
-- `voico service <install|uninstall|status>`
-- `voico config show`
-- `voico config set toggle-hotkey <right_option|cmd_space|fn>`
-- `voico config set hold-hotkey <right_option|cmd_space|fn>`
-- `voico --help`
+## Packaging Strategy
+Use module boundaries first, crate boundaries second.
 
-### Defaults
-- Default daemon toggle hotkey: `right_option`.
-- Default daemon hold hotkey: `fn`.
-- Default model: `gpt-4o-mini-transcribe`.
-- Language detection: automatic.
-- Max recording duration cap: `300` seconds.
-- Output behavior: always print transcript and attempt clipboard copy.
+- Start with one backend library crate (`voico-core`) that contains domain, app, infra, and IPC modules.
+- Add small binary crates for process entrypoints (`voico-daemon`, optional `voicoctl`).
+- Split `voico-core` into multiple crates only when there is a concrete need:
+  - dependency isolation
+  - reuse outside this repo
+  - separate ownership/release cadence
 
-### Exit Codes
-- `0`: transcription completed.
-- `1`: user/config/input failure.
-- `2`: provider/network/transcription failure.
+## Component Model
+### 1) Clients
+- `voico-menubar`
+  - UI only.
+  - Sends commands over IPC.
+  - Subscribes to daemon events for live state.
+- `voicoctl` (optional)
+  - Small commands like `status`, `config get/set`, `health`, `logs`.
+  - Uses the same IPC API as menu bar.
 
-### Examples
-- `voico daemon`
-- `voico service install`
-- `voico config set toggle-hotkey cmd_space`
-- `voico config set hold-hotkey fn`
+### 2) Daemon App Layer
+- Request handlers:
+  - `get_state`
+  - `start_recording`
+  - `stop_recording`
+  - `set_hotkeys`
+  - `set_output_mode`
+  - `set_model`
+  - `health`
+- Event broadcaster:
+  - Pushes runtime events to subscribed clients.
 
-## Config Contract
-Source priority (highest first):
-1. Environment variables
-2. `.env`
+### 3) Domain Core
+- Explicit state machine and invariants.
+- Session lifecycle and transition rules.
+- Error taxonomy mapped to user-facing messages.
 
-Environment variables:
-- `OPENAI_API_KEY` (required)
-- `VOICO_MODEL` (optional, default `gpt-4o-mini-transcribe`)
+### 4) Infrastructure Adapters
+- `audio` adapter (mic capture + WAV normalization).
+- `stt` adapter (OpenAI transcription).
+- `hotkey` adapter (global key listener).
+- `output` adapter (clipboard + autopaste).
+- `storage` adapter (config + state snapshots).
+- `launchd` adapter (install/uninstall/status).
 
-## Audio and Transcription Contract
-- Capture source: default macOS input device.
-- Upload encoding: WAV, mono, 16-bit PCM, target 16 kHz.
-- Max recording duration: fixed cap of `300` seconds.
-- Batch flow: record -> stop -> upload -> final transcript.
-- No streaming partial output in `v1`.
+## Runtime State Model
+Primary states:
+- `idle`
+- `recording`
+- `transcribing`
+- `outputting`
+- `error`
 
-## Runtime State Machine
-### States
-- `Idle`
-- `Recording`
-- `Transcribing`
-- `Completed`
-- `Failed`
+Core events:
+- `toggle_pressed`
+- `hold_pressed`
+- `hold_released`
+- `max_duration_reached`
+- `recording_failed`
+- `transcription_succeeded`
+- `transcription_failed`
+- `output_succeeded`
+- `output_failed`
 
-### Events
-- `StartPressed`
-- `StopPressed`
-- `HoldPressed`
-- `HoldReleased`
-- `MaxDurationReached`
-- `AudioCaptureError`
-- `ApiSuccess`
-- `ApiError`
-- `ClipboardError`
+Required invariants:
+- Exactly one active session at a time.
+- Stop request is idempotent.
+- State transitions are serialized (single writer model).
+- UI state comes from daemon events/state snapshot, not local guesses.
 
-### Transitions
-| Current | Event | Next | Action |
-|---|---|---|---|
-| `Idle` | `StartPressed` | `Recording` | open stream, clear buffer, start timer |
-| `Idle` | `HoldPressed` | `Recording` | open stream, clear buffer, start timer |
-| `Recording` | `StopPressed` | `Transcribing` | stop stream, finalize WAV |
-| `Recording` | `HoldReleased` | `Transcribing` | stop stream, finalize WAV |
-| `Recording` | `MaxDurationReached` | `Transcribing` | stop stream, finalize WAV, emit warning |
-| `Recording` | `AudioCaptureError` | `Failed` | emit input error, exit `1` |
-| `Transcribing` | `ApiSuccess` | `Completed` | print transcript, attempt clipboard copy |
-| `Transcribing` | `ApiError` | `Failed` | emit provider/network error, exit `2` |
-| `Completed` | `ClipboardError` | `Completed` | emit warning, keep exit `0` |
+## IPC Contract (Local Only)
+Transport:
+- Unix domain socket at app-support runtime path (for example `~/Library/Application Support/voico/run/daemon.sock`).
 
-### Invariants
-- One active recording session per process.
-- One transcription request per recording.
-- Audio buffer cleared on `Completed` or `Failed`.
-- No transcript or audio persistence by the app after command exit.
+Protocol:
+- JSON messages.
+- Request/response for commands.
+- Subscription stream for daemon events.
 
-## Error Contract
-### Message Format
-- Error lines start with `ERROR`.
-- Warning lines start with `WARN`.
-- Success lines start with `OK`.
-- IDs do not use one-letter type prefixes.
-- Include one short remediation line when relevant.
+Message types:
+- Requests: `get_state`, `command`, `set_config`, `health`.
+- Responses: `ok`, `error`.
+- Events: `state_changed`, `recording_started`, `recording_stopped`, `transcribing_started`, `transcription_ready`, `output_done`, `warning`, `error`.
 
-### Fatal (`exit 1`: user/config/input)
-| Error ID | Condition | Primary Message | Remediation Message |
-|---|---|---|---|
-| `OPENAI_API_KEY_MISSING` | `OPENAI_API_KEY` missing in env or `.env` | `ERROR OPENAI_API_KEY_MISSING: OPENAI_API_KEY is required.` | `Set OPENAI_API_KEY in your environment or .env file.` |
-| `MODEL_INVALID` | model value empty/invalid | `ERROR MODEL_INVALID: model value is invalid.` | `Use gpt-4o-mini-transcribe or gpt-4o-transcribe.` |
-| `AUDIO_DEVICE_UNAVAILABLE` | no input device or device open failure | `ERROR AUDIO_DEVICE_UNAVAILABLE: microphone input is unavailable.` | `Check input device and retry.` |
-| `AUDIO_PERMISSION_DENIED` | macOS microphone access denied | `ERROR AUDIO_PERMISSION_DENIED: microphone permission denied.` | `Allow microphone access for your terminal app in System Settings > Privacy & Security > Microphone.` |
-| `AUDIO_CAPTURE_FAILED` | stream callback/read failure | `ERROR AUDIO_CAPTURE_FAILED: failed while capturing audio.` | `Check microphone device status and retry.` |
-| `AUDIO_EMPTY_BUFFER` | no usable frames captured | `ERROR AUDIO_EMPTY_BUFFER: no audio captured.` | `Speak after recording starts and retry.` |
+Versioning:
+- Include `api_version` in handshake.
+- Backward-compatible additive changes by default.
 
-### Fatal (`exit 2`: provider/network/transcription)
-| Error ID | Condition | Primary Message | Remediation Message |
-|---|---|---|---|
-| `API_AUTH_FAILED` | invalid API key or unauthorized request | `ERROR API_AUTH_FAILED: authentication failed with STT provider.` | `Verify OPENAI_API_KEY and retry.` |
-| `API_RATE_LIMITED` | provider rate limit response | `ERROR API_RATE_LIMITED: request was rate-limited.` | `Wait and retry.` |
-| `API_REQUEST_FAILED` | provider returns non-auth request error | `ERROR API_REQUEST_FAILED: transcription request failed.` | `Check model/options and retry.` |
-| `API_NETWORK_FAILED` | DNS/TLS/connectivity/timeout failure | `ERROR API_NETWORK_FAILED: network error during transcription.` | `Check internet connection and retry.` |
-| `API_RESPONSE_INVALID` | malformed response or missing transcript field | `ERROR API_RESPONSE_INVALID: provider response could not be parsed.` | `Retry; if persistent, switch model and re-test.` |
-| `API_EMPTY_TRANSCRIPT` | provider returns empty transcript | `ERROR API_EMPTY_TRANSCRIPT: transcript is empty.` | `Retry in a quieter environment or speak longer.` |
+## Data and Storage
+Config:
+- Path: `~/Library/Application Support/voico/config.toml`.
+- Includes hotkeys, model, output behavior, limits.
 
-### Non-Fatal Warnings (`exit 0`)
-| Warning ID | Condition | Primary Message | Behavior |
-|---|---|---|---|
-| `OUTPUT_CLIPBOARD_FAILED` | transcript exists but clipboard copy fails | `WARN OUTPUT_CLIPBOARD_FAILED: transcript created but clipboard copy failed.` | Print transcript to stdout and keep `exit 0`. |
-| `AUDIO_MAX_DURATION_REACHED` | recording auto-stops at max duration | `WARN AUDIO_MAX_DURATION_REACHED: recording reached max duration and was stopped.` | Continue to transcription. |
+Secrets:
+- OpenAI API key in macOS Keychain (preferred).
+- Environment variable fallback for development.
 
-### Success IDs
-- `RECORDING_STARTED`
-- `RECORDING_STOPPED`
-- `TRANSCRIPTION_READY`
-- `COPIED_TO_CLIPBOARD`
+Runtime state:
+- In-memory in daemon.
+- Optional atomic state snapshot file only for crash recovery diagnostics, not primary UI sync.
 
-Runtime line format:
-- `OK <SUCCESS_ID>`
+Logs:
+- Keep structured logs (`info`, `warn`, `error`) for observability.
+- Do not parse logs for product state.
 
-## Privacy Contract
-- The app does not persist transcript history or audio history.
-- Audio stays in memory when possible.
-- If a temp file is required for upload, delete it immediately after the request completes.
-- The app does not send analytics or telemetry.
+## Security and Privacy
+- IPC socket permissions restricted to current user.
+- No transcript/audio history persistence by default.
+- Temporary audio files avoided; if needed, delete immediately after request.
+- No telemetry by default.
 
-## Risks and Mitigations
-- Network dependency can interrupt dictation:
-  - Mitigation: clear fatal errors and immediate re-run workflow.
-- Mixed-language dictation may reduce punctuation quality:
-  - Mitigation: keep speech clear and avoid overlapping speakers.
-- `.env` key storage risk:
-  - Mitigation: local-use guidance; add optional Keychain support in `v1.1`.
+## Failure Strategy
+- Daemon remains alive after session-level failures.
+- Error reported as event + recoverable state transition back to `idle`.
+- Client reconnect strategy:
+  - exponential backoff
+  - re-issue `get_state` on reconnect
+  - resume event subscription
 
-## Implementation Milestones
-1. Initialize Rust binary crate with CLI skeleton.
-2. Implement config loading and validation.
-3. Implement microphone capture and WAV normalization.
-4. Implement OpenAI batch transcription integration.
-5. Implement transcript and clipboard output.
-6. Finalize daemon dual-hotkey behavior (`toggle` + `hold`).
-7. Package as local binary command.
-8. Add background daemon with global hotkeys and LaunchAgent service controls.
-9. Add a macOS menu bar controller app over existing daemon/config/service commands.
+## Testing Strategy
+- Domain tests:
+  - transition correctness
+  - invariants
+  - hold/toggle behavior
+- Adapter tests:
+  - provider mapping
+  - output failures
+  - config read/write
+- IPC integration tests:
+  - request/response contract
+  - event ordering and reconnect behavior
+- End-to-end smoke:
+  - launch daemon
+  - trigger start/stop
+  - assert state and expected output events
 
-## v2 Menu Bar Preview
-- Keep `audio`, `stt`, `output`, and `config` UI-agnostic.
-- Add `ui-terminal` and `ui-menubar` adapters over shared app core.
-- Preserve the same config contract across terminal and menu bar UIs.
+## Repository Shape (Target)
+```text
+apps/
+  voico-menubar/
+crates/
+  voico-core/                # library crate
+    src/
+      domain/                # state machine + domain types
+      app/                   # use-cases/orchestration
+      infra/                 # audio, stt, output, hotkey, storage, launchd
+      ipc/                   # protocol and server/client primitives
+  voico-daemon/              # daemon binary crate
+  voicoctl/                  # optional thin client binary crate
+```
+
+Keep this flat and simple; prefer internal modules over many crates.
+
+## Migration Plan
+1. Introduce IPC server in current daemon process.
+2. Add `get_state` + event subscription endpoints.
+3. Move menu bar app from CLI subprocess calls to IPC client calls.
+4. Replace log-based UI status with event-driven status.
+5. Shrink CLI into optional `voicoctl` thin client using IPC.
+6. Move API key storage from env-first to Keychain-first.
+7. Remove legacy code paths that rely on parsing stdout/logs for state.
+8. Re-evaluate crate splits only after real pressure appears.
+
+## Non-Goals (For Now)
+- Multi-device sync.
+- Cloud transcript history.
+- Multi-user service mode.
+- Complex plugin systems.
+
+## Decision Summary
+- Keep daemon as the single runtime authority.
+- Keep menu bar app thin and reactive.
+- Keep CLI minimal and optional.
+- Prefer simple local IPC over layered indirection.

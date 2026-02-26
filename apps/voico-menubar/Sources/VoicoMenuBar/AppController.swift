@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 
 @MainActor
@@ -8,13 +9,25 @@ final class AppController: ObservableObject {
     @Published private(set) var holdHotkey: VoicoHotkey = .functionKey
     @Published private(set) var apiKeySet = false
     @Published private(set) var isBusy = false
+    @Published private(set) var isTranscribing = false
     @Published private(set) var statusMessage = "Starting..."
     @Published var apiKeyInput = ""
 
     private let cli = VoicoCLI()
+    private let daemonLogPath =
+        NSString(string: "~/Library/Logs/voico-daemon.out.log").expandingTildeInPath
+    private var daemonLogHandle: FileHandle?
+    private var daemonLogOffset: UInt64 = 0
+    private var daemonLogSource: DispatchSourceFileSystemObject?
 
     init() {
+        startDaemonLogWatcher()
         startup()
+    }
+
+    deinit {
+        daemonLogSource?.cancel()
+        daemonLogHandle?.closeFile()
     }
 
     func startup() {
@@ -144,6 +157,115 @@ final class AppController: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    private func startDaemonLogWatcher() {
+        ensureDaemonLogFileExists()
+        syncTranscriptionStateFromLog()
+        openDaemonLogHandleAndSeekToEnd()
+
+        let descriptor = open(daemonLogPath, O_EVTONLY)
+        guard descriptor >= 0 else {
+            return
+        }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.extend, .write],
+            queue: DispatchQueue.global(qos: .utility)
+        )
+
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in
+                self?.readDaemonLogUpdates()
+            }
+        }
+
+        source.setCancelHandler {
+            close(descriptor)
+        }
+
+        daemonLogSource = source
+        source.resume()
+    }
+
+    private func ensureDaemonLogFileExists() {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: daemonLogPath) {
+            return
+        }
+
+        _ = fileManager.createFile(atPath: daemonLogPath, contents: nil)
+    }
+
+    private func syncTranscriptionStateFromLog() {
+        guard let data = FileManager.default.contents(atPath: daemonLogPath),
+              let contents = String(data: data, encoding: .utf8),
+              let latestState = latestRecordingState(in: contents)
+        else {
+            return
+        }
+
+        isTranscribing = latestState
+    }
+
+    private func openDaemonLogHandleAndSeekToEnd() {
+        daemonLogHandle?.closeFile()
+        daemonLogHandle = FileHandle(forReadingAtPath: daemonLogPath)
+        daemonLogOffset = daemonLogHandle?.seekToEndOfFile() ?? 0
+    }
+
+    private func readDaemonLogUpdates() {
+        guard let handle = daemonLogHandle else {
+            return
+        }
+
+        let fileSize = currentDaemonLogSize()
+        if fileSize < daemonLogOffset {
+            daemonLogOffset = 0
+        }
+
+        handle.seek(toFileOffset: daemonLogOffset)
+        let data = handle.readDataToEndOfFile()
+        daemonLogOffset = handle.offsetInFile
+
+        guard !data.isEmpty,
+              let contents = String(data: data, encoding: .utf8),
+              let latestState = latestRecordingState(in: contents)
+        else {
+            return
+        }
+
+        isTranscribing = latestState
+    }
+
+    private func currentDaemonLogSize() -> UInt64 {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: daemonLogPath),
+              let size = attributes[.size] as? NSNumber
+        else {
+            return daemonLogOffset
+        }
+
+        return size.uint64Value
+    }
+
+    private func latestRecordingState(in log: String) -> Bool? {
+        let startedToken = "OK RECORDING_STARTED"
+        let stoppedToken = "OK RECORDING_STOPPED"
+
+        let startedIndex = log.range(of: startedToken, options: .backwards)?.lowerBound
+        let stoppedIndex = log.range(of: stoppedToken, options: .backwards)?.lowerBound
+
+        switch (startedIndex, stoppedIndex) {
+        case let (start?, stop?):
+            return start > stop
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        case (nil, nil):
+            return nil
+        }
+    }
+
     private func runRead(
         startMessage: String,
         successMessage: String,
@@ -203,6 +325,9 @@ final class AppController: ObservableObject {
         holdHotkey = snapshot.settings.holdHotkey
         apiKeySet = snapshot.apiKeySet
         serviceState = snapshot.service.loaded ? .running : .stopped
+        if !snapshot.service.loaded {
+            isTranscribing = false
+        }
     }
 
     private func displayMessage(for error: Error) -> String {

@@ -36,9 +36,18 @@ struct VoicoMenuView: View {
                 Text("Voico")
                     .font(.headline)
                 Spacer()
-                Text(controller.serviceState.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if controller.isTranscribing {
+                    HStack(spacing: 6) {
+                        ListeningIndicatorView()
+                        Text("Listening")
+                            .font(.caption)
+                            .foregroundStyle(Color.accentColor)
+                    }
+                } else {
+                    Text(controller.serviceState.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if controller.isBusy {
@@ -135,5 +144,42 @@ struct VoicoMenuView: View {
         }
         .padding(12)
         .frame(width: 340)
+    }
+}
+
+private struct ListeningIndicatorView: View {
+    @State private var animate = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.accentColor.opacity(0.35), lineWidth: 1.5)
+                .frame(width: 14, height: 14)
+
+            ForEach(0..<2) { index in
+                Circle()
+                    .stroke(Color.accentColor.opacity(0.45), lineWidth: 1.5)
+                    .frame(width: 14, height: 14)
+                    .scaleEffect(animate ? 1.8 : 0.9)
+                    .opacity(animate ? 0 : 0.8)
+                    .animation(
+                        .easeOut(duration: 1.2)
+                            .repeatForever(autoreverses: false)
+                            .delay(Double(index) * 0.35),
+                        value: animate
+                    )
+            }
+
+            Image(systemName: "waveform")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+        }
+        .frame(width: 20, height: 20)
+        .onAppear {
+            animate = true
+        }
+        .onDisappear {
+            animate = false
+        }
     }
 }
