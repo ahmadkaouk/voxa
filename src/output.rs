@@ -46,17 +46,11 @@ where
 {
     writeln!(writer, "{transcript}")?;
 
-    if !matches!(target, OutputTarget::Clipboard) {
-        return Ok(ClipboardOutcome::Skipped);
+    if matches!(target, OutputTarget::Clipboard) {
+        return emit_clipboard_status(transcript, copy, writer);
     }
 
-    if copy(transcript) {
-        writeln!(writer, "OK COPIED_TO_CLIPBOARD")?;
-        Ok(ClipboardOutcome::Copied)
-    } else {
-        writeln!(writer, "{CLIPBOARD_FAILED_WARNING}")?;
-        Ok(ClipboardOutcome::Failed)
-    }
+    Ok(ClipboardOutcome::Skipped)
 }
 
 fn copy_to_clipboard(text: &str) -> bool {
@@ -106,6 +100,24 @@ fn copy_with_pbcopy(text: &str) -> Result<(), ()> {
     if status.success() { Ok(()) } else { Err(()) }
 }
 
+fn emit_clipboard_status<W, F>(
+    transcript: &str,
+    copy: F,
+    writer: &mut W,
+) -> io::Result<ClipboardOutcome>
+where
+    W: Write,
+    F: Fn(&str) -> bool,
+{
+    if copy(transcript) {
+        writeln!(writer, "OK COPIED_TO_CLIPBOARD")?;
+        Ok(ClipboardOutcome::Copied)
+    } else {
+        writeln!(writer, "{CLIPBOARD_FAILED_WARNING}")?;
+        Ok(ClipboardOutcome::Failed)
+    }
+}
+
 fn emit_daemon_with<W, C, P>(
     transcript: &str,
     target: DaemonOutput,
@@ -118,13 +130,7 @@ where
     C: Fn(&str) -> bool,
     P: Fn() -> bool,
 {
-    let clipboard_outcome = if copy(transcript) {
-        writeln!(writer, "OK COPIED_TO_CLIPBOARD")?;
-        ClipboardOutcome::Copied
-    } else {
-        writeln!(writer, "{CLIPBOARD_FAILED_WARNING}")?;
-        ClipboardOutcome::Failed
-    };
+    let clipboard_outcome = emit_clipboard_status(transcript, copy, writer)?;
 
     if !matches!(target, DaemonOutput::Autopaste) {
         return Ok((clipboard_outcome, AutopasteOutcome::Skipped));

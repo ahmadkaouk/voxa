@@ -1,5 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::daemon_config::{DaemonHotkey, DaemonMode, DaemonOutput};
+
 #[derive(Debug, Parser)]
 #[command(
     name = "voico",
@@ -92,40 +94,14 @@ pub struct ConfigSetArgs {
 pub enum ConfigSetCommand {
     Hotkey {
         #[arg(value_enum)]
-        value: DaemonHotkeyArg,
+        value: DaemonHotkey,
     },
     Mode {
         #[arg(value_enum)]
-        value: DaemonModeArg,
+        value: DaemonMode,
     },
     Output {
         #[arg(value_enum)]
-        value: DaemonOutputArg,
+        value: DaemonOutput,
     },
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
-pub enum DaemonHotkeyArg {
-    #[value(name = "right_option")]
-    RightOption,
-    #[value(name = "cmd_space")]
-    CmdSpace,
-    #[value(name = "fn")]
-    Fn,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
-pub enum DaemonOutputArg {
-    #[value(name = "clipboard")]
-    Clipboard,
-    #[value(name = "autopaste")]
-    Autopaste,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
-pub enum DaemonModeArg {
-    #[value(name = "toggle")]
-    Toggle,
-    #[value(name = "hold")]
-    Hold,
 }

@@ -5,21 +5,24 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{
-    ConfigCommand, ConfigSetCommand, DaemonHotkeyArg, DaemonModeArg, DaemonOutputArg,
-};
+use crate::cli::{ConfigCommand, ConfigSetCommand};
 use crate::error::AppError;
 
 const CONFIG_DIR_RELATIVE: &str = "Library/Application Support/voico";
 const CONFIG_FILE_NAME: &str = "config.toml";
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, ValueEnum, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DaemonHotkey {
+    #[default]
+    #[value(name = "right_option")]
     RightOption,
+    #[value(name = "cmd_space")]
     CmdSpace,
+    #[value(name = "fn")]
     Fn,
 }
 
@@ -33,20 +36,13 @@ impl DaemonHotkey {
     }
 }
 
-impl From<DaemonHotkeyArg> for DaemonHotkey {
-    fn from(value: DaemonHotkeyArg) -> Self {
-        match value {
-            DaemonHotkeyArg::RightOption => Self::RightOption,
-            DaemonHotkeyArg::CmdSpace => Self::CmdSpace,
-            DaemonHotkeyArg::Fn => Self::Fn,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, ValueEnum, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DaemonOutput {
+    #[default]
+    #[value(name = "clipboard")]
     Clipboard,
+    #[value(name = "autopaste")]
     Autopaste,
 }
 
@@ -59,19 +55,13 @@ impl DaemonOutput {
     }
 }
 
-impl From<DaemonOutputArg> for DaemonOutput {
-    fn from(value: DaemonOutputArg) -> Self {
-        match value {
-            DaemonOutputArg::Clipboard => Self::Clipboard,
-            DaemonOutputArg::Autopaste => Self::Autopaste,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, ValueEnum, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DaemonMode {
+    #[default]
+    #[value(name = "toggle")]
     Toggle,
+    #[value(name = "hold")]
     Hold,
 }
 
@@ -84,44 +74,12 @@ impl DaemonMode {
     }
 }
 
-impl From<DaemonModeArg> for DaemonMode {
-    fn from(value: DaemonModeArg) -> Self {
-        match value {
-            DaemonModeArg::Toggle => Self::Toggle,
-            DaemonModeArg::Hold => Self::Hold,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct DaemonConfig {
     pub hotkey: DaemonHotkey,
     pub mode: DaemonMode,
     pub output: DaemonOutput,
-}
-
-impl Default for DaemonConfig {
-    fn default() -> Self {
-        Self {
-            hotkey: DaemonHotkey::RightOption,
-            mode: DaemonMode::Toggle,
-            output: DaemonOutput::Clipboard,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct DaemonConfigFile {
-    hotkey: Option<DaemonHotkey>,
-    mode: Option<DaemonMode>,
-    output: Option<DaemonOutput>,
-}
-
-#[derive(Debug, Serialize)]
-struct StoredDaemonConfig {
-    hotkey: DaemonHotkey,
-    mode: DaemonMode,
-    output: DaemonOutput,
 }
 
 pub struct ConfigStore {
@@ -173,13 +131,13 @@ fn run_set(command: ConfigSetCommand) -> Result<(), AppError> {
 
     match command {
         ConfigSetCommand::Hotkey { value } => {
-            config.hotkey = value.into();
+            config.hotkey = value;
         }
         ConfigSetCommand::Mode { value } => {
-            config.mode = value.into();
+            config.mode = value;
         }
         ConfigSetCommand::Output { value } => {
-            config.output = value.into();
+            config.output = value;
         }
     }
 
@@ -210,14 +168,7 @@ fn load_from_path(path: &Path) -> Result<DaemonConfig, AppError> {
         Err(_) => return Err(AppError::DaemonConfigReadFailed),
     };
 
-    let parsed: DaemonConfigFile =
-        toml::from_str(&raw).map_err(|_| AppError::DaemonConfigInvalid)?;
-
-    Ok(DaemonConfig {
-        hotkey: parsed.hotkey.unwrap_or(DaemonHotkey::RightOption),
-        mode: parsed.mode.unwrap_or(DaemonMode::Toggle),
-        output: parsed.output.unwrap_or(DaemonOutput::Clipboard),
-    })
+    toml::from_str(&raw).map_err(|_| AppError::DaemonConfigInvalid)
 }
 
 fn save_to_path(path: &Path, config: DaemonConfig) -> Result<(), AppError> {
@@ -226,13 +177,7 @@ fn save_to_path(path: &Path, config: DaemonConfig) -> Result<(), AppError> {
     };
     fs::create_dir_all(parent).map_err(|_| AppError::DaemonConfigWriteFailed)?;
 
-    let stored = StoredDaemonConfig {
-        hotkey: config.hotkey,
-        mode: config.mode,
-        output: config.output,
-    };
-
-    let serialized = toml::to_string(&stored).map_err(|_| AppError::DaemonConfigWriteFailed)?;
+    let serialized = toml::to_string(&config).map_err(|_| AppError::DaemonConfigWriteFailed)?;
     let temp_path = temp_config_write_path(parent);
     let mut temp_file = fs::OpenOptions::new()
         .write(true)

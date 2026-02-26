@@ -111,113 +111,76 @@ fn build_stream(
 ) -> Result<cpal::Stream, AppError> {
     match sample_format {
         cpal::SampleFormat::F32 => {
-            let samples_for_data = Arc::clone(&samples);
-            let callback_error_for_data = Arc::clone(&callback_error);
-            let callback_error_for_err = Arc::clone(&callback_error);
-            device
-                .build_input_stream(
-                    config,
-                    move |data: &[f32], _| {
-                        push_f32_samples(data, &samples_for_data, &callback_error_for_data)
-                    },
-                    move |err| {
-                        store_callback_error(
-                            &callback_error_for_err,
-                            map_stream_error_message(&err.to_string()),
-                        )
-                    },
-                    None,
-                )
-                .map_err(map_build_stream_error)
+            build_typed_stream(device, config, samples, callback_error, |sample: f32| {
+                sample.clamp(-1.0, 1.0)
+            })
         }
         cpal::SampleFormat::I16 => {
-            let samples_for_data = Arc::clone(&samples);
-            let callback_error_for_data = Arc::clone(&callback_error);
-            let callback_error_for_err = Arc::clone(&callback_error);
-            device
-                .build_input_stream(
-                    config,
-                    move |data: &[i16], _| {
-                        push_i16_samples(data, &samples_for_data, &callback_error_for_data)
-                    },
-                    move |err| {
-                        store_callback_error(
-                            &callback_error_for_err,
-                            map_stream_error_message(&err.to_string()),
-                        )
-                    },
-                    None,
-                )
-                .map_err(map_build_stream_error)
+            build_typed_stream(device, config, samples, callback_error, |sample: i16| {
+                (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
+            })
         }
         cpal::SampleFormat::U16 => {
-            let samples_for_data = Arc::clone(&samples);
-            let callback_error_for_data = Arc::clone(&callback_error);
-            let callback_error_for_err = Arc::clone(&callback_error);
-            device
-                .build_input_stream(
-                    config,
-                    move |data: &[u16], _| {
-                        push_u16_samples(data, &samples_for_data, &callback_error_for_data)
-                    },
-                    move |err| {
-                        store_callback_error(
-                            &callback_error_for_err,
-                            map_stream_error_message(&err.to_string()),
-                        )
-                    },
-                    None,
-                )
-                .map_err(map_build_stream_error)
+            build_typed_stream(device, config, samples, callback_error, |sample: u16| {
+                ((sample as f32 / u16::MAX as f32) * 2.0 - 1.0).clamp(-1.0, 1.0)
+            })
         }
         _ => Err(AppError::AudioCaptureFailed),
     }
 }
 
-fn push_f32_samples(
-    data: &[f32],
-    samples: &Arc<Mutex<Vec<f32>>>,
-    callback_error: &Arc<Mutex<Option<AppError>>>,
-) {
-    let Ok(mut output) = samples.lock() else {
-        store_callback_error(callback_error, AppError::AudioCaptureFailed);
-        return;
-    };
+fn build_typed_stream<T, F>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    samples: Arc<Mutex<Vec<f32>>>,
+    callback_error: Arc<Mutex<Option<AppError>>>,
+    normalize: F,
+) -> Result<cpal::Stream, AppError>
+where
+    T: cpal::SizedSample + Copy,
+    F: Fn(T) -> f32 + Send + 'static,
+{
+    let samples_for_data = Arc::clone(&samples);
+    let callback_error_for_data = Arc::clone(&callback_error);
+    let callback_error_for_err = Arc::clone(&callback_error);
 
-    output.extend(data.iter().map(|sample| sample.clamp(-1.0, 1.0)));
+    device
+        .build_input_stream(
+            config,
+            move |data: &[T], _| {
+                push_samples(
+                    data,
+                    &samples_for_data,
+                    &callback_error_for_data,
+                    &normalize,
+                )
+            },
+            move |err| {
+                store_callback_error(
+                    &callback_error_for_err,
+                    map_stream_error_message(&err.to_string()),
+                )
+            },
+            None,
+        )
+        .map_err(map_build_stream_error)
 }
 
-fn push_i16_samples(
-    data: &[i16],
+fn push_samples<T, F>(
+    data: &[T],
     samples: &Arc<Mutex<Vec<f32>>>,
     callback_error: &Arc<Mutex<Option<AppError>>>,
-) {
+    normalize: &F,
+) where
+    T: Copy,
+    F: Fn(T) -> f32,
+{
     let Ok(mut output) = samples.lock() else {
         store_callback_error(callback_error, AppError::AudioCaptureFailed);
         return;
     };
 
-    output.extend(
-        data.iter()
-            .map(|sample| *sample as f32 / i16::MAX as f32)
-            .map(|sample| sample.clamp(-1.0, 1.0)),
-    );
-}
-
-fn push_u16_samples(
-    data: &[u16],
-    samples: &Arc<Mutex<Vec<f32>>>,
-    callback_error: &Arc<Mutex<Option<AppError>>>,
-) {
-    let Ok(mut output) = samples.lock() else {
-        store_callback_error(callback_error, AppError::AudioCaptureFailed);
-        return;
-    };
-
-    output.extend(data.iter().map(|sample| {
-        let normalized = (*sample as f32 / u16::MAX as f32) * 2.0 - 1.0;
-        normalized.clamp(-1.0, 1.0)
-    }));
+    output.extend(data.iter().copied().map(normalize));
 }
 
 fn normalize_to_wav(
@@ -342,34 +305,26 @@ fn store_callback_error(callback_error: &Arc<Mutex<Option<AppError>>>, error: Ap
 }
 
 fn map_default_config_error(error: cpal::DefaultStreamConfigError) -> AppError {
-    if is_permission_error(&error.to_string()) {
-        AppError::AudioPermissionDenied
-    } else {
-        AppError::AudioDeviceUnavailable
-    }
+    permission_or(&error.to_string(), AppError::AudioDeviceUnavailable)
 }
 
 fn map_build_stream_error(error: cpal::BuildStreamError) -> AppError {
-    if is_permission_error(&error.to_string()) {
-        AppError::AudioPermissionDenied
-    } else {
-        AppError::AudioDeviceUnavailable
-    }
+    permission_or(&error.to_string(), AppError::AudioDeviceUnavailable)
 }
 
 fn map_play_stream_error(error: cpal::PlayStreamError) -> AppError {
-    if is_permission_error(&error.to_string()) {
-        AppError::AudioPermissionDenied
-    } else {
-        AppError::AudioCaptureFailed
-    }
+    permission_or(&error.to_string(), AppError::AudioCaptureFailed)
 }
 
 fn map_stream_error_message(message: &str) -> AppError {
+    permission_or(message, AppError::AudioCaptureFailed)
+}
+
+fn permission_or(message: &str, fallback: AppError) -> AppError {
     if is_permission_error(message) {
         AppError::AudioPermissionDenied
     } else {
-        AppError::AudioCaptureFailed
+        fallback
     }
 }
 
