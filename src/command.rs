@@ -93,12 +93,8 @@ fn finalize_recording_and_transcription(
         );
     }
 
-    let transcript = stt::transcribe(
-        &config.api_key,
-        config.model,
-        config.language,
-        &captured.wav_bytes,
-    )?;
+    let stt_client = stt::SttClient::new(&config.api_key, config.model, config.language)?;
+    let transcript = stt_client.transcribe(&captured.wav_bytes)?;
     println!("OK TRANSCRIPTION_READY");
     output::emit(&transcript, config.output)?;
 

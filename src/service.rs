@@ -10,98 +10,109 @@ use crate::error::AppError;
 const SERVICE_LABEL: &str = "com.voico.daemon";
 const PLIST_FILE_NAME: &str = "com.voico.daemon.plist";
 
+struct ServiceManager {
+    plist_path: PathBuf,
+}
+
 pub fn run(command: ServiceCommand) -> Result<(), AppError> {
+    let manager = ServiceManager::new()?;
+
     match command {
-        ServiceCommand::Install => install(),
-        ServiceCommand::Uninstall => uninstall(),
-        ServiceCommand::Status => status(),
+        ServiceCommand::Install => manager.install(),
+        ServiceCommand::Uninstall => manager.uninstall(),
+        ServiceCommand::Status => manager.status(),
     }
 }
 
-fn install() -> Result<(), AppError> {
-    let plist_path = plist_path()?;
-    let home = home_dir()?;
-    let log_dir = home.join("Library/Logs");
-    fs::create_dir_all(&log_dir).map_err(|_| AppError::ServiceInstallFailed)?;
-
-    if let Some(parent) = plist_path.parent() {
-        fs::create_dir_all(parent).map_err(|_| AppError::ServiceInstallFailed)?;
+impl ServiceManager {
+    fn new() -> Result<Self, AppError> {
+        Ok(Self {
+            plist_path: plist_path()?,
+        })
     }
 
-    let binary_path = env::current_exe().map_err(|_| AppError::ServiceInstallFailed)?;
-    let stdout_log = log_dir.join("voico-daemon.out.log");
-    let stderr_log = log_dir.join("voico-daemon.err.log");
-    let plist = build_plist(&binary_path, &stdout_log, &stderr_log);
-    fs::write(&plist_path, plist).map_err(|_| AppError::ServiceInstallFailed)?;
+    fn install(&self) -> Result<(), AppError> {
+        let home = home_dir()?;
+        let log_dir = home.join("Library/Logs");
+        fs::create_dir_all(&log_dir).map_err(|_| AppError::ServiceInstallFailed)?;
 
-    let domain = launch_domain().map_err(|_| AppError::ServiceInstallFailed)?;
-    let service_target = format!("{domain}/{SERVICE_LABEL}");
+        if let Some(parent) = self.plist_path.parent() {
+            fs::create_dir_all(parent).map_err(|_| AppError::ServiceInstallFailed)?;
+        }
 
-    // Ensure a previously-started foreground daemon doesn't run alongside the LaunchAgent.
-    let _ = Command::new("/usr/bin/pkill")
-        .arg("-f")
-        .arg("(^|/)voico daemon$")
-        .status();
+        let binary_path = env::current_exe().map_err(|_| AppError::ServiceInstallFailed)?;
+        let stdout_log = log_dir.join("voico-daemon.out.log");
+        let stderr_log = log_dir.join("voico-daemon.err.log");
+        let plist = build_plist(&binary_path, &stdout_log, &stderr_log);
+        fs::write(&self.plist_path, plist).map_err(|_| AppError::ServiceInstallFailed)?;
 
-    let _ = bootout_service(&domain, &plist_path);
+        let domain = launch_domain().map_err(|_| AppError::ServiceInstallFailed)?;
+        let service_target = format!("{domain}/{SERVICE_LABEL}");
 
-    let bootstrap = Command::new("launchctl")
-        .arg("bootstrap")
-        .arg(&domain)
-        .arg(&plist_path)
-        .status()
-        .map_err(|_| AppError::ServiceInstallFailed)?;
-    if !bootstrap.success() {
-        return Err(AppError::ServiceInstallFailed);
+        // Ensure a previously-started foreground daemon doesn't run alongside the LaunchAgent.
+        let _ = Command::new("/usr/bin/pkill")
+            .arg("-f")
+            .arg("(^|/)voico daemon$")
+            .status();
+
+        let _ = bootout_service(&domain, &self.plist_path);
+
+        let bootstrap = Command::new("launchctl")
+            .arg("bootstrap")
+            .arg(&domain)
+            .arg(&self.plist_path)
+            .status()
+            .map_err(|_| AppError::ServiceInstallFailed)?;
+        if !bootstrap.success() {
+            return Err(AppError::ServiceInstallFailed);
+        }
+
+        let _ = Command::new("launchctl")
+            .arg("kickstart")
+            .arg("-k")
+            .arg(service_target)
+            .status();
+
+        println!("OK SERVICE_INSTALLED");
+        println!("service = {SERVICE_LABEL}");
+        println!("plist_path = {}", self.plist_path.display());
+
+        Ok(())
     }
 
-    let _ = Command::new("launchctl")
-        .arg("kickstart")
-        .arg("-k")
-        .arg(service_target)
-        .status();
+    fn uninstall(&self) -> Result<(), AppError> {
+        let domain = launch_domain().map_err(|_| AppError::ServiceUninstallFailed)?;
 
-    println!("OK SERVICE_INSTALLED");
-    println!("service = {SERVICE_LABEL}");
-    println!("plist_path = {}", plist_path.display());
+        bootout_service(&domain, &self.plist_path).map_err(|_| AppError::ServiceUninstallFailed)?;
 
-    Ok(())
-}
+        if self.plist_path.exists() {
+            fs::remove_file(&self.plist_path).map_err(|_| AppError::ServiceUninstallFailed)?;
+        }
 
-fn uninstall() -> Result<(), AppError> {
-    let plist_path = plist_path()?;
-    let domain = launch_domain().map_err(|_| AppError::ServiceUninstallFailed)?;
+        println!("OK SERVICE_UNINSTALLED");
+        println!("service = {SERVICE_LABEL}");
 
-    bootout_service(&domain, &plist_path).map_err(|_| AppError::ServiceUninstallFailed)?;
-
-    if plist_path.exists() {
-        fs::remove_file(&plist_path).map_err(|_| AppError::ServiceUninstallFailed)?;
+        Ok(())
     }
 
-    println!("OK SERVICE_UNINSTALLED");
-    println!("service = {SERVICE_LABEL}");
+    fn status(&self) -> Result<(), AppError> {
+        let domain = launch_domain().map_err(|_| AppError::ServiceStatusFailed)?;
+        let service_target = format!("{domain}/{SERVICE_LABEL}");
 
-    Ok(())
-}
+        let output = Command::new("launchctl")
+            .arg("print")
+            .arg(&service_target)
+            .output()
+            .map_err(|_| AppError::ServiceStatusFailed)?;
+        let loaded = parse_loaded_status(&output)?;
 
-fn status() -> Result<(), AppError> {
-    let plist_path = plist_path()?;
-    let domain = launch_domain().map_err(|_| AppError::ServiceStatusFailed)?;
-    let service_target = format!("{domain}/{SERVICE_LABEL}");
+        println!("service = {SERVICE_LABEL}");
+        println!("plist_path = {}", self.plist_path.display());
+        println!("plist_present = {}", self.plist_path.exists());
+        println!("loaded = {loaded}");
 
-    let output = Command::new("launchctl")
-        .arg("print")
-        .arg(&service_target)
-        .output()
-        .map_err(|_| AppError::ServiceStatusFailed)?;
-    let loaded = parse_loaded_status(&output)?;
-
-    println!("service = {SERVICE_LABEL}");
-    println!("plist_path = {}", plist_path.display());
-    println!("plist_present = {}", plist_path.exists());
-    println!("loaded = {loaded}");
-
-    Ok(())
+        Ok(())
+    }
 }
 
 fn plist_path() -> Result<PathBuf, AppError> {
@@ -222,9 +233,7 @@ mod tests {
     use std::path::Path;
     use std::process::Output;
 
-    use super::{
-        SERVICE_LABEL, build_plist, is_bootout_not_loaded, parse_loaded_status,
-    };
+    use super::{SERVICE_LABEL, build_plist, is_bootout_not_loaded, parse_loaded_status};
     use crate::error::AppError;
 
     #[test]

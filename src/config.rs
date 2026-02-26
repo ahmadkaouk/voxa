@@ -11,7 +11,6 @@ const DEFAULT_MAX_SECONDS: u32 = 90;
 const DEFAULT_OUTPUT: OutputTarget = OutputTarget::Clipboard;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AppConfig {
     pub api_key: String,
     pub model: Model,

@@ -10,7 +10,6 @@ use crate::error::AppError;
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct CapturedAudio {
     pub wav_bytes: Vec<u8>,
     pub max_duration_reached: bool,

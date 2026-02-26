@@ -124,6 +124,30 @@ struct StoredDaemonConfig {
     output: DaemonOutput,
 }
 
+pub struct ConfigStore {
+    path: PathBuf,
+}
+
+impl ConfigStore {
+    pub fn new() -> Result<Self, AppError> {
+        Ok(Self {
+            path: default_config_path()?,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load(&self) -> Result<DaemonConfig, AppError> {
+        load_from_path(&self.path)
+    }
+
+    pub fn save(&self, config: DaemonConfig) -> Result<(), AppError> {
+        save_to_path(&self.path, config)
+    }
+}
+
 pub fn run(command: ConfigCommand) -> Result<(), AppError> {
     match command {
         ConfigCommand::Show => run_show(),
@@ -132,10 +156,10 @@ pub fn run(command: ConfigCommand) -> Result<(), AppError> {
 }
 
 fn run_show() -> Result<(), AppError> {
-    let path = config_path()?;
-    let config = load()?;
+    let store = ConfigStore::new()?;
+    let config = store.load()?;
 
-    println!("config_path = {}", path.display());
+    println!("config_path = {}", store.path().display());
     println!("hotkey = {}", config.hotkey.as_str());
     println!("mode = {}", config.mode.as_str());
     println!("output = {}", config.output.as_str());
@@ -144,7 +168,8 @@ fn run_show() -> Result<(), AppError> {
 }
 
 fn run_set(command: ConfigSetCommand) -> Result<(), AppError> {
-    let mut config = load()?;
+    let store = ConfigStore::new()?;
+    let mut config = store.load()?;
 
     match command {
         ConfigSetCommand::Hotkey { value } => {
@@ -158,21 +183,13 @@ fn run_set(command: ConfigSetCommand) -> Result<(), AppError> {
         }
     }
 
-    save(config)?;
+    store.save(config)?;
     println!("OK CONFIG_UPDATED");
 
     run_show()
 }
 
-pub fn load() -> Result<DaemonConfig, AppError> {
-    load_from_path(&config_path()?)
-}
-
-pub fn save(config: DaemonConfig) -> Result<(), AppError> {
-    save_to_path(&config_path()?, config)
-}
-
-pub fn config_path() -> Result<PathBuf, AppError> {
+fn default_config_path() -> Result<PathBuf, AppError> {
     Ok(config_dir()?.join(CONFIG_FILE_NAME))
 }
 

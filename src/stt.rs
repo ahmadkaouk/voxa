@@ -15,15 +15,43 @@ struct TranscriptionResponse {
     text: String,
 }
 
-pub fn transcribe(
-    api_key: &str,
+pub struct SttClient {
+    client: Client,
+    api_key: String,
     model: Model,
     language: Language,
-    wav_bytes: &[u8],
-) -> Result<String, AppError> {
-    transcribe_with_url(api_key, model, language, wav_bytes, TRANSCRIPTIONS_URL)
 }
 
+impl SttClient {
+    pub fn new(api_key: &str, model: Model, language: Language) -> Result<Self, AppError> {
+        Ok(Self {
+            client: build_client()?,
+            api_key: api_key.to_owned(),
+            model,
+            language,
+        })
+    }
+
+    pub fn transcribe(&self, wav_bytes: &[u8]) -> Result<String, AppError> {
+        transcribe_with_client_url(
+            &self.client,
+            &self.api_key,
+            self.model,
+            self.language,
+            wav_bytes,
+            TRANSCRIPTIONS_URL,
+        )
+    }
+}
+
+fn build_client() -> Result<Client, AppError> {
+    Client::builder()
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|_| AppError::ApiNetworkFailed)
+}
+
+#[cfg(test)]
 fn transcribe_with_url(
     api_key: &str,
     model: Model,
@@ -31,11 +59,18 @@ fn transcribe_with_url(
     wav_bytes: &[u8],
     url: &str,
 ) -> Result<String, AppError> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .build()
-        .map_err(|_| AppError::ApiNetworkFailed)?;
+    let client = build_client()?;
+    transcribe_with_client_url(&client, api_key, model, language, wav_bytes, url)
+}
 
+fn transcribe_with_client_url(
+    client: &Client,
+    api_key: &str,
+    model: Model,
+    language: Language,
+    wav_bytes: &[u8],
+    url: &str,
+) -> Result<String, AppError> {
     let mut form = multipart::Form::new()
         .text("model", model_value(model).to_owned())
         .part(
