@@ -78,6 +78,7 @@ Candidate crates:
 - `voico service <install|uninstall|status>`
 - `voico config show`
 - `voico config set hotkey <right_option|cmd_space|fn>`
+- `voico config set mode <toggle|hold>`
 - `voico config set output <clipboard|autopaste>`
 - `voico --help`
 
@@ -229,6 +230,7 @@ Runtime line format:
 6. Implement `hold` mode and unsupported-terminal handling.
 7. Package as local binary command.
 8. Add background daemon mode with global hotkey and LaunchAgent service controls.
+9. Add a macOS menu bar controller app over existing daemon/config/service commands.
 
 ## v2 Menu Bar Preview
 - Keep `audio`, `stt`, `output`, and `config` UI-agnostic.

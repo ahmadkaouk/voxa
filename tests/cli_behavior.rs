@@ -108,6 +108,7 @@ fn config_show_uses_defaults_without_api_key() {
 
     assert_eq!(output.status.code(), Some(0));
     assert!(stdout.contains("hotkey = right_option"));
+    assert!(stdout.contains("mode = toggle"));
     assert!(stdout.contains("output = clipboard"));
 
     let _ = std::fs::remove_dir_all(home);
@@ -125,6 +126,22 @@ fn config_set_output_persists_setting() {
     let stdout = String::from_utf8_lossy(&show.stdout);
     assert_eq!(show.status.code(), Some(0));
     assert!(stdout.contains("output = autopaste"));
+
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn config_set_mode_persists_setting() {
+    let home = temp_home("config-mode");
+    std::fs::create_dir_all(&home).expect("failed to create temp home");
+
+    let set_mode = run_with_home(&["config", "set", "mode", "hold"], &home);
+    assert_eq!(set_mode.status.code(), Some(0));
+
+    let show = run_with_home(&["config", "show"], &home);
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert_eq!(show.status.code(), Some(0));
+    assert!(stdout.contains("mode = hold"));
 
     let _ = std::fs::remove_dir_all(home);
 }

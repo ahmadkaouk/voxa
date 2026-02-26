@@ -21,6 +21,7 @@ Supported keys:
 
 ```toml
 hotkey = "right_option" # right_option | cmd_space | fn
+mode = "toggle"         # toggle | hold
 output = "clipboard"    # clipboard | autopaste
 ```
 
@@ -29,6 +30,7 @@ CLI helpers:
 ```bash
 voico config show
 voico config set hotkey right_option
+voico config set mode hold
 voico config set output autopaste
 ```
 

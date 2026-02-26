@@ -75,6 +75,13 @@ voico config set output clipboard
 # or: autopaste
 ```
 
+Set input mode:
+
+```bash
+voico config set mode toggle
+# or: hold
+```
+
 Run daemon in foreground:
 
 ```bash
@@ -98,3 +105,24 @@ Notes:
 - Daemon hotkey acts as toggle: press once to start recording, press again to stop and transcribe.
 - `autopaste` copies transcript then sends `Cmd+V`.
 - macOS may require Accessibility permission for global hotkey capture and auto-paste.
+
+## Menu Bar App (MVP)
+
+A thin native macOS menu bar controller is available at:
+
+```text
+apps/voico-menubar
+```
+
+Run it:
+
+```bash
+cd apps/voico-menubar
+swift run
+```
+
+It controls the existing backend using `voico service ...` and `voico config ...`, including:
+- start/stop/reinstall service
+- hotkey, mode, and output changes
+- API key save with `launchctl setenv`
+- log opening and refresh

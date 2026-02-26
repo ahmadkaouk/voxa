@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{ConfigCommand, ConfigSetCommand, DaemonHotkeyArg, DaemonOutputArg};
+use crate::cli::{
+    ConfigCommand, ConfigSetCommand, DaemonHotkeyArg, DaemonModeArg, DaemonOutputArg,
+};
 use crate::error::AppError;
 
 const CONFIG_DIR_RELATIVE: &str = "Library/Application Support/voico";
@@ -64,9 +66,35 @@ impl From<DaemonOutputArg> for DaemonOutput {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonMode {
+    Toggle,
+    Hold,
+}
+
+impl DaemonMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Toggle => "toggle",
+            Self::Hold => "hold",
+        }
+    }
+}
+
+impl From<DaemonModeArg> for DaemonMode {
+    fn from(value: DaemonModeArg) -> Self {
+        match value {
+            DaemonModeArg::Toggle => Self::Toggle,
+            DaemonModeArg::Hold => Self::Hold,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct DaemonConfig {
     pub hotkey: DaemonHotkey,
+    pub mode: DaemonMode,
     pub output: DaemonOutput,
 }
 
@@ -74,6 +102,7 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             hotkey: DaemonHotkey::RightOption,
+            mode: DaemonMode::Toggle,
             output: DaemonOutput::Clipboard,
         }
     }
@@ -82,12 +111,14 @@ impl Default for DaemonConfig {
 #[derive(Debug, Deserialize)]
 struct DaemonConfigFile {
     hotkey: Option<DaemonHotkey>,
+    mode: Option<DaemonMode>,
     output: Option<DaemonOutput>,
 }
 
 #[derive(Debug, Serialize)]
 struct StoredDaemonConfig {
     hotkey: DaemonHotkey,
+    mode: DaemonMode,
     output: DaemonOutput,
 }
 
@@ -104,6 +135,7 @@ fn run_show() -> Result<(), AppError> {
 
     println!("config_path = {}", path.display());
     println!("hotkey = {}", config.hotkey.as_str());
+    println!("mode = {}", config.mode.as_str());
     println!("output = {}", config.output.as_str());
 
     Ok(())
@@ -115,6 +147,9 @@ fn run_set(command: ConfigSetCommand) -> Result<(), AppError> {
     match command {
         ConfigSetCommand::Hotkey { value } => {
             config.hotkey = value.into();
+        }
+        ConfigSetCommand::Mode { value } => {
+            config.mode = value.into();
         }
         ConfigSetCommand::Output { value } => {
             config.output = value.into();
@@ -161,6 +196,7 @@ fn load_from_path(path: &Path) -> Result<DaemonConfig, AppError> {
 
     Ok(DaemonConfig {
         hotkey: parsed.hotkey.unwrap_or(DaemonHotkey::RightOption),
+        mode: parsed.mode.unwrap_or(DaemonMode::Toggle),
         output: parsed.output.unwrap_or(DaemonOutput::Clipboard),
     })
 }
@@ -172,6 +208,7 @@ fn save_to_path(path: &Path, config: DaemonConfig) -> Result<(), AppError> {
 
     let stored = StoredDaemonConfig {
         hotkey: config.hotkey,
+        mode: config.mode,
         output: config.output,
     };
 
@@ -185,7 +222,9 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{DaemonConfig, DaemonHotkey, DaemonOutput, load_from_path, save_to_path};
+    use super::{
+        DaemonConfig, DaemonHotkey, DaemonMode, DaemonOutput, load_from_path, save_to_path,
+    };
     use crate::error::AppError;
 
     fn temp_config_path(name: &str) -> PathBuf {
@@ -220,11 +259,15 @@ mod tests {
         let path = temp_config_path("parse");
         fs::create_dir_all(path.parent().expect("temp path should have parent"))
             .expect("failed to create temp dir");
-        fs::write(&path, "hotkey = \"cmd_space\"\noutput = \"autopaste\"\n")
-            .expect("failed to write config");
+        fs::write(
+            &path,
+            "hotkey = \"cmd_space\"\nmode = \"hold\"\noutput = \"autopaste\"\n",
+        )
+        .expect("failed to write config");
 
         let config = load_from_path(&path).expect("valid config should parse");
         assert_eq!(config.hotkey, DaemonHotkey::CmdSpace);
+        assert_eq!(config.mode, DaemonMode::Hold);
         assert_eq!(config.output, DaemonOutput::Autopaste);
 
         cleanup(&path);
@@ -235,6 +278,7 @@ mod tests {
         let path = temp_config_path("roundtrip");
         let expected = DaemonConfig {
             hotkey: DaemonHotkey::Fn,
+            mode: DaemonMode::Toggle,
             output: DaemonOutput::Clipboard,
         };
 

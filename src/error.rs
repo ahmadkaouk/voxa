@@ -143,7 +143,7 @@ impl AppError {
             }
             Self::ApiEmptyTranscript => {
                 eprintln!("ERROR API_EMPTY_TRANSCRIPT: transcript is empty.");
-                eprintln!("Retry in a quieter environment or speak longer.");
+                eprintln!("Retry in a quieter environment or speak longer before stopping.");
             }
         }
     }

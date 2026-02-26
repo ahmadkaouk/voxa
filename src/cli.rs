@@ -94,6 +94,10 @@ pub enum ConfigSetCommand {
         #[arg(value_enum)]
         value: DaemonHotkeyArg,
     },
+    Mode {
+        #[arg(value_enum)]
+        value: DaemonModeArg,
+    },
     Output {
         #[arg(value_enum)]
         value: DaemonOutputArg,
@@ -116,4 +120,12 @@ pub enum DaemonOutputArg {
     Clipboard,
     #[value(name = "autopaste")]
     Autopaste,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum DaemonModeArg {
+    #[value(name = "toggle")]
+    Toggle,
+    #[value(name = "hold")]
+    Hold,
 }
