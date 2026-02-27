@@ -490,17 +490,19 @@ impl SharedState {
     }
 
     fn set_config(&mut self, params: SetConfigParams) -> Result<Value, ErrorPayload> {
+        let mut next_config = self.config.clone();
+
         if let Some(toggle_hotkey) = params.toggle_hotkey {
-            self.config.toggle_hotkey = toggle_hotkey;
+            next_config.toggle_hotkey = toggle_hotkey;
         }
         if let Some(hold_hotkey) = params.hold_hotkey {
-            self.config.hold_hotkey = hold_hotkey;
+            next_config.hold_hotkey = hold_hotkey;
         }
         if let Some(model) = params.model {
-            self.config.model = model;
+            next_config.model = model;
         }
         if let Some(output_mode) = params.output_mode {
-            self.config.output_mode = output_mode;
+            next_config.output_mode = output_mode;
         }
         if let Some(max_recording_seconds) = params.max_recording_seconds {
             if max_recording_seconds == 0 {
@@ -510,10 +512,10 @@ impl SharedState {
                     details: None,
                 });
             }
-            self.config.max_recording_seconds = max_recording_seconds;
+            next_config.max_recording_seconds = max_recording_seconds;
         }
 
-        if self.config.toggle_hotkey == self.config.hold_hotkey {
+        if next_config.toggle_hotkey == next_config.hold_hotkey {
             return Err(ErrorPayload {
                 code: "CONFIG_HOTKEY_CONFLICT".to_owned(),
                 message: "toggle_hotkey and hold_hotkey cannot be the same".to_owned(),
@@ -521,7 +523,8 @@ impl SharedState {
             });
         }
 
-        self.config.revision += 1;
+        next_config.revision = self.config.revision + 1;
+        self.config = next_config;
         Ok(json!({ "revision": self.config.revision }))
     }
 
@@ -804,6 +807,35 @@ mod tests {
         }
     }
 
+    fn send_request_expect_error(
+        stream: &mut UnixStream,
+        reader: &mut BufReader<UnixStream>,
+        id: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> String {
+        send_json(
+            stream,
+            json!({
+                "type": "request",
+                "id": id,
+                "method": method,
+                "params": params
+            }),
+        );
+        let envelope = read_server_envelope(reader);
+        match envelope {
+            ServerEnvelope::Response(response) => {
+                assert!(!response.ok, "request {method} should fail");
+                response
+                    .error
+                    .expect("failed response should include error")
+                    .code
+            }
+            other => panic!("expected response envelope, got {:?}", other),
+        }
+    }
+
     #[test]
     fn daemon_handles_basic_start_stop_flow() {
         let path = temp_socket_path("basic-flow");
@@ -833,6 +865,38 @@ mod tests {
         );
         let state_after_stop = send_request(&mut stream, &mut reader, "5", "get_state", json!({}));
         assert_eq!(state_after_stop["state"], "idle");
+
+        stop_server(&path, running, handle);
+    }
+
+    #[test]
+    fn set_config_failure_does_not_mutate_existing_config() {
+        let path = temp_socket_path("cfg");
+        let (running, handle) = start_server(path.clone());
+        wait_for_socket(&path);
+
+        let (mut stream, mut reader) = connect_and_handshake(&path);
+
+        let initial = send_request(&mut stream, &mut reader, "1", "get_config", json!({}));
+        assert_eq!(initial["toggle_hotkey"], "right_option");
+        assert_eq!(initial["hold_hotkey"], "fn");
+        let initial_revision = initial["revision"].as_u64().unwrap_or(0);
+
+        let error_code = send_request_expect_error(
+            &mut stream,
+            &mut reader,
+            "2",
+            "set_config",
+            json!({
+                "hold_hotkey": "right_option"
+            }),
+        );
+        assert_eq!(error_code, "CONFIG_HOTKEY_CONFLICT");
+
+        let after = send_request(&mut stream, &mut reader, "3", "get_config", json!({}));
+        assert_eq!(after["toggle_hotkey"], "right_option");
+        assert_eq!(after["hold_hotkey"], "fn");
+        assert_eq!(after["revision"].as_u64().unwrap_or(0), initial_revision);
 
         stop_server(&path, running, handle);
     }
