@@ -1,6 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{env, fs};
 
 use serde::{Deserialize, Serialize};
@@ -84,6 +84,7 @@ pub(super) struct SharedState {
     event_seq: u64,
     outbox: Vec<EventEnvelope>,
     started_at: Instant,
+    recording_deadline: Option<Instant>,
     subscribers: Vec<ConnectionHandle>,
     config: DaemonConfig,
     runtime: SessionRuntime,
@@ -120,6 +121,16 @@ impl SharedState {
     }
 
     #[cfg(test)]
+    pub(super) fn with_runtime_and_max_recording_seconds(
+        runtime: SessionRuntime,
+        max_recording_seconds: u64,
+    ) -> Self {
+        let mut config = DaemonConfig::default();
+        config.max_recording_seconds = max_recording_seconds.max(1);
+        Self::with_config_and_runtime(config, runtime, None, in_memory_api_key_store())
+    }
+
+    #[cfg(test)]
     pub(super) fn with_runtime_and_shared_api_keys(
         runtime: SessionRuntime,
         shared: std::sync::Arc<std::sync::Mutex<Option<String>>>,
@@ -145,6 +156,7 @@ impl SharedState {
             event_seq: 0,
             outbox: Vec::new(),
             started_at: Instant::now(),
+            recording_deadline: None,
             subscribers: Vec::new(),
             config,
             runtime,
@@ -347,10 +359,13 @@ impl SharedState {
                 if let Err(code) = self.runtime.start_recording() {
                     let _ = self.machine.apply(DomainEvent::RecordingFailed);
                     self.session_id = None;
+                    self.recording_deadline = None;
                     self.emit_state_changed();
                     return Err(runtime_error_payload(code, "Failed to start recording"));
                 }
 
+                self.recording_deadline =
+                    Some(Instant::now() + Duration::from_secs(self.config.max_recording_seconds));
                 self.emit_state_changed();
                 self.emit_event(
                     "recording_started",
@@ -374,6 +389,7 @@ impl SharedState {
         if !matches!(self.machine.state(), SessionState::Recording(_)) {
             return Ok(json!({ "accepted": true }));
         }
+        self.recording_deadline = None;
 
         let stop_event = match reason {
             StopReason::Manual | StopReason::HotkeyToggle => DomainEvent::TogglePressed,
@@ -480,6 +496,22 @@ impl SharedState {
         self.emit_state_changed();
 
         Ok(json!({ "accepted": true }))
+    }
+
+    pub(super) fn enforce_max_duration_if_needed(&mut self) {
+        if !matches!(self.machine.state(), SessionState::Recording(_)) {
+            self.recording_deadline = None;
+            return;
+        }
+
+        let Some(deadline) = self.recording_deadline else {
+            return;
+        };
+        if Instant::now() < deadline {
+            return;
+        }
+
+        let _ = self.stop_recording(StopReason::MaxDuration);
     }
 
     fn emit_state_changed(&mut self) {

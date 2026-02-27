@@ -11,7 +11,10 @@ use voico_core::app::SessionRuntime;
 use voico_core::infra::{InfraError, OutputResult, OutputSink, Recorder, Transcriber};
 use voico_core::ipc::ServerEnvelope;
 
-use super::{run_with_runtime, run_with_runtime_and_shared_api_keys};
+use super::{
+    run_with_runtime, run_with_runtime_and_max_recording_seconds,
+    run_with_runtime_and_shared_api_keys,
+};
 
 fn temp_socket_path(name: &str) -> PathBuf {
     let pid = std::process::id();
@@ -50,6 +53,24 @@ fn start_server_with_runtime(
     let running = Arc::new(AtomicBool::new(true));
     let running_for_thread = Arc::clone(&running);
     let handle = thread::spawn(move || run_with_runtime(path, running_for_thread, runtime));
+    (running, handle)
+}
+
+fn start_server_with_runtime_and_max_recording_seconds(
+    path: PathBuf,
+    runtime: SessionRuntime,
+    max_recording_seconds: u64,
+) -> (Arc<AtomicBool>, thread::JoinHandle<std::io::Result<()>>) {
+    let running = Arc::new(AtomicBool::new(true));
+    let running_for_thread = Arc::clone(&running);
+    let handle = thread::spawn(move || {
+        run_with_runtime_and_max_recording_seconds(
+            path,
+            running_for_thread,
+            runtime,
+            max_recording_seconds,
+        )
+    });
     (running, handle)
 }
 
@@ -449,6 +470,70 @@ fn subscriber_receives_ordered_events() {
     assert!(
         saw_idle_state,
         "subscriber should eventually see idle state"
+    );
+
+    stop_server(&path, running, handle);
+}
+
+#[test]
+fn max_duration_enforcement_auto_stops_recording() {
+    let path = temp_socket_path("max-duration");
+    let (running, handle) = start_server_with_runtime_and_max_recording_seconds(
+        path.clone(),
+        SessionRuntime::default(),
+        1,
+    );
+    wait_for_socket(&path);
+
+    let (mut subscriber_stream, mut subscriber_reader) = connect_and_handshake(&path);
+    let _ = send_request(
+        &mut subscriber_stream,
+        &mut subscriber_reader,
+        "1",
+        "subscribe",
+        json!({}),
+    );
+
+    let (mut control_stream, mut control_reader) = connect_and_handshake(&path);
+    let _ = send_request(
+        &mut control_stream,
+        &mut control_reader,
+        "2",
+        "start_recording",
+        json!({"origin":"manual"}),
+    );
+
+    let mut saw_recording_state = false;
+    let mut saw_max_duration_stop = false;
+    let mut saw_idle_state = false;
+
+    for _ in 0..16 {
+        let envelope = read_server_envelope(&mut subscriber_reader);
+        if let ServerEnvelope::Event(event) = envelope {
+            if event.name == "state_changed" && event.data["state"] == "recording" {
+                saw_recording_state = true;
+            }
+            if event.name == "recording_stopped" && event.data["reason"] == "max_duration" {
+                saw_max_duration_stop = true;
+            }
+            if saw_max_duration_stop
+                && event.name == "state_changed"
+                && event.data["state"] == "idle"
+            {
+                saw_idle_state = true;
+                break;
+            }
+        }
+    }
+
+    assert!(saw_recording_state, "subscriber should see recording state");
+    assert!(
+        saw_max_duration_stop,
+        "subscriber should see stop reason max_duration"
+    );
+    assert!(
+        saw_idle_state,
+        "subscriber should eventually see idle state after max duration stop"
     );
 
     stop_server(&path, running, handle);

@@ -24,6 +24,7 @@ use self::connection::ConnectionHandle;
 use self::state::{SetConfigParams, SharedState};
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const MAX_DURATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub fn run(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Result<()> {
     let state = SharedState::from_disk()?;
@@ -37,6 +38,17 @@ fn run_with_runtime(
     runtime: voico_core::app::SessionRuntime,
 ) -> io::Result<()> {
     let state = SharedState::with_runtime(runtime);
+    run_with_state(socket_path, running, state)
+}
+
+#[cfg(test)]
+fn run_with_runtime_and_max_recording_seconds(
+    socket_path: PathBuf,
+    running: Arc<AtomicBool>,
+    runtime: voico_core::app::SessionRuntime,
+    max_recording_seconds: u64,
+) -> io::Result<()> {
+    let state = SharedState::with_runtime_and_max_recording_seconds(runtime, max_recording_seconds);
     run_with_state(socket_path, running, state)
 }
 
@@ -69,6 +81,16 @@ fn run_with_state(
     let (event_tx, event_rx) = mpsc::channel::<EventEnvelope>();
     let shared_for_dispatcher = Arc::clone(&shared);
     thread::spawn(move || run_event_dispatcher(event_rx, shared_for_dispatcher));
+    let shared_for_watchdog = Arc::clone(&shared);
+    let running_for_watchdog = Arc::clone(&running);
+    let event_tx_for_watchdog = event_tx.clone();
+    thread::spawn(move || {
+        run_max_duration_watchdog(
+            running_for_watchdog,
+            shared_for_watchdog,
+            event_tx_for_watchdog,
+        )
+    });
 
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
@@ -422,6 +444,25 @@ fn run_event_dispatcher(event_rx: mpsc::Receiver<EventEnvelope>, shared: Arc<Mut
         };
 
         state.notify_subscribers(&envelope);
+    }
+}
+
+fn run_max_duration_watchdog(
+    running: Arc<AtomicBool>,
+    shared: Arc<Mutex<SharedState>>,
+    event_tx: mpsc::Sender<EventEnvelope>,
+) {
+    while running.load(Ordering::SeqCst) {
+        let mut state = match shared.lock() {
+            Ok(state) => state,
+            Err(_) => return,
+        };
+        state.enforce_max_duration_if_needed();
+        if dispatch_outbox(&mut state, &event_tx).is_err() {
+            return;
+        }
+        drop(state);
+        thread::sleep(MAX_DURATION_POLL_INTERVAL);
     }
 }
 
