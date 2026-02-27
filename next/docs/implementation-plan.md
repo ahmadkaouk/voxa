@@ -75,7 +75,7 @@
 ### Acceptance Criteria
 - [x] Manual smoke: connect client, call `get_state`, start/stop recording.
 - [x] Event stream emits lifecycle events in correct order.
-- [ ] Daemon remains alive after session-level failures.
+- [x] Daemon remains alive after session-level failures.
 
 ## Phase 4: Menubar v2 Client Integration
 ### Tasks
@@ -97,7 +97,7 @@
 - [ ] Implement config persistence for v2 paths.
 - [ ] Add API key storage in macOS Keychain.
 - [ ] Keep env fallback for local dev.
-- [ ] Add validation for hotkey conflicts and invalid model values.
+- [x] Add validation for hotkey conflicts and invalid model values.
 
 ### Deliverables
 - [ ] Stable config/secrets flow through daemon API.
@@ -109,16 +109,16 @@
 
 ## Phase 6: Thin `voicoctl` (Optional but Recommended)
 ### Tasks
-- [ ] Implement minimal commands: `status`, `health`, `config get/set`, `start`, `stop`.
-- [ ] Ensure `voicoctl` uses IPC only (no direct business logic).
-- [ ] Add short troubleshooting docs for this tool.
+- [x] Implement minimal commands: `status`, `health`, `config get/set`, `start`, `stop`.
+- [x] Ensure `voicoctl` uses IPC only (no direct business logic).
+- [x] Add short troubleshooting docs for this tool.
 
 ### Deliverables
-- [ ] Lightweight internal/debug control client.
+- [x] Lightweight internal/debug control client.
 
 ### Acceptance Criteria
-- [ ] Every command maps to an IPC call.
-- [ ] No duplicate runtime logic in `voicoctl`.
+- [x] Every command maps to an IPC call.
+- [x] No duplicate runtime logic in `voicoctl`.
 
 ## Phase 7: Parity + Hardening
 ### Tasks
