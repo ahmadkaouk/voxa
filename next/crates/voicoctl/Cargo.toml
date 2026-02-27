@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+serde_json = "1.0"
 voico-core = { path = "../voico-core" }
 
 [lints]
