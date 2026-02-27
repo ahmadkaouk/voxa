@@ -79,10 +79,10 @@
 
 ## Phase 4: Menubar v2 Client Integration
 ### Tasks
-- [ ] Build Swift IPC client for request/response + event stream.
-- [ ] Add reconnect loop with backoff and state resync.
-- [ ] Replace all log parsing with IPC-driven state.
-- [ ] Wire listening animation to daemon events only.
+- [x] Build Swift IPC client for request/response + event stream.
+- [x] Add reconnect loop with backoff and state resync.
+- [x] Replace all log parsing with IPC-driven state.
+- [x] Wire listening animation to daemon events only.
 
 ### Deliverables
 - [ ] Fully functional `voico-menubar-v2` driven by daemon API.
