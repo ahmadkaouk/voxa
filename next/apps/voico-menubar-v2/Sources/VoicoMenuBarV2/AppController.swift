@@ -30,7 +30,6 @@ final class AppController: ObservableObject {
     private var shouldStop = false
     private var lastSeenSeq: UInt64 = 0
     private var eventConnection: IPCConnection?
-    private var managedDaemonProcess: Process?
 
     init() {
         let path: String
@@ -249,19 +248,12 @@ final class AppController: ObservableObject {
         requestQueue.async { [weak self] in
             guard let self else { return }
 
-            var stopped = false
-            if self.stopManagedDaemonIfNeeded() {
-                stopped = true
-            }
-
-            if self.stopLaunchAgentIfNeeded() {
-                stopped = true
-            }
+            let stopped = self.stopLaunchAgentIfNeeded()
 
             DispatchQueue.main.async {
                 self.statusMessage = stopped
                     ? "Daemon stop requested"
-                    : "No managed daemon process found to stop"
+                    : "LaunchAgent service not loaded"
                 self.isBusy = false
             }
         }
@@ -529,23 +521,24 @@ final class AppController: ObservableObject {
             return
         }
 
-        if let daemonPath = resolveDaemonExecutablePath() {
-            try ensureLaunchAgentInstalled(daemonPath: daemonPath)
-            launchDaemonWithLaunchctl()
-            if waitForDaemonAvailability(timeout: 1.2) {
-                return
-            }
+        guard let daemonPath = resolveDaemonExecutablePath() else {
+            throw NSError(
+                domain: "voico.daemon",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Could not resolve voico-daemon executable path for LaunchAgent installation"]
+            )
         }
 
-        try launchDaemonDirectly()
-        if waitForDaemonAvailability(timeout: 2.0) {
+        try ensureLaunchAgentInstalled(daemonPath: daemonPath)
+        launchDaemonWithLaunchctl()
+        if waitForDaemonAvailability(timeout: 1.2) {
             return
         }
 
         throw NSError(
             domain: "voico.daemon",
             code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "Failed to start voico-daemon"]
+            userInfo: [NSLocalizedDescriptionKey: "Failed to start voico-daemon via launchd"]
         )
     }
 
@@ -672,41 +665,6 @@ final class AppController: ObservableObject {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&apos;")
-    }
-
-    private func launchDaemonDirectly() throws {
-        if let process = managedDaemonProcess, process.isRunning {
-            return
-        }
-
-        guard let daemonPath = resolveDaemonExecutablePath() else {
-            throw NSError(
-                domain: "voico.daemon",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Could not resolve voico-daemon executable path"]
-            )
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: daemonPath)
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        try process.run()
-        managedDaemonProcess = process
-    }
-
-    private func stopManagedDaemonIfNeeded() -> Bool {
-        guard let process = managedDaemonProcess else {
-            return false
-        }
-
-        if process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
-        }
-
-        managedDaemonProcess = nil
-        return true
     }
 
     private func stopLaunchAgentIfNeeded() -> Bool {
