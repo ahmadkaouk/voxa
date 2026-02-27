@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use voico_core::app::SessionRuntime;
 use voico_core::domain::{
     ApplyResult, DomainEvent, RecordingOrigin, RuntimeErrorCode, SessionMachine, SessionState,
 };
@@ -60,6 +61,7 @@ pub(super) struct SharedState {
     started_at: Instant,
     subscribers: Vec<ConnectionHandle>,
     config: DaemonConfig,
+    runtime: SessionRuntime,
 }
 
 impl SharedState {
@@ -73,6 +75,7 @@ impl SharedState {
             started_at: Instant::now(),
             subscribers: Vec::new(),
             config: DaemonConfig::default(),
+            runtime: SessionRuntime::default(),
         }
     }
 
@@ -197,6 +200,14 @@ impl SharedState {
             Ok(ApplyResult::Transitioned) => {
                 self.session_counter += 1;
                 self.session_id = Some(format!("s-{}", self.session_counter));
+
+                if let Err(code) = self.runtime.start_recording() {
+                    let _ = self.machine.apply(DomainEvent::RecordingFailed);
+                    self.session_id = None;
+                    self.emit_state_changed();
+                    return Err(runtime_error_payload(code, "Failed to start recording"));
+                }
+
                 self.emit_state_changed();
                 self.emit_event(
                     "recording_started",
@@ -233,6 +244,16 @@ impl SharedState {
             details: None,
         })?;
 
+        let audio = match self.runtime.stop_recording() {
+            Ok(audio) => audio,
+            Err(code) => {
+                let _ = self.machine.apply(DomainEvent::RecordingFailed);
+                self.session_id = None;
+                self.emit_state_changed();
+                return Err(runtime_error_payload(code, "Failed to stop audio capture"));
+            }
+        };
+
         let _ = self
             .machine
             .apply(DomainEvent::RecordingStopped)
@@ -257,6 +278,16 @@ impl SharedState {
             }),
         );
 
+        let text = match self.runtime.transcribe(audio) {
+            Ok(text) => text,
+            Err(code) => {
+                let _ = self.machine.apply(DomainEvent::TranscriptionFailed);
+                self.session_id = None;
+                self.emit_state_changed();
+                return Err(runtime_error_payload(code, "Transcription failed"));
+            }
+        };
+
         let _ = self
             .machine
             .apply(DomainEvent::TranscriptionSucceeded)
@@ -270,10 +301,20 @@ impl SharedState {
             "transcription_ready",
             json!({
                 "session_id": self.session_id,
-                "text_length": 0
+                "text_length": text.chars().count()
             }),
         );
         self.emit_state_changed();
+
+        let output = match self.runtime.output_text(&text) {
+            Ok(output) => output,
+            Err(code) => {
+                let _ = self.machine.apply(DomainEvent::OutputFailed);
+                self.session_id = None;
+                self.emit_state_changed();
+                return Err(runtime_error_payload(code, "Output failed"));
+            }
+        };
 
         let _ = self
             .machine
@@ -288,8 +329,8 @@ impl SharedState {
             "output_done",
             json!({
                 "session_id": self.session_id,
-                "clipboard": false,
-                "autopaste": false
+                "clipboard": output.clipboard,
+                "autopaste": output.autopaste
             }),
         );
         self.session_id = None;
@@ -324,5 +365,13 @@ fn runtime_error_code_to_string(code: RuntimeErrorCode) -> String {
         RuntimeErrorCode::AudioCaptureFailed => "AUDIO_CAPTURE_FAILED".to_owned(),
         RuntimeErrorCode::TranscriptionFailed => "API_REQUEST_FAILED".to_owned(),
         RuntimeErrorCode::OutputFailed => "OUTPUT_FAILED".to_owned(),
+    }
+}
+
+fn runtime_error_payload(code: RuntimeErrorCode, message: &str) -> ErrorPayload {
+    ErrorPayload {
+        code: runtime_error_code_to_string(code),
+        message: message.to_owned(),
+        details: None,
     }
 }
