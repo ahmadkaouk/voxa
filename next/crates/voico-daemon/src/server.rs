@@ -126,7 +126,7 @@ fn handle_client(writer: UnixStream, shared: Arc<Mutex<SharedState>>) -> io::Res
         }
 
         if let ClientEnvelope::Request(request) = message {
-            handle_request(request, &connection, reader.get_ref(), &shared)?;
+            handle_request(request, &connection, &shared)?;
         }
     }
 }
@@ -134,7 +134,6 @@ fn handle_client(writer: UnixStream, shared: Arc<Mutex<SharedState>>) -> io::Res
 fn handle_request(
     request: RequestEnvelope,
     connection: &ConnectionHandle,
-    stream: &UnixStream,
     shared: &Arc<Mutex<SharedState>>,
 ) -> io::Result<()> {
     match request.method.as_str() {
@@ -261,7 +260,7 @@ fn handle_request(
                 let mut state = shared
                     .lock()
                     .map_err(|_| io::Error::other("state poisoned"))?;
-                state.subscribe(stream.try_clone()?)
+                state.subscribe(connection.clone())
             };
 
             connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
@@ -373,7 +372,7 @@ struct SharedState {
     session_id: Option<String>,
     event_seq: u64,
     started_at: Instant,
-    subscribers: Vec<UnixStream>,
+    subscribers: Vec<ConnectionHandle>,
     config: DaemonConfig,
 }
 
@@ -433,8 +432,8 @@ impl SharedState {
         }
     }
 
-    fn subscribe(&mut self, stream: UnixStream) -> Value {
-        self.subscribers.push(stream);
+    fn subscribe(&mut self, connection: ConnectionHandle) -> Value {
+        self.subscribers.push(connection);
         json!({
             "subscribed": true,
             "current_seq": self.event_seq
@@ -620,7 +619,7 @@ impl SharedState {
 
         let mut index = 0;
         while index < self.subscribers.len() {
-            if write_envelope(&mut self.subscribers[index], &envelope).is_err() {
+            if self.subscribers[index].send(envelope.clone()).is_err() {
                 self.subscribers.swap_remove(index);
             } else {
                 index += 1;
