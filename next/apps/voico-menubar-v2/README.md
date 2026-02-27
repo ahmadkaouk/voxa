@@ -11,7 +11,8 @@ Greenfield Swift menu bar client for Voico v2.
 - Reads API key status via `get_api_key_status` and saves key via `set_api_key`.
 - Subscribes to daemon events via `subscribe` and updates UI from events.
 - Drives listening/transcribing animation from daemon runtime state (`recording`, `transcribing`).
-- Exposes daemon lifecycle actions via `launchctl` (`start`/`stop`) for `com.voico.v2.daemon`.
+- Tries to auto-start daemon on app launch (launchctl first, then direct binary fallback).
+- Exposes daemon lifecycle actions (`start`/`stop`) from the menu.
 
 ## Run
 

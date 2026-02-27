@@ -528,6 +528,36 @@ fn daemon_stays_alive_after_transcription_failure() {
 }
 
 #[test]
+fn second_daemon_start_on_same_socket_is_rejected() {
+    let path = temp_socket_path("single");
+    let (running_first, handle_first) = start_server(path.clone());
+    wait_for_socket(&path);
+
+    let running_second = Arc::new(AtomicBool::new(true));
+    let running_second_thread = Arc::clone(&running_second);
+    let path_second = path.clone();
+    let handle_second = thread::spawn(move || {
+        run_with_runtime(
+            path_second,
+            running_second_thread,
+            SessionRuntime::default(),
+        )
+    });
+
+    let second_result = handle_second
+        .join()
+        .expect("second server thread should join");
+    assert!(
+        second_result.is_err(),
+        "second daemon start should fail on occupied socket"
+    );
+    let error = second_result.expect_err("second start should produce io error");
+    assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+
+    stop_server(&path, running_first, handle_first);
+}
+
+#[test]
 fn api_key_status_reflects_set_api_key() {
     let path = temp_socket_path("api-key");
     let (running, handle) = start_server(path.clone());

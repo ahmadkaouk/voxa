@@ -30,6 +30,7 @@ final class AppController: ObservableObject {
     private var shouldStop = false
     private var lastSeenSeq: UInt64 = 0
     private var eventConnection: IPCConnection?
+    private var managedDaemonProcess: Process?
 
     init() {
         let path: String
@@ -41,6 +42,7 @@ final class AppController: ObservableObject {
 
         socketPath = path
         transport = IPCTransport(socketPath: path)
+        autoStartDaemonOnLaunch()
         startEventLoop()
     }
 
@@ -215,19 +217,54 @@ final class AppController: ObservableObject {
     }
 
     func startDaemon() {
-        runLaunchctl(
-            args: ["kickstart", "-k", launchTarget],
-            pendingMessage: "Starting daemon...",
-            successMessage: "Daemon start requested"
-        )
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = "Starting daemon..."
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                try self.ensureDaemonRunning()
+                DispatchQueue.main.async {
+                    self.statusMessage = "Daemon ready"
+                    self.isBusy = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                    self.isBusy = false
+                }
+            }
+        }
     }
 
     func stopDaemon() {
-        runLaunchctl(
-            args: ["bootout", launchTarget],
-            pendingMessage: "Stopping daemon...",
-            successMessage: "Daemon stop requested"
-        )
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = "Stopping daemon..."
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            var stopped = false
+            if self.stopManagedDaemonIfNeeded() {
+                stopped = true
+            }
+
+            if (try? runProcess(executable: "/bin/launchctl", arguments: ["bootout", self.launchTarget])) != nil {
+                stopped = true
+            }
+
+            DispatchQueue.main.async {
+                self.statusMessage = stopped
+                    ? "Daemon stop requested"
+                    : "No managed daemon process found to stop"
+                self.isBusy = false
+            }
+        }
     }
 
     func quit() {
@@ -461,32 +498,133 @@ final class AppController: ObservableObject {
         "gui/\(getuid())/\(daemonLabel)"
     }
 
-    private func runLaunchctl(
-        args: [String],
-        pendingMessage: String,
-        successMessage: String
-    ) {
-        DispatchQueue.main.async {
-            self.isBusy = true
-            self.statusMessage = pendingMessage
-        }
-
+    private func autoStartDaemonOnLaunch() {
         requestQueue.async { [weak self] in
             guard let self else { return }
+            _ = try? self.ensureDaemonRunning()
+        }
+    }
 
-            do {
-                _ = try runProcess(executable: "/bin/launchctl", arguments: args)
-                DispatchQueue.main.async {
-                    self.statusMessage = successMessage
-                    self.isBusy = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.statusMessage = error.localizedDescription
-                    self.isBusy = false
-                }
+    private func ensureDaemonRunning() throws {
+        if daemonIsReachable() {
+            return
+        }
+
+        try launchDaemonWithLaunchctl()
+        if waitForDaemonAvailability(timeout: 1.2) {
+            return
+        }
+
+        try launchDaemonDirectly()
+        if waitForDaemonAvailability(timeout: 2.0) {
+            return
+        }
+
+        throw NSError(
+            domain: "voico.daemon",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Failed to start voico-daemon"]
+        )
+    }
+
+    private func daemonIsReachable() -> Bool {
+        (try? transport.getState()) != nil
+    }
+
+    private func waitForDaemonAvailability(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if daemonIsReachable() {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return false
+    }
+
+    private func launchDaemonWithLaunchctl() throws {
+        do {
+            _ = try runProcess(executable: "/bin/launchctl", arguments: ["kickstart", "-k", launchTarget])
+        } catch {
+            // If launch service is not installed, direct spawn fallback will handle startup.
+        }
+    }
+
+    private func launchDaemonDirectly() throws {
+        if let process = managedDaemonProcess, process.isRunning {
+            return
+        }
+
+        guard let daemonPath = resolveDaemonExecutablePath() else {
+            throw NSError(
+                domain: "voico.daemon",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Could not resolve voico-daemon executable path"]
+            )
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: daemonPath)
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        managedDaemonProcess = process
+    }
+
+    private func stopManagedDaemonIfNeeded() -> Bool {
+        guard let process = managedDaemonProcess else {
+            return false
+        }
+
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+
+        managedDaemonProcess = nil
+        return true
+    }
+
+    private func resolveDaemonExecutablePath() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        var candidates: [String] = []
+
+        if let override = env["VOICO_DAEMON_BIN"], !override.isEmpty {
+            candidates.append(override)
+        }
+
+        if let pathEnv = env["PATH"] {
+            for entry in pathEnv.split(separator: ":") {
+                candidates.append("\(entry)/voico-daemon")
             }
         }
+
+        candidates.append("~/.cargo/bin/voico-daemon")
+        candidates.append("/opt/homebrew/bin/voico-daemon")
+        candidates.append("/usr/local/bin/voico-daemon")
+
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        candidates.append(
+            cwd
+                .appendingPathComponent("../../target/debug/voico-daemon")
+                .standardizedFileURL
+                .path
+        )
+        candidates.append(
+            cwd
+                .appendingPathComponent("../target/debug/voico-daemon")
+                .standardizedFileURL
+                .path
+        )
+
+        for candidate in candidates {
+            let expanded = NSString(string: candidate).expandingTildeInPath
+            if FileManager.default.isExecutableFile(atPath: expanded) {
+                return expanded
+            }
+        }
+
+        return nil
     }
 }
 
@@ -514,16 +652,17 @@ private func runProcess(executable: String, arguments: [String]) throws -> Strin
 
     guard process.terminationStatus == 0 else {
         let message = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let command = ([executable] + arguments).joined(separator: " ")
         if message.isEmpty {
             throw NSError(
-                domain: "voico.launchctl",
+                domain: "voico.process",
                 code: Int(process.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: "launchctl failed with code \(process.terminationStatus)"]
+                userInfo: [NSLocalizedDescriptionKey: "Command failed (\(process.terminationStatus)): \(command)"]
             )
         }
 
         throw NSError(
-            domain: "voico.launchctl",
+            domain: "voico.process",
             code: Int(process.terminationStatus),
             userInfo: [NSLocalizedDescriptionKey: message]
         )

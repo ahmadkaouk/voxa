@@ -7,7 +7,7 @@ mod tests;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -60,9 +60,7 @@ fn run_with_state(
         fs::create_dir_all(parent)?;
     }
 
-    if socket_path.exists() {
-        fs::remove_file(&socket_path)?;
-    }
+    ensure_socket_available(&socket_path)?;
 
     let listener = UnixListener::bind(&socket_path)?;
     listener.set_nonblocking(true)?;
@@ -93,6 +91,22 @@ fn run_with_state(
 
     let _ = fs::remove_file(&socket_path);
     Ok(())
+}
+
+fn ensure_socket_available(socket_path: &Path) -> io::Result<()> {
+    if !socket_path.exists() {
+        return Ok(());
+    }
+
+    match UnixStream::connect(socket_path) {
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            "voico-daemon is already running",
+        )),
+        Err(err) if err.kind() == io::ErrorKind::ConnectionRefused => fs::remove_file(socket_path),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => fs::remove_file(socket_path),
+    }
 }
 
 fn handle_client(
