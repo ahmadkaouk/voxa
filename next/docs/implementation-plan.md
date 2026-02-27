@@ -89,8 +89,8 @@
 
 ### Acceptance Criteria
 - [ ] UI state remains correct across daemon restart/reconnect.
-- [ ] Animation state changes only from IPC events.
-- [ ] No CLI subprocess dependency in v2 app runtime.
+- [x] Animation state changes only from IPC events.
+- [x] No CLI subprocess dependency in v2 app runtime.
 
 ## Phase 5: Config + Secrets
 ### Tasks

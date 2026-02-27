@@ -12,6 +12,7 @@ enum IPCError: LocalizedError {
     case responseError(code: String, message: String)
     case missingResult
     case invalidStatePayload
+    case invalidConfigPayload
 
     var errorDescription: String? {
         switch self {
@@ -35,6 +36,8 @@ enum IPCError: LocalizedError {
             return "Daemon response is missing result payload"
         case .invalidStatePayload:
             return "State payload is invalid"
+        case .invalidConfigPayload:
+            return "Config payload is invalid"
         }
     }
 }
@@ -102,6 +105,11 @@ final class IPCTransport {
         return try Self.parseStateSnapshot(result)
     }
 
+    func getConfig() throws -> DaemonConfigSnapshot {
+        let result = try request(method: "get_config", params: [:])
+        return try Self.parseConfigSnapshot(result)
+    }
+
     func subscribe(fromSeq: UInt64?) throws -> IPCConnection {
         let connection = try IPCConnection.connect(socketPath: socketPath)
 
@@ -159,6 +167,27 @@ final class IPCTransport {
             eventSeq: eventSeq,
             lastError: lastError,
             recordingOrigin: recordingOrigin
+        )
+    }
+
+    private static func parseConfigSnapshot(_ payload: [String: Any]) throws -> DaemonConfigSnapshot {
+        guard let toggleHotkey = payload["toggle_hotkey"] as? String,
+              let holdHotkey = payload["hold_hotkey"] as? String,
+              let model = payload["model"] as? String,
+              let outputMode = payload["output_mode"] as? String,
+              let maxRecordingSeconds = payload["max_recording_seconds"] as? NSNumber,
+              let revision = payload["revision"] as? NSNumber
+        else {
+            throw IPCError.invalidConfigPayload
+        }
+
+        return DaemonConfigSnapshot(
+            toggleHotkey: toggleHotkey,
+            holdHotkey: holdHotkey,
+            model: model,
+            outputMode: outputMode,
+            maxRecordingSeconds: maxRecordingSeconds.uint64Value,
+            revision: revision.uint64Value
         )
     }
 

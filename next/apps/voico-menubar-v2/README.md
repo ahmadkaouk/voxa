@@ -7,8 +7,10 @@ Greenfield Swift menu bar client for Voico v2.
 - Connects to `voico-daemon` over IPC (`~/Library/Application Support/voico-v2/run/daemon.sock`).
 - Performs protocol handshake (`api_version = 1.0`).
 - Resyncs state via `get_state` on connect/reconnect.
+- Resyncs config via `get_config` and updates config via `set_config`.
 - Subscribes to daemon events via `subscribe` and updates UI from events.
 - Drives listening/transcribing animation from daemon runtime state (`recording`, `transcribing`).
+- Exposes daemon lifecycle actions via `launchctl` (`start`/`stop`) for `com.voico.v2.daemon`.
 
 ## Run
 

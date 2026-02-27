@@ -79,9 +79,96 @@ struct VoicoMenuView: View {
                 .disabled(controller.isBusy)
             }
 
+            Divider()
+
+            Group {
+                Picker(
+                    "Toggle Hotkey",
+                    selection: Binding(
+                        get: { controller.toggleHotkey },
+                        set: { controller.setToggleHotkey($0) }
+                    )
+                ) {
+                    ForEach(HotkeyOption.allCases) { hotkey in
+                        Text(hotkey.label).tag(hotkey)
+                    }
+                }
+
+                Picker(
+                    "Hold Hotkey",
+                    selection: Binding(
+                        get: { controller.holdHotkey },
+                        set: { controller.setHoldHotkey($0) }
+                    )
+                ) {
+                    ForEach(HotkeyOption.allCases) { hotkey in
+                        Text(hotkey.label).tag(hotkey)
+                    }
+                }
+
+                Picker(
+                    "Model",
+                    selection: Binding(
+                        get: { controller.model },
+                        set: { controller.setModel($0) }
+                    )
+                ) {
+                    ForEach(ModelOption.allCases) { model in
+                        Text(model.label).tag(model)
+                    }
+                }
+
+                Picker(
+                    "Output",
+                    selection: Binding(
+                        get: { controller.outputMode },
+                        set: { controller.setOutputMode($0) }
+                    )
+                ) {
+                    ForEach(OutputModeOption.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+
+                Stepper(
+                    value: Binding(
+                        get: { Int(controller.maxRecordingSeconds) },
+                        set: { controller.setMaxRecordingSeconds(UInt64($0)) }
+                    ),
+                    in: 1...3600,
+                    step: 15
+                ) {
+                    Text("Max Recording: \(controller.maxRecordingSeconds)s")
+                }
+
+                HStack {
+                    Text("config rev \(controller.configRevision)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Refresh Config") {
+                        controller.refreshConfig()
+                    }
+                    .disabled(controller.isBusy)
+                }
+            }
+            .disabled(controller.isBusy)
+
+            Divider()
+
             HStack {
                 Button("Reconnect") {
                     controller.reconnectNow()
+                }
+                .disabled(controller.isBusy)
+
+                Button("Start Daemon") {
+                    controller.startDaemon()
+                }
+                .disabled(controller.isBusy)
+
+                Button("Stop Daemon") {
+                    controller.stopDaemon()
                 }
                 .disabled(controller.isBusy)
 
@@ -99,7 +186,7 @@ struct VoicoMenuView: View {
                 .truncationMode(.middle)
         }
         .padding(12)
-        .frame(width: 340)
+        .frame(width: 360)
     }
 }
 

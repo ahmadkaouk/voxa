@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 
 final class AppController: ObservableObject {
+    private let daemonLabel = "com.voico.v2.daemon"
     @Published private(set) var connectionStatus: ConnectionStatus = .connecting
     @Published private(set) var runtimeState: RuntimeStateKind = .idle
     @Published private(set) var lastEventName: String = "none"
@@ -10,6 +11,13 @@ final class AppController: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var eventSequence: UInt64 = 0
     @Published private(set) var socketPath: String
+
+    @Published private(set) var configRevision: UInt64 = 0
+    @Published private(set) var toggleHotkey: HotkeyOption = .rightOption
+    @Published private(set) var holdHotkey: HotkeyOption = .functionKey
+    @Published private(set) var model: ModelOption = .gpt4oMiniTranscribe
+    @Published private(set) var outputMode: OutputModeOption = .clipboardAutopaste
+    @Published private(set) var maxRecordingSeconds: UInt64 = 300
 
     private let transport: IPCTransport
     private let eventQueue = DispatchQueue(label: "voico.v2.menubar.events", qos: .userInitiated)
@@ -75,11 +83,113 @@ final class AppController: ObservableObject {
         )
     }
 
+    func refreshConfig() {
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = "Refreshing daemon config..."
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                let config = try self.transport.getConfig()
+                DispatchQueue.main.async {
+                    self.publishConfig(config)
+                    self.statusMessage = "Config refreshed"
+                    self.isBusy = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                    self.isBusy = false
+                }
+            }
+        }
+    }
+
+    func setToggleHotkey(_ value: HotkeyOption) {
+        if value == toggleHotkey {
+            return
+        }
+
+        updateConfig(
+            params: ["toggle_hotkey": value.rawValue],
+            pendingMessage: "Updating toggle hotkey...",
+            successMessage: "Toggle hotkey updated"
+        )
+    }
+
+    func setHoldHotkey(_ value: HotkeyOption) {
+        if value == holdHotkey {
+            return
+        }
+
+        updateConfig(
+            params: ["hold_hotkey": value.rawValue],
+            pendingMessage: "Updating hold hotkey...",
+            successMessage: "Hold hotkey updated"
+        )
+    }
+
+    func setModel(_ value: ModelOption) {
+        if value == model {
+            return
+        }
+
+        updateConfig(
+            params: ["model": value.rawValue],
+            pendingMessage: "Updating model...",
+            successMessage: "Model updated"
+        )
+    }
+
+    func setOutputMode(_ value: OutputModeOption) {
+        if value == outputMode {
+            return
+        }
+
+        updateConfig(
+            params: ["output_mode": value.rawValue],
+            pendingMessage: "Updating output mode...",
+            successMessage: "Output mode updated"
+        )
+    }
+
+    func setMaxRecordingSeconds(_ value: UInt64) {
+        let clamped = max(1, min(value, 3600))
+        if clamped == maxRecordingSeconds {
+            return
+        }
+
+        updateConfig(
+            params: ["max_recording_seconds": clamped],
+            pendingMessage: "Updating max recording duration...",
+            successMessage: "Max recording duration updated"
+        )
+    }
+
     func reconnectNow() {
         lifecycleLock.lock()
         eventConnection?.close()
         eventConnection = nil
         lifecycleLock.unlock()
+    }
+
+    func startDaemon() {
+        runLaunchctl(
+            args: ["kickstart", "-k", launchTarget],
+            pendingMessage: "Starting daemon...",
+            successMessage: "Daemon start requested"
+        )
+    }
+
+    func stopDaemon() {
+        runLaunchctl(
+            args: ["bootout", launchTarget],
+            pendingMessage: "Stopping daemon...",
+            successMessage: "Daemon stop requested"
+        )
     }
 
     func quit() {
@@ -115,8 +225,10 @@ final class AppController: ObservableObject {
             publishConnectionStatus(.connecting, message: "Connecting to daemon...")
 
             do {
-                let snapshot = try transport.getState()
-                publishState(snapshot)
+                let state = try transport.getState()
+                let config = try transport.getConfig()
+                publishState(state)
+                publishConfig(config)
 
                 let subscribeFrom = currentLastSeenSeq()
                 let connection = try transport.subscribe(
@@ -199,10 +311,42 @@ final class AppController: ObservableObject {
 
             do {
                 _ = try self.transport.request(method: method, params: params)
-                let snapshot = try self.transport.getState()
+                let state = try self.transport.getState()
+                let config = try self.transport.getConfig()
 
                 DispatchQueue.main.async {
-                    self.publishState(snapshot)
+                    self.publishState(state)
+                    self.publishConfig(config)
+                    self.statusMessage = successMessage
+                    self.isBusy = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                    self.isBusy = false
+                }
+            }
+        }
+    }
+
+    private func updateConfig(
+        params: [String: Any],
+        pendingMessage: String,
+        successMessage: String
+    ) {
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = pendingMessage
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                _ = try self.transport.request(method: "set_config", params: params)
+                let config = try self.transport.getConfig()
+                DispatchQueue.main.async {
+                    self.publishConfig(config)
                     self.statusMessage = successMessage
                     self.isBusy = false
                 }
@@ -221,6 +365,17 @@ final class AppController: ObservableObject {
             self.lastErrorCode = snapshot.lastError
             self.eventSequence = max(self.eventSequence, snapshot.eventSeq)
             self.updateLastSeenSeq(snapshot.eventSeq)
+        }
+    }
+
+    private func publishConfig(_ snapshot: DaemonConfigSnapshot) {
+        DispatchQueue.main.async {
+            self.toggleHotkey = HotkeyOption.fromRawOrDefault(snapshot.toggleHotkey)
+            self.holdHotkey = HotkeyOption.fromRawOrDefault(snapshot.holdHotkey)
+            self.model = ModelOption.fromRawOrDefault(snapshot.model)
+            self.outputMode = OutputModeOption.fromRawOrDefault(snapshot.outputMode)
+            self.maxRecordingSeconds = snapshot.maxRecordingSeconds
+            self.configRevision = snapshot.revision
         }
     }
 
@@ -250,4 +405,78 @@ final class AppController: ObservableObject {
         }
         lifecycleLock.unlock()
     }
+
+    private var launchTarget: String {
+        "gui/\(getuid())/\(daemonLabel)"
+    }
+
+    private func runLaunchctl(
+        args: [String],
+        pendingMessage: String,
+        successMessage: String
+    ) {
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = pendingMessage
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                _ = try runProcess(executable: "/bin/launchctl", arguments: args)
+                DispatchQueue.main.async {
+                    self.statusMessage = successMessage
+                    self.isBusy = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                    self.isBusy = false
+                }
+            }
+        }
+    }
+}
+
+private func runProcess(executable: String, arguments: [String]) throws -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    try process.run()
+    process.waitUntilExit()
+
+    let stderrText = String(
+        data: stderr.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+    ) ?? ""
+    let stdoutText = String(
+        data: stdout.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+    ) ?? ""
+
+    guard process.terminationStatus == 0 else {
+        let message = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if message.isEmpty {
+            throw NSError(
+                domain: "voico.launchctl",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: "launchctl failed with code \(process.terminationStatus)"]
+            )
+        }
+
+        throw NSError(
+            domain: "voico.launchctl",
+            code: Int(process.terminationStatus),
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
+    }
+
+    return stdoutText
 }

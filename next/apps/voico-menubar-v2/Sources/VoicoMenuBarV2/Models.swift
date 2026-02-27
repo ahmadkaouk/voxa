@@ -67,11 +67,86 @@ enum ConnectionStatus {
     }
 }
 
+enum HotkeyOption: String, CaseIterable, Identifiable {
+    case rightOption = "right_option"
+    case functionKey = "fn"
+    case commandSpace = "cmd_space"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .rightOption:
+            return "Right Option"
+        case .functionKey:
+            return "Fn"
+        case .commandSpace:
+            return "Cmd+Space"
+        }
+    }
+
+    static func fromRawOrDefault(_ raw: String) -> HotkeyOption {
+        HotkeyOption(rawValue: raw) ?? .rightOption
+    }
+}
+
+enum ModelOption: String, CaseIterable, Identifiable {
+    case gpt4oMiniTranscribe = "gpt-4o-mini-transcribe"
+    case gpt4oTranscribe = "gpt-4o-transcribe"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .gpt4oMiniTranscribe:
+            return "GPT-4o Mini Transcribe"
+        case .gpt4oTranscribe:
+            return "GPT-4o Transcribe"
+        }
+    }
+
+    static func fromRawOrDefault(_ raw: String) -> ModelOption {
+        ModelOption(rawValue: raw) ?? .gpt4oMiniTranscribe
+    }
+}
+
+enum OutputModeOption: String, CaseIterable, Identifiable {
+    case clipboardAutopaste = "clipboard_autopaste"
+    case clipboardOnly = "clipboard_only"
+    case none = "none"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .clipboardAutopaste:
+            return "Clipboard + Autopaste"
+        case .clipboardOnly:
+            return "Clipboard Only"
+        case .none:
+            return "None"
+        }
+    }
+
+    static func fromRawOrDefault(_ raw: String) -> OutputModeOption {
+        OutputModeOption(rawValue: raw) ?? .clipboardAutopaste
+    }
+}
+
 struct DaemonStateSnapshot {
     let state: RuntimeStateKind
     let eventSeq: UInt64
     let lastError: String?
     let recordingOrigin: String?
+}
+
+struct DaemonConfigSnapshot {
+    let toggleHotkey: String
+    let holdHotkey: String
+    let model: String
+    let outputMode: String
+    let maxRecordingSeconds: UInt64
+    let revision: UInt64
 }
 
 struct DaemonEventSnapshot {
