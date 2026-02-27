@@ -105,7 +105,7 @@
 ### Acceptance Criteria
 - [x] Config updates reflect in runtime without inconsistent state.
 - [x] API key retrieval works after app/daemon restart.
-- [ ] Invalid config changes return stable contract errors.
+- [x] Invalid config changes return stable contract errors.
 
 ## Phase 6: Thin `voicoctl` (Optional but Recommended)
 ### Tasks
