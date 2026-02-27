@@ -94,7 +94,7 @@
 
 ## Phase 5: Config + Secrets
 ### Tasks
-- [ ] Implement config persistence for v2 paths.
+- [x] Implement config persistence for v2 paths.
 - [ ] Add API key storage in macOS Keychain.
 - [ ] Keep env fallback for local dev.
 - [x] Add validation for hotkey conflicts and invalid model values.
@@ -103,7 +103,7 @@
 - [ ] Stable config/secrets flow through daemon API.
 
 ### Acceptance Criteria
-- [ ] Config updates reflect in runtime without inconsistent state.
+- [x] Config updates reflect in runtime without inconsistent state.
 - [ ] API key retrieval works after app/daemon restart.
 - [ ] Invalid config changes return stable contract errors.
 

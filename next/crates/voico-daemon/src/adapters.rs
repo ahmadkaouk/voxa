@@ -2,7 +2,6 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use voico_core::app::SessionRuntime;
 use voico_core::infra::{
     InfraError, NullOutputSink, NullRecorder, NullTranscriber, OutputResult, OutputSink,
 };
@@ -12,14 +11,10 @@ const OUTPUT_MODE_CLIPBOARD_AUTOPASTE: &str = "clipboard_autopaste";
 const OUTPUT_MODE_CLIPBOARD_ONLY: &str = "clipboard_only";
 const OUTPUT_MODE_NONE: &str = "none";
 
-pub(crate) fn build_runtime() -> SessionRuntime {
-    build_runtime_for_output_mode(OUTPUT_MODE_CLIPBOARD_AUTOPASTE)
-}
-
-pub(crate) fn build_runtime_for_output_mode(output_mode: &str) -> SessionRuntime {
+pub(crate) fn build_runtime_for_output_mode(output_mode: &str) -> voico_core::app::SessionRuntime {
     let output = build_output_sink(output_mode);
 
-    SessionRuntime::new(
+    voico_core::app::SessionRuntime::new(
         Box::new(NullRecorder::default()),
         Box::new(NullTranscriber),
         output,

@@ -1,6 +1,9 @@
+use std::io;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
+use std::{env, fs};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use voico_core::app::SessionRuntime;
 use voico_core::domain::{
@@ -14,7 +17,7 @@ use voico_core::ipc::{
 use super::connection::ConnectionHandle;
 use crate::adapters::build_runtime_for_output_mode;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct DaemonConfig {
     toggle_hotkey: String,
     hold_hotkey: String,
@@ -53,6 +56,24 @@ pub(super) struct SetConfigParams {
     max_recording_seconds: Option<u64>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct ConfigFile {
+    #[serde(default)]
+    toggle_hotkey: Option<String>,
+    #[serde(default)]
+    hold_hotkey: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    output_mode: Option<String>,
+    #[serde(default)]
+    max_recording_seconds: Option<u64>,
+    #[serde(default)]
+    api_key_source: Option<String>,
+    #[serde(default)]
+    revision: Option<u64>,
+}
+
 pub(super) struct SharedState {
     machine: SessionMachine,
     session_counter: u64,
@@ -63,10 +84,31 @@ pub(super) struct SharedState {
     subscribers: Vec<ConnectionHandle>,
     config: DaemonConfig,
     runtime: SessionRuntime,
+    config_path: Option<PathBuf>,
 }
 
 impl SharedState {
+    pub(super) fn from_disk() -> io::Result<Self> {
+        let config_path = default_config_path()?;
+        let config = load_config_from_disk(&config_path);
+        let runtime = build_runtime_for_output_mode(&config.output_mode);
+        Ok(Self::with_config_and_runtime(
+            config,
+            runtime,
+            Some(config_path),
+        ))
+    }
+
+    #[cfg(test)]
     pub(super) fn with_runtime(runtime: SessionRuntime) -> Self {
+        Self::with_config_and_runtime(DaemonConfig::default(), runtime, None)
+    }
+
+    fn with_config_and_runtime(
+        config: DaemonConfig,
+        runtime: SessionRuntime,
+        config_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             machine: SessionMachine::new(),
             session_counter: 0,
@@ -75,8 +117,9 @@ impl SharedState {
             outbox: Vec::new(),
             started_at: Instant::now(),
             subscribers: Vec::new(),
-            config: DaemonConfig::default(),
+            config,
             runtime,
+            config_path,
         }
     }
 
@@ -197,6 +240,13 @@ impl SharedState {
         }
 
         next_config.revision = self.config.revision + 1;
+        if let Some(path) = self.config_path.as_deref() {
+            persist_config_to_disk(path, &next_config).map_err(|_| ErrorPayload {
+                code: "INTERNAL_ERROR".to_owned(),
+                message: "Failed to persist config".to_owned(),
+                details: None,
+            })?;
+        }
         self.runtime = build_runtime_for_output_mode(&next_config.output_mode);
         self.config = next_config;
         Ok(json!({ "revision": self.config.revision }))
@@ -400,4 +450,73 @@ fn is_valid_model(model: &str) -> bool {
 
 fn is_valid_output_mode(mode: &str) -> bool {
     matches!(mode, "clipboard_autopaste" | "clipboard_only" | "none")
+}
+
+fn default_config_path() -> io::Result<PathBuf> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| io::Error::other("HOME is not set"))?;
+
+    Ok(home.join("Library/Application Support/voico-v2/config.toml"))
+}
+
+fn load_config_from_disk(path: &Path) -> DaemonConfig {
+    let mut config = DaemonConfig::default();
+
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return config,
+        Err(_) => return config,
+    };
+
+    let parsed = match toml::from_str::<ConfigFile>(&contents) {
+        Ok(parsed) => parsed,
+        Err(_) => return config,
+    };
+
+    if let Some(toggle_hotkey) = parsed.toggle_hotkey {
+        config.toggle_hotkey = toggle_hotkey;
+    }
+    if let Some(hold_hotkey) = parsed.hold_hotkey {
+        config.hold_hotkey = hold_hotkey;
+    }
+    if let Some(model) = parsed.model {
+        config.model = model;
+    }
+    if let Some(output_mode) = parsed.output_mode {
+        config.output_mode = output_mode;
+    }
+    if let Some(max_recording_seconds) = parsed.max_recording_seconds {
+        if max_recording_seconds == 0 {
+            return DaemonConfig::default();
+        }
+        config.max_recording_seconds = max_recording_seconds;
+    }
+    if let Some(api_key_source) = parsed.api_key_source {
+        config.api_key_source = api_key_source;
+    }
+    if let Some(revision) = parsed.revision {
+        config.revision = revision.max(1);
+    }
+
+    if config.toggle_hotkey == config.hold_hotkey
+        || !is_valid_model(&config.model)
+        || !is_valid_output_mode(&config.output_mode)
+    {
+        return DaemonConfig::default();
+    }
+
+    config
+}
+
+fn persist_config_to_disk(path: &Path, config: &DaemonConfig) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let serialized =
+        toml::to_string_pretty(config).map_err(|_| io::Error::other("failed to encode config"))?;
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, serialized)?;
+    fs::rename(temp_path, path)
 }

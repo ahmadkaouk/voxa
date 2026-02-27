@@ -11,7 +11,7 @@ use voico_core::app::SessionRuntime;
 use voico_core::infra::{InfraError, OutputResult, OutputSink, Recorder, Transcriber};
 use voico_core::ipc::ServerEnvelope;
 
-use super::{run, run_with_runtime};
+use super::run_with_runtime;
 
 fn temp_socket_path(name: &str) -> PathBuf {
     let pid = std::process::id();
@@ -37,7 +37,9 @@ fn wait_for_socket(path: &Path) {
 fn start_server(path: PathBuf) -> (Arc<AtomicBool>, thread::JoinHandle<std::io::Result<()>>) {
     let running = Arc::new(AtomicBool::new(true));
     let running_for_thread = Arc::clone(&running);
-    let handle = thread::spawn(move || run(path, running_for_thread));
+    let handle = thread::spawn(move || {
+        run_with_runtime(path, running_for_thread, SessionRuntime::default())
+    });
     (running, handle)
 }
 
