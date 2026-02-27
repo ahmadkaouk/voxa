@@ -662,6 +662,50 @@ fn daemon_stays_alive_after_transcription_failure() {
 }
 
 #[test]
+fn start_recording_recovers_from_error_state() {
+    let path = temp_socket_path("recover");
+    let runtime = runtime_with_transcription_failure();
+    let (running, handle) = start_server_with_runtime(path.clone(), runtime);
+    wait_for_socket(&path);
+
+    let (mut stream, mut reader) = connect_and_handshake(&path);
+    let _ = send_request(
+        &mut stream,
+        &mut reader,
+        "1",
+        "start_recording",
+        json!({"origin":"manual"}),
+    );
+
+    let stop_error = send_request_expect_error(
+        &mut stream,
+        &mut reader,
+        "2",
+        "stop_recording",
+        json!({"reason":"manual"}),
+    );
+    assert_eq!(stop_error, "API_REQUEST_FAILED");
+
+    let state = send_request(&mut stream, &mut reader, "3", "get_state", json!({}));
+    assert_eq!(state["state"], "error");
+
+    let restart = send_request(
+        &mut stream,
+        &mut reader,
+        "4",
+        "start_recording",
+        json!({"origin":"manual"}),
+    );
+    assert_eq!(restart["accepted"], true);
+
+    let recovered = send_request(&mut stream, &mut reader, "5", "get_state", json!({}));
+    assert_eq!(recovered["state"], "recording");
+    assert_eq!(recovered["last_error"], json!(null));
+
+    stop_server(&path, running, handle);
+}
+
+#[test]
 fn second_daemon_start_on_same_socket_is_rejected() {
     let path = temp_socket_path("single");
     let (running_first, handle_first) = start_server(path.clone());

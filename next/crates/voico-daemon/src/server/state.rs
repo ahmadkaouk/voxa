@@ -340,6 +340,13 @@ impl SharedState {
     }
 
     pub(super) fn start_recording(&mut self, origin: StartOrigin) -> Result<Value, ErrorPayload> {
+        if matches!(self.machine.state(), SessionState::Error) {
+            let _ = self.machine.apply(DomainEvent::Reset);
+            self.session_id = None;
+            self.recording_deadline = None;
+            self.emit_state_changed();
+        }
+
         if !matches!(self.machine.state(), SessionState::Idle) {
             return Ok(json!({ "accepted": true }));
         }
