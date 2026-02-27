@@ -44,18 +44,18 @@
 
 ## Phase 2: Domain Core (`voico-core`)
 ### Tasks
-- [ ] Implement runtime state machine (`idle`, `recording`, `transcribing`, `outputting`, `error`).
-- [ ] Implement transition inputs (toggle/hold, stop, max-duration, failures).
-- [ ] Define invariants and guardrails in code.
-- [ ] Add deterministic unit tests per transition path.
+- [x] Implement runtime state machine (`idle`, `recording`, `transcribing`, `outputting`, `error`).
+- [x] Implement transition inputs (toggle/hold, stop, max-duration, failures).
+- [x] Define invariants and guardrails in code.
+- [x] Add deterministic unit tests per transition path.
 
 ### Deliverables
-- [ ] Pure domain module with zero UI/transport coupling.
+- [x] Pure domain module with zero UI/transport coupling.
 
 ### Acceptance Criteria
-- [ ] Tests cover toggle and hold semantics.
-- [ ] Stop is idempotent.
-- [ ] Error paths recover to `idle` when expected.
+- [x] Tests cover toggle and hold semantics.
+- [x] Stop is idempotent.
+- [x] Error paths recover to `idle` when expected.
 
 ## Phase 3: Daemon Runtime + IPC Server
 ### Tasks
