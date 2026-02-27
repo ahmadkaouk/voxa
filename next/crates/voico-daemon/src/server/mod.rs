@@ -14,6 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::Value;
+use voico_core::app::SessionRuntime;
 use voico_core::ipc::{
     API_VERSION, ClientEnvelope, ErrorPayload, EventEnvelope, HealthResult, RequestEnvelope,
     ResponseEnvelope, ServerEnvelope, StartOrigin, StartRecordingParams, StopRecordingParams,
@@ -22,10 +23,19 @@ use voico_core::ipc::{
 
 use self::connection::ConnectionHandle;
 use self::state::{SetConfigParams, SharedState};
+use crate::adapters::build_runtime;
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub fn run(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Result<()> {
+    run_with_runtime(socket_path, running, build_runtime())
+}
+
+fn run_with_runtime(
+    socket_path: PathBuf,
+    running: Arc<AtomicBool>,
+    runtime: SessionRuntime,
+) -> io::Result<()> {
     if let Some(parent) = socket_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -37,7 +47,7 @@ pub fn run(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Result<()> {
     let listener = UnixListener::bind(&socket_path)?;
     listener.set_nonblocking(true)?;
 
-    let shared = Arc::new(Mutex::new(SharedState::new()));
+    let shared = Arc::new(Mutex::new(SharedState::with_runtime(runtime)));
     let (event_tx, event_rx) = mpsc::channel::<EventEnvelope>();
     let shared_for_dispatcher = Arc::clone(&shared);
     thread::spawn(move || run_event_dispatcher(event_rx, shared_for_dispatcher));

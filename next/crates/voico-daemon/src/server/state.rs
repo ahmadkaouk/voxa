@@ -65,7 +65,7 @@ pub(super) struct SharedState {
 }
 
 impl SharedState {
-    pub(super) fn new() -> Self {
+    pub(super) fn with_runtime(runtime: SessionRuntime) -> Self {
         Self {
             machine: SessionMachine::new(),
             session_counter: 0,
@@ -75,7 +75,7 @@ impl SharedState {
             started_at: Instant::now(),
             subscribers: Vec::new(),
             config: DaemonConfig::default(),
-            runtime: SessionRuntime::default(),
+            runtime,
         }
     }
 

@@ -7,9 +7,11 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
+use voico_core::app::SessionRuntime;
+use voico_core::infra::{InfraError, OutputResult, OutputSink, Recorder, Transcriber};
 use voico_core::ipc::ServerEnvelope;
 
-use super::run;
+use super::{run, run_with_runtime};
 
 fn temp_socket_path(name: &str) -> PathBuf {
     let pid = std::process::id();
@@ -36,6 +38,16 @@ fn start_server(path: PathBuf) -> (Arc<AtomicBool>, thread::JoinHandle<std::io::
     let running = Arc::new(AtomicBool::new(true));
     let running_for_thread = Arc::clone(&running);
     let handle = thread::spawn(move || run(path, running_for_thread));
+    (running, handle)
+}
+
+fn start_server_with_runtime(
+    path: PathBuf,
+    runtime: SessionRuntime,
+) -> (Arc<AtomicBool>, thread::JoinHandle<std::io::Result<()>>) {
+    let running = Arc::new(AtomicBool::new(true));
+    let running_for_thread = Arc::clone(&running);
+    let handle = thread::spawn(move || run_with_runtime(path, running_for_thread, runtime));
     (running, handle)
 }
 
@@ -351,6 +363,79 @@ fn subscriber_receives_ordered_events() {
         saw_idle_state,
         "subscriber should eventually see idle state"
     );
+
+    stop_server(&path, running, handle);
+}
+
+struct TestRecorder;
+
+impl Recorder for TestRecorder {
+    fn start(&mut self) -> Result<(), InfraError> {
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<Vec<u8>, InfraError> {
+        Ok(vec![1, 2, 3])
+    }
+}
+
+struct FailingTranscriber;
+
+impl Transcriber for FailingTranscriber {
+    fn transcribe(&mut self, _audio: Vec<u8>) -> Result<String, InfraError> {
+        Err(InfraError::TranscriptionFailed)
+    }
+}
+
+struct TestOutput;
+
+impl OutputSink for TestOutput {
+    fn output(&mut self, _text: &str) -> Result<OutputResult, InfraError> {
+        Ok(OutputResult {
+            clipboard: true,
+            autopaste: false,
+        })
+    }
+}
+
+fn runtime_with_transcription_failure() -> SessionRuntime {
+    SessionRuntime::new(
+        Box::new(TestRecorder),
+        Box::new(FailingTranscriber),
+        Box::new(TestOutput),
+    )
+}
+
+#[test]
+fn daemon_stays_alive_after_transcription_failure() {
+    let path = temp_socket_path("tx-fail");
+    let runtime = runtime_with_transcription_failure();
+    let (running, handle) = start_server_with_runtime(path.clone(), runtime);
+    wait_for_socket(&path);
+
+    let (mut stream, mut reader) = connect_and_handshake(&path);
+    let _ = send_request(
+        &mut stream,
+        &mut reader,
+        "1",
+        "start_recording",
+        json!({"origin":"manual"}),
+    );
+
+    let stop_error = send_request_expect_error(
+        &mut stream,
+        &mut reader,
+        "2",
+        "stop_recording",
+        json!({"reason":"manual"}),
+    );
+    assert_eq!(stop_error, "API_REQUEST_FAILED");
+
+    let state = send_request(&mut stream, &mut reader, "3", "get_state", json!({}));
+    assert_eq!(state["state"], "error");
+
+    let health = send_request(&mut stream, &mut reader, "4", "health", json!({}));
+    assert_eq!(health["status"], "ok");
 
     stop_server(&path, running, handle);
 }

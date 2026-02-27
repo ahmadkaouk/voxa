@@ -1,3 +1,4 @@
+mod adapters;
 mod server;
 
 use std::env;
