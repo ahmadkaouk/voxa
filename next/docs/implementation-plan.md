@@ -96,7 +96,7 @@
 ### Tasks
 - [x] Implement config persistence for v2 paths.
 - [ ] Add API key storage in macOS Keychain.
-- [ ] Keep env fallback for local dev.
+- [x] Keep env fallback for local dev.
 - [x] Add validation for hotkey conflicts and invalid model values.
 
 ### Deliverables

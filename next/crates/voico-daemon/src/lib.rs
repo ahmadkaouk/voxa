@@ -21,6 +21,10 @@ pub fn run_with_flag(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Resu
 }
 
 pub fn default_socket_path() -> io::Result<PathBuf> {
+    if let Some(path) = env::var_os("VOICO_SOCKET") {
+        return Ok(PathBuf::from(path));
+    }
+
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| io::Error::other("HOME is not set"))?;

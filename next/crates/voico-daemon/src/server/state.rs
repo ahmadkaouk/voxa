@@ -453,6 +453,10 @@ fn is_valid_output_mode(mode: &str) -> bool {
 }
 
 fn default_config_path() -> io::Result<PathBuf> {
+    if let Some(path) = env::var_os("VOICO_V2_CONFIG_PATH") {
+        return Ok(PathBuf::from(path));
+    }
+
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| io::Error::other("HOME is not set"))?;
