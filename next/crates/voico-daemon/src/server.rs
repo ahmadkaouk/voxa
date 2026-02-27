@@ -96,7 +96,13 @@ fn handle_client(
                 })?;
                 return Ok(());
             }
-            continue;
+
+            connection.send(ServerEnvelope::Response(ResponseEnvelope::err(
+                "invalid",
+                "INVALID_REQUEST",
+                "Malformed request",
+            )))?;
+            return Ok(());
         };
 
         if !hello_done {
@@ -530,11 +536,7 @@ impl SharedState {
 
     fn start_recording(&mut self, origin: StartOrigin) -> Result<Value, ErrorPayload> {
         if !matches!(self.machine.state(), SessionState::Idle) {
-            return Err(ErrorPayload {
-                code: "RECORDING_ALREADY_ACTIVE".to_owned(),
-                message: "A recording session is already active".to_owned(),
-                details: None,
-            });
+            return Ok(json!({ "accepted": true }));
         }
 
         let event = match origin {
@@ -569,11 +571,7 @@ impl SharedState {
 
     fn stop_recording(&mut self, reason: StopReason) -> Result<Value, ErrorPayload> {
         if !matches!(self.machine.state(), SessionState::Recording(_)) {
-            return Err(ErrorPayload {
-                code: "RECORDING_NOT_ACTIVE".to_owned(),
-                message: "No active recording to stop".to_owned(),
-                details: None,
-            });
+            return Ok(json!({ "accepted": true }));
         }
 
         let stop_event = match reason {
@@ -870,6 +868,53 @@ mod tests {
     }
 
     #[test]
+    fn redundant_start_and_stop_are_idempotent() {
+        let path = temp_socket_path("idem");
+        let (running, handle) = start_server(path.clone());
+        wait_for_socket(&path);
+
+        let (mut stream, mut reader) = connect_and_handshake(&path);
+
+        let _ = send_request(
+            &mut stream,
+            &mut reader,
+            "1",
+            "start_recording",
+            json!({"origin":"manual"}),
+        );
+        let _ = send_request(
+            &mut stream,
+            &mut reader,
+            "2",
+            "start_recording",
+            json!({"origin":"manual"}),
+        );
+        let state_after_redundant_start =
+            send_request(&mut stream, &mut reader, "3", "get_state", json!({}));
+        assert_eq!(state_after_redundant_start["state"], "recording");
+
+        let _ = send_request(
+            &mut stream,
+            &mut reader,
+            "4",
+            "stop_recording",
+            json!({"reason":"manual"}),
+        );
+        let _ = send_request(
+            &mut stream,
+            &mut reader,
+            "5",
+            "stop_recording",
+            json!({"reason":"manual"}),
+        );
+        let state_after_redundant_stop =
+            send_request(&mut stream, &mut reader, "6", "get_state", json!({}));
+        assert_eq!(state_after_redundant_stop["state"], "idle");
+
+        stop_server(&path, running, handle);
+    }
+
+    #[test]
     fn set_config_failure_does_not_mutate_existing_config() {
         let path = temp_socket_path("cfg");
         let (running, handle) = start_server(path.clone());
@@ -897,6 +942,37 @@ mod tests {
         assert_eq!(after["toggle_hotkey"], "right_option");
         assert_eq!(after["hold_hotkey"], "fn");
         assert_eq!(after["revision"].as_u64().unwrap_or(0), initial_revision);
+
+        stop_server(&path, running, handle);
+    }
+
+    #[test]
+    fn malformed_request_returns_error_and_closes_connection() {
+        let path = temp_socket_path("bad");
+        let (running, handle) = start_server(path.clone());
+        wait_for_socket(&path);
+
+        let (mut stream, mut reader) = connect_and_handshake(&path);
+        stream
+            .write_all(b"{not valid json\n")
+            .expect("write should succeed");
+        stream.flush().expect("flush should succeed");
+
+        let envelope = read_server_envelope(&mut reader);
+        match envelope {
+            ServerEnvelope::Response(response) => {
+                assert!(!response.ok, "malformed request should return error");
+                let error = response.error.expect("error payload should be present");
+                assert_eq!(error.code, "INVALID_REQUEST");
+            }
+            other => panic!("expected response envelope, got {:?}", other),
+        }
+
+        let mut line = String::new();
+        let bytes = reader
+            .read_line(&mut line)
+            .expect("read_line should succeed after error response");
+        assert_eq!(bytes, 0, "connection should close after malformed request");
 
         stop_server(&path, running, handle);
     }
