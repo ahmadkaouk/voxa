@@ -33,13 +33,17 @@ pub fn run(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Result<()> {
     listener.set_nonblocking(true)?;
 
     let shared = Arc::new(Mutex::new(SharedState::new()));
+    let (event_tx, event_rx) = mpsc::channel::<EventEnvelope>();
+    let shared_for_dispatcher = Arc::clone(&shared);
+    thread::spawn(move || run_event_dispatcher(event_rx, shared_for_dispatcher));
 
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _)) => {
                 let shared = Arc::clone(&shared);
+                let event_tx = event_tx.clone();
                 thread::spawn(move || {
-                    let _ = handle_client(stream, shared);
+                    let _ = handle_client(stream, shared, event_tx);
                 });
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -56,7 +60,11 @@ pub fn run(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Result<()> {
     Ok(())
 }
 
-fn handle_client(writer: UnixStream, shared: Arc<Mutex<SharedState>>) -> io::Result<()> {
+fn handle_client(
+    writer: UnixStream,
+    shared: Arc<Mutex<SharedState>>,
+    event_tx: mpsc::Sender<EventEnvelope>,
+) -> io::Result<()> {
     writer.set_nonblocking(false)?;
     let read_stream = writer.try_clone()?;
     let connection = ConnectionHandle::new(writer);
@@ -126,7 +134,7 @@ fn handle_client(writer: UnixStream, shared: Arc<Mutex<SharedState>>) -> io::Res
         }
 
         if let ClientEnvelope::Request(request) = message {
-            handle_request(request, &connection, &shared)?;
+            handle_request(request, &connection, &shared, &event_tx)?;
         }
     }
 }
@@ -135,6 +143,7 @@ fn handle_request(
     request: RequestEnvelope,
     connection: &ConnectionHandle,
     shared: &Arc<Mutex<SharedState>>,
+    event_tx: &mpsc::Sender<EventEnvelope>,
 ) -> io::Result<()> {
     match request.method.as_str() {
         "health" => {
@@ -180,7 +189,9 @@ fn handle_request(
                 let mut state = shared
                     .lock()
                     .map_err(|_| io::Error::other("state poisoned"))?;
-                state.start_recording(origin)
+                let result = state.start_recording(origin);
+                dispatch_outbox(&mut state, event_tx)?;
+                result
             };
 
             match result {
@@ -203,7 +214,9 @@ fn handle_request(
                 let mut state = shared
                     .lock()
                     .map_err(|_| io::Error::other("state poisoned"))?;
-                state.stop_recording(reason)
+                let result = state.stop_recording(reason);
+                dispatch_outbox(&mut state, event_tx)?;
+                result
             };
 
             match result {
@@ -239,7 +252,9 @@ fn handle_request(
                 let mut state = shared
                     .lock()
                     .map_err(|_| io::Error::other("state poisoned"))?;
-                state.set_config(params)
+                let result = state.set_config(params);
+                dispatch_outbox(&mut state, event_tx)?;
+                result
             };
 
             match result {
@@ -287,6 +302,38 @@ fn write_response_error(
         result: None,
         error: Some(error),
     }))
+}
+
+fn dispatch_outbox(
+    state: &mut SharedState,
+    event_tx: &mpsc::Sender<EventEnvelope>,
+) -> io::Result<()> {
+    for event in state.drain_outbox() {
+        event_tx
+            .send(event)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "event dispatcher closed"))?;
+    }
+    Ok(())
+}
+
+fn run_event_dispatcher(event_rx: mpsc::Receiver<EventEnvelope>, shared: Arc<Mutex<SharedState>>) {
+    while let Ok(event) = event_rx.recv() {
+        let envelope = ServerEnvelope::Event(event);
+
+        let mut state = match shared.lock() {
+            Ok(state) => state,
+            Err(_) => return,
+        };
+
+        let mut index = 0;
+        while index < state.subscribers.len() {
+            if state.subscribers[index].send(envelope.clone()).is_err() {
+                state.subscribers.swap_remove(index);
+            } else {
+                index += 1;
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -371,6 +418,7 @@ struct SharedState {
     session_counter: u64,
     session_id: Option<String>,
     event_seq: u64,
+    outbox: Vec<EventEnvelope>,
     started_at: Instant,
     subscribers: Vec<ConnectionHandle>,
     config: DaemonConfig,
@@ -383,6 +431,7 @@ impl SharedState {
             session_counter: 0,
             session_id: None,
             event_seq: 0,
+            outbox: Vec::new(),
             started_at: Instant::now(),
             subscribers: Vec::new(),
             config: DaemonConfig::default(),
@@ -610,21 +659,15 @@ impl SharedState {
 
     fn emit_event(&mut self, name: &str, data: Value) {
         self.event_seq += 1;
-
-        let envelope = ServerEnvelope::Event(EventEnvelope {
+        self.outbox.push(EventEnvelope {
             name: name.to_owned(),
             seq: self.event_seq,
             data,
         });
+    }
 
-        let mut index = 0;
-        while index < self.subscribers.len() {
-            if self.subscribers[index].send(envelope.clone()).is_err() {
-                self.subscribers.swap_remove(index);
-            } else {
-                index += 1;
-            }
-        }
+    fn drain_outbox(&mut self) -> Vec<EventEnvelope> {
+        std::mem::take(&mut self.outbox)
     }
 }
 
