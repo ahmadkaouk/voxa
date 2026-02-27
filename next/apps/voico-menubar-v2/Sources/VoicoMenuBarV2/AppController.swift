@@ -254,7 +254,7 @@ final class AppController: ObservableObject {
                 stopped = true
             }
 
-            if (try? runProcess(executable: "/bin/launchctl", arguments: ["bootout", self.launchTarget])) != nil {
+            if self.stopLaunchAgentIfNeeded() {
                 stopped = true
             }
 
@@ -494,8 +494,22 @@ final class AppController: ObservableObject {
         lifecycleLock.unlock()
     }
 
+    private var launchDomain: String {
+        "gui/\(getuid())"
+    }
+
     private var launchTarget: String {
-        "gui/\(getuid())/\(daemonLabel)"
+        "\(launchDomain)/\(daemonLabel)"
+    }
+
+    private var launchAgentPlistPath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/LaunchAgents/\(daemonLabel).plist"
+    }
+
+    private var daemonLogsDirectory: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Logs/voico-v2"
     }
 
     private func autoStartDaemonOnLaunch() {
@@ -510,9 +524,17 @@ final class AppController: ObservableObject {
             return
         }
 
-        try launchDaemonWithLaunchctl()
+        launchDaemonWithLaunchctl()
         if waitForDaemonAvailability(timeout: 1.2) {
             return
+        }
+
+        if let daemonPath = resolveDaemonExecutablePath() {
+            try ensureLaunchAgentInstalled(daemonPath: daemonPath)
+            launchDaemonWithLaunchctl()
+            if waitForDaemonAvailability(timeout: 1.2) {
+                return
+            }
         }
 
         try launchDaemonDirectly()
@@ -542,12 +564,114 @@ final class AppController: ObservableObject {
         return false
     }
 
-    private func launchDaemonWithLaunchctl() throws {
-        do {
-            _ = try runProcess(executable: "/bin/launchctl", arguments: ["kickstart", "-k", launchTarget])
-        } catch {
-            // If launch service is not installed, direct spawn fallback will handle startup.
+    private func launchDaemonWithLaunchctl() {
+        _ = try? runProcess(executable: "/bin/launchctl", arguments: ["kickstart", "-k", launchTarget])
+    }
+
+    private func ensureLaunchAgentInstalled(daemonPath: String) throws {
+        let fileManager = FileManager.default
+        let launchAgentsDirectory = NSString(string: launchAgentPlistPath).deletingLastPathComponent
+        try fileManager.createDirectory(atPath: launchAgentsDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(atPath: daemonLogsDirectory, withIntermediateDirectories: true)
+
+        let stdoutPath = "\(daemonLogsDirectory)/daemon.out.log"
+        let stderrPath = "\(daemonLogsDirectory)/daemon.err.log"
+        if !fileManager.fileExists(atPath: stdoutPath) {
+            _ = fileManager.createFile(atPath: stdoutPath, contents: nil)
         }
+        if !fileManager.fileExists(atPath: stderrPath) {
+            _ = fileManager.createFile(atPath: stderrPath, contents: nil)
+        }
+
+        let plist = buildLaunchAgentPlist(
+            daemonPath: daemonPath,
+            stdoutPath: stdoutPath,
+            stderrPath: stderrPath
+        )
+        let currentPlist = try? String(contentsOfFile: launchAgentPlistPath, encoding: .utf8)
+        if currentPlist == plist {
+            if !isLaunchAgentLoaded() {
+                try bootstrapLaunchAgent()
+            }
+            return
+        }
+
+        try plist.write(toFile: launchAgentPlistPath, atomically: true, encoding: .utf8)
+        _ = try? runProcess(
+            executable: "/bin/launchctl",
+            arguments: ["bootout", launchDomain, launchAgentPlistPath]
+        )
+        try bootstrapLaunchAgent()
+    }
+
+    private func isLaunchAgentLoaded() -> Bool {
+        (try? runProcess(executable: "/bin/launchctl", arguments: ["print", launchTarget])) != nil
+    }
+
+    private func bootstrapLaunchAgent() throws {
+        do {
+            _ = try runProcess(
+                executable: "/bin/launchctl",
+                arguments: ["bootstrap", launchDomain, launchAgentPlistPath]
+            )
+        } catch {
+            if isServiceAlreadyLoadedError(error) {
+                return
+            }
+            throw error
+        }
+    }
+
+    private func isServiceAlreadyLoadedError(_ error: Error) -> Bool {
+        let message = (error as NSError).localizedDescription.lowercased()
+        return message.contains("already loaded")
+    }
+
+    private func buildLaunchAgentPlist(
+        daemonPath: String,
+        stdoutPath: String,
+        stderrPath: String
+    ) -> String {
+        let escapedLabel = xmlEscape(daemonLabel)
+        let escapedDaemonPath = xmlEscape(daemonPath)
+        let escapedStdoutPath = xmlEscape(stdoutPath)
+        let escapedStderrPath = xmlEscape(stderrPath)
+
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>Label</key>
+          <string>\(escapedLabel)</string>
+          <key>ProgramArguments</key>
+          <array>
+            <string>\(escapedDaemonPath)</string>
+          </array>
+          <key>RunAtLoad</key>
+          <true/>
+          <key>ProcessType</key>
+          <string>Interactive</string>
+          <key>LimitLoadToSessionType</key>
+          <string>Aqua</string>
+          <key>KeepAlive</key>
+          <true/>
+          <key>StandardOutPath</key>
+          <string>\(escapedStdoutPath)</string>
+          <key>StandardErrorPath</key>
+          <string>\(escapedStderrPath)</string>
+        </dict>
+        </plist>
+        """
+    }
+
+    private func xmlEscape(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     private func launchDaemonDirectly() throws {
@@ -583,6 +707,20 @@ final class AppController: ObservableObject {
 
         managedDaemonProcess = nil
         return true
+    }
+
+    private func stopLaunchAgentIfNeeded() -> Bool {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: launchAgentPlistPath),
+           (try? runProcess(
+               executable: "/bin/launchctl",
+               arguments: ["bootout", launchDomain, launchAgentPlistPath]
+           )) != nil
+        {
+            return true
+        }
+
+        return (try? runProcess(executable: "/bin/launchctl", arguments: ["bootout", launchTarget])) != nil
     }
 
     private func resolveDaemonExecutablePath() -> String? {
