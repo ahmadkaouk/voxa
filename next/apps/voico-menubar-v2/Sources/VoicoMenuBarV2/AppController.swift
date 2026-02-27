@@ -32,6 +32,8 @@ final class AppController: ObservableObject {
     private var shouldStop = false
     private var lastSeenSeq: UInt64 = 0
     private var eventConnection: IPCConnection?
+    private var terminationObserver: NSObjectProtocol?
+    private var shutdownHandled = false
 
     init() {
         let path: String
@@ -54,13 +56,22 @@ final class AppController: ObservableObject {
         }
         hotkeyBridge.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
         hotkeyBridge.start()
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.handleAppTermination()
+        }
         autoStartDaemonOnLaunch()
         startEventLoop()
     }
 
     deinit {
-        hotkeyBridge.stop()
-        stopEventLoop()
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
+        handleAppTermination()
     }
 
     var menuBarSymbol: String {
@@ -72,6 +83,20 @@ final class AppController: ObservableObject {
         case .disconnected:
             return "wifi.exclamationmark"
         }
+    }
+
+    private func handleAppTermination() {
+        lifecycleLock.lock()
+        if shutdownHandled {
+            lifecycleLock.unlock()
+            return
+        }
+        shutdownHandled = true
+        lifecycleLock.unlock()
+
+        hotkeyBridge.stop()
+        stopEventLoop()
+        _ = stopLaunchAgentIfNeeded()
     }
 
     func startRecording() {
@@ -274,7 +299,7 @@ final class AppController: ObservableObject {
     }
 
     func quit() {
-        stopEventLoop()
+        handleAppTermination()
         DispatchQueue.main.async {
             NSApplication.shared.terminate(nil)
         }
@@ -793,8 +818,6 @@ final class AppController: ObservableObject {
           <string>Interactive</string>
           <key>LimitLoadToSessionType</key>
           <string>Aqua</string>
-          <key>KeepAlive</key>
-          <true/>
           <key>StandardOutPath</key>
           <string>\(escapedStdoutPath)</string>
           <key>StandardErrorPath</key>
