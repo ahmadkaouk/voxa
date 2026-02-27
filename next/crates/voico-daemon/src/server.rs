@@ -3,7 +3,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -56,9 +56,11 @@ pub fn run(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Result<()> {
     Ok(())
 }
 
-fn handle_client(mut writer: UnixStream, shared: Arc<Mutex<SharedState>>) -> io::Result<()> {
+fn handle_client(writer: UnixStream, shared: Arc<Mutex<SharedState>>) -> io::Result<()> {
     writer.set_nonblocking(false)?;
-    let mut reader = BufReader::new(writer.try_clone()?);
+    let read_stream = writer.try_clone()?;
+    let connection = ConnectionHandle::new(writer);
+    let mut reader = BufReader::new(read_stream);
     let mut line = String::new();
     let mut hello_done = false;
 
@@ -77,16 +79,13 @@ fn handle_client(mut writer: UnixStream, shared: Arc<Mutex<SharedState>>) -> io:
         let message = serde_json::from_str::<ClientEnvelope>(trimmed);
         let Ok(message) = message else {
             if !hello_done {
-                write_envelope(
-                    &mut writer,
-                    &ServerEnvelope::HelloError {
-                        error: ErrorPayload {
-                            code: "INVALID_REQUEST".to_owned(),
-                            message: "Expected hello handshake".to_owned(),
-                            details: None,
-                        },
+                connection.send(ServerEnvelope::HelloError {
+                    error: ErrorPayload {
+                        code: "INVALID_REQUEST".to_owned(),
+                        message: "Expected hello handshake".to_owned(),
+                        details: None,
                     },
-                )?;
+                })?;
                 return Ok(());
             }
             continue;
@@ -95,39 +94,30 @@ fn handle_client(mut writer: UnixStream, shared: Arc<Mutex<SharedState>>) -> io:
         if !hello_done {
             match message {
                 ClientEnvelope::Hello(hello) if hello.api_version == API_VERSION => {
-                    write_envelope(
-                        &mut writer,
-                        &ServerEnvelope::HelloOk {
-                            api_version: API_VERSION.to_owned(),
-                            daemon_version: voico_core::version().to_owned(),
-                        },
-                    )?;
+                    connection.send(ServerEnvelope::HelloOk {
+                        api_version: API_VERSION.to_owned(),
+                        daemon_version: voico_core::version().to_owned(),
+                    })?;
                     hello_done = true;
                 }
                 ClientEnvelope::Hello(_) => {
-                    write_envelope(
-                        &mut writer,
-                        &ServerEnvelope::HelloError {
-                            error: ErrorPayload {
-                                code: "API_VERSION_UNSUPPORTED".to_owned(),
-                                message: "Unsupported API version".to_owned(),
-                                details: None,
-                            },
+                    connection.send(ServerEnvelope::HelloError {
+                        error: ErrorPayload {
+                            code: "API_VERSION_UNSUPPORTED".to_owned(),
+                            message: "Unsupported API version".to_owned(),
+                            details: None,
                         },
-                    )?;
+                    })?;
                     return Ok(());
                 }
                 _ => {
-                    write_envelope(
-                        &mut writer,
-                        &ServerEnvelope::HelloError {
-                            error: ErrorPayload {
-                                code: "INVALID_REQUEST".to_owned(),
-                                message: "Expected hello handshake".to_owned(),
-                                details: None,
-                            },
+                    connection.send(ServerEnvelope::HelloError {
+                        error: ErrorPayload {
+                            code: "INVALID_REQUEST".to_owned(),
+                            message: "Expected hello handshake".to_owned(),
+                            details: None,
                         },
-                    )?;
+                    })?;
                     return Ok(());
                 }
             }
@@ -136,14 +126,15 @@ fn handle_client(mut writer: UnixStream, shared: Arc<Mutex<SharedState>>) -> io:
         }
 
         if let ClientEnvelope::Request(request) = message {
-            handle_request(request, &mut writer, &shared)?;
+            handle_request(request, &connection, reader.get_ref(), &shared)?;
         }
     }
 }
 
 fn handle_request(
     request: RequestEnvelope,
-    writer: &mut UnixStream,
+    connection: &ConnectionHandle,
+    stream: &UnixStream,
     shared: &Arc<Mutex<SharedState>>,
 ) -> io::Result<()> {
     match request.method.as_str() {
@@ -159,10 +150,10 @@ fn handle_request(
             };
 
             let payload = json_value(result)?;
-            write_envelope(
-                writer,
-                &ServerEnvelope::Response(ResponseEnvelope::ok(&request.id, payload)),
-            )
+            connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
+                &request.id,
+                payload,
+            )))
         }
         "get_state" => {
             let result = {
@@ -173,16 +164,16 @@ fn handle_request(
             };
 
             let payload = json_value(result)?;
-            write_envelope(
-                writer,
-                &ServerEnvelope::Response(ResponseEnvelope::ok(&request.id, payload)),
-            )
+            connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
+                &request.id,
+                payload,
+            )))
         }
         "start_recording" => {
             let params = request.parse_params::<StartRecordingParams>();
             let params = match params {
                 Ok(params) => params,
-                Err(error) => return write_response_error(writer, &request.id, error),
+                Err(error) => return write_response_error(connection, &request.id, error),
             };
             let origin = params.origin.unwrap_or(StartOrigin::Manual);
 
@@ -194,18 +185,18 @@ fn handle_request(
             };
 
             match result {
-                Ok(value) => write_envelope(
-                    writer,
-                    &ServerEnvelope::Response(ResponseEnvelope::ok(&request.id, value)),
-                ),
-                Err(error) => write_response_error(writer, &request.id, error),
+                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
+                    &request.id,
+                    value,
+                ))),
+                Err(error) => write_response_error(connection, &request.id, error),
             }
         }
         "stop_recording" => {
             let params = request.parse_params::<StopRecordingParams>();
             let params = match params {
                 Ok(params) => params,
-                Err(error) => return write_response_error(writer, &request.id, error),
+                Err(error) => return write_response_error(connection, &request.id, error),
             };
             let reason = params.reason.unwrap_or(StopReason::Manual);
 
@@ -217,11 +208,11 @@ fn handle_request(
             };
 
             match result {
-                Ok(value) => write_envelope(
-                    writer,
-                    &ServerEnvelope::Response(ResponseEnvelope::ok(&request.id, value)),
-                ),
-                Err(error) => write_response_error(writer, &request.id, error),
+                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
+                    &request.id,
+                    value,
+                ))),
+                Err(error) => write_response_error(connection, &request.id, error),
             }
         }
         "get_config" => {
@@ -233,16 +224,16 @@ fn handle_request(
             };
 
             let payload = json_value(result)?;
-            write_envelope(
-                writer,
-                &ServerEnvelope::Response(ResponseEnvelope::ok(&request.id, payload)),
-            )
+            connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
+                &request.id,
+                payload,
+            )))
         }
         "set_config" => {
             let params = request.parse_params::<SetConfigParams>();
             let params = match params {
                 Ok(params) => params,
-                Err(error) => return write_response_error(writer, &request.id, error),
+                Err(error) => return write_response_error(connection, &request.id, error),
             };
 
             let result = {
@@ -253,56 +244,76 @@ fn handle_request(
             };
 
             match result {
-                Ok(value) => write_envelope(
-                    writer,
-                    &ServerEnvelope::Response(ResponseEnvelope::ok(&request.id, value)),
-                ),
-                Err(error) => write_response_error(writer, &request.id, error),
+                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
+                    &request.id,
+                    value,
+                ))),
+                Err(error) => write_response_error(connection, &request.id, error),
             }
         }
         "subscribe" => {
             let params = request.parse_params::<SubscribeParams>();
             if let Err(error) = params {
-                return write_response_error(writer, &request.id, error);
+                return write_response_error(connection, &request.id, error);
             }
 
             let response = {
                 let mut state = shared
                     .lock()
                     .map_err(|_| io::Error::other("state poisoned"))?;
-                state.subscribe(writer.try_clone()?)
+                state.subscribe(stream.try_clone()?)
             };
 
-            write_envelope(
-                writer,
-                &ServerEnvelope::Response(ResponseEnvelope::ok(&request.id, response)),
-            )
-        }
-        _ => write_envelope(
-            writer,
-            &ServerEnvelope::Response(ResponseEnvelope::err(
+            connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
                 &request.id,
-                "UNKNOWN_METHOD",
-                "Unknown method",
-            )),
-        ),
+                response,
+            )))
+        }
+        _ => connection.send(ServerEnvelope::Response(ResponseEnvelope::err(
+            &request.id,
+            "UNKNOWN_METHOD",
+            "Unknown method",
+        ))),
     }
 }
 
 fn write_response_error(
-    writer: &mut UnixStream,
+    connection: &ConnectionHandle,
     request_id: &str,
     error: ErrorPayload,
 ) -> io::Result<()> {
-    write_envelope(
-        writer,
-        &ServerEnvelope::Response(ResponseEnvelope {
-            id: request_id.to_owned(),
-            ok: false,
-            result: None,
-            error: Some(error),
-        }),
-    )
+    connection.send(ServerEnvelope::Response(ResponseEnvelope {
+        id: request_id.to_owned(),
+        ok: false,
+        result: None,
+        error: Some(error),
+    }))
+}
+
+#[derive(Clone)]
+struct ConnectionHandle {
+    tx: mpsc::Sender<ServerEnvelope>,
+}
+
+impl ConnectionHandle {
+    fn new(mut stream: UnixStream) -> Self {
+        let (tx, rx) = mpsc::channel::<ServerEnvelope>();
+        thread::spawn(move || {
+            while let Ok(envelope) = rx.recv() {
+                if write_envelope(&mut stream, &envelope).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Self { tx }
+    }
+
+    fn send(&self, envelope: ServerEnvelope) -> io::Result<()> {
+        self.tx
+            .send(envelope)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "connection closed"))
+    }
 }
 
 fn write_envelope(stream: &mut UnixStream, envelope: &ServerEnvelope) -> io::Result<()> {
@@ -625,7 +636,6 @@ fn runtime_error_code_to_string(code: RuntimeErrorCode) -> String {
         RuntimeErrorCode::OutputFailed => "OUTPUT_FAILED".to_owned(),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
