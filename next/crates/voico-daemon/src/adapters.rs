@@ -1,7 +1,4 @@
 use std::env;
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -9,29 +6,26 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use reqwest::blocking::{Client, multipart};
 use serde::Deserialize;
-use voico_core::infra::{
-    InfraError, NullOutputSink, OutputResult, OutputSink, Recorder, Transcriber,
-};
+use voico_core::infra::{InfraError, NullOutputSink, Recorder, Transcriber};
 
 use crate::secrets::{ApiKeyStore, build_api_key_store};
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
-const PBCOPY_PATH: &str = "/usr/bin/pbcopy";
-const OUTPUT_MODE_CLIPBOARD_AUTOPASTE: &str = "clipboard_autopaste";
-const OUTPUT_MODE_CLIPBOARD_ONLY: &str = "clipboard_only";
-const OUTPUT_MODE_NONE: &str = "none";
 const TRANSCRIPTIONS_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const REQUEST_TIMEOUT_SECS: u64 = 60;
 
 pub(crate) fn build_runtime_for_output_mode(
-    output_mode: &str,
+    _output_mode: &str,
     model: &str,
     api_key_source: &str,
 ) -> voico_core::app::SessionRuntime {
-    let output = build_output_sink(output_mode);
     let transcriber = build_transcriber(model, api_key_source);
 
-    voico_core::app::SessionRuntime::new(Box::new(MicRecorder::default()), transcriber, output)
+    voico_core::app::SessionRuntime::new(
+        Box::new(MicRecorder::default()),
+        transcriber,
+        Box::new(NullOutputSink),
+    )
 }
 
 #[derive(Default)]
@@ -321,47 +315,6 @@ fn store_callback_error(callback_error: &Arc<Mutex<Option<InfraError>>>, error: 
         if value.is_none() {
             *value = Some(error);
         }
-    }
-}
-
-fn build_output_sink(output_mode: &str) -> Box<dyn OutputSink> {
-    match output_mode {
-        OUTPUT_MODE_NONE => Box::new(NullOutputSink),
-        OUTPUT_MODE_CLIPBOARD_ONLY | OUTPUT_MODE_CLIPBOARD_AUTOPASTE => {
-            if Path::new(PBCOPY_PATH).exists() {
-                Box::new(ClipboardOutputSink)
-            } else {
-                Box::new(NullOutputSink)
-            }
-        }
-        _ => Box::new(NullOutputSink),
-    }
-}
-
-struct ClipboardOutputSink;
-
-impl OutputSink for ClipboardOutputSink {
-    fn output(&mut self, text: &str) -> Result<OutputResult, InfraError> {
-        let mut child = Command::new(PBCOPY_PATH)
-            .stdin(Stdio::piped())
-            .spawn()
-            .map_err(|_| InfraError::OutputFailed)?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(text.as_bytes())
-                .map_err(|_| InfraError::OutputFailed)?;
-        }
-
-        let status = child.wait().map_err(|_| InfraError::OutputFailed)?;
-        if !status.success() {
-            return Err(InfraError::OutputFailed);
-        }
-
-        Ok(OutputResult {
-            clipboard: !text.is_empty(),
-            autopaste: false,
-        })
     }
 }
 

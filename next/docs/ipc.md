@@ -169,8 +169,12 @@ Request:
 
 Success result:
 ```json
-{"accepted": true}
+{"accepted": true, "text":"hello world"}
 ```
+
+Notes:
+- When no active recording exists, response remains idempotent with `{"accepted": true}`.
+- Output side effects (clipboard/autopaste) are client responsibilities in v2.
 
 ### `get_config`
 Request:
@@ -317,17 +321,7 @@ All events include `seq` and are emitted in strict increasing order per daemon p
   "type":"event",
   "name":"transcription_ready",
   "seq":47,
-  "data":{"session_id":"s-abc","text_length":132}
-}
-```
-
-### `output_done`
-```json
-{
-  "type":"event",
-  "name":"output_done",
-  "seq":48,
-  "data":{"session_id":"s-abc","clipboard":true,"autopaste":true}
+  "data":{"session_id":"s-abc","text":"hello world","text_length":11}
 }
 ```
 
@@ -373,8 +367,6 @@ Domain/runtime errors:
 - `API_NETWORK_FAILED`
 - `API_RESPONSE_INVALID`
 - `API_EMPTY_TRANSCRIPT`
-- `OUTPUT_CLIPBOARD_FAILED`
-- `OUTPUT_AUTOPASTE_FAILED`
 
 ## Ordering and Consistency
 - Daemon is the single state authority.
@@ -397,6 +389,5 @@ Domain/runtime errors:
 - Breaking changes require `api_version` bump.
 
 ## Open Questions
-- Should `transcription_ready` optionally include full text for trusted local clients?
 - How many events should daemon buffer for replay on `from_seq` subscribe?
 - Should `set_config` support optimistic concurrency via `expected_revision`?

@@ -456,24 +456,16 @@ impl SharedState {
                 details: None,
             })?;
 
+        let text_length = text.chars().count();
         self.emit_event(
             "transcription_ready",
             json!({
                 "session_id": self.session_id,
-                "text_length": text.chars().count()
+                "text": text.clone(),
+                "text_length": text_length
             }),
         );
         self.emit_state_changed();
-
-        let output = match self.runtime.output_text(&text) {
-            Ok(output) => output,
-            Err(code) => {
-                let _ = self.machine.apply(DomainEvent::OutputFailed);
-                self.session_id = None;
-                self.emit_state_changed();
-                return Err(runtime_error_payload(code, "Output failed"));
-            }
-        };
 
         let _ = self
             .machine
@@ -483,19 +475,13 @@ impl SharedState {
                 message: "Could not complete output transition".to_owned(),
                 details: None,
             })?;
-
-        self.emit_event(
-            "output_done",
-            json!({
-                "session_id": self.session_id,
-                "clipboard": output.clipboard,
-                "autopaste": output.autopaste
-            }),
-        );
         self.session_id = None;
         self.emit_state_changed();
 
-        Ok(json!({ "accepted": true }))
+        Ok(json!({
+            "accepted": true,
+            "text": text
+        }))
     }
 
     pub(super) fn enforce_max_duration_if_needed(&mut self) {

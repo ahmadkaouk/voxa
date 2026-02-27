@@ -122,7 +122,7 @@
 
 ## Phase 7: Parity + Hardening
 ### Tasks
-- [ ] Create parity checklist against legacy behavior.
+- [x] Create parity checklist against legacy behavior.
 - [ ] Add integration tests:
   - [ ] hotkey hold/toggle flow
   - [ ] recording cap behavior

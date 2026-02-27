@@ -233,6 +233,35 @@ fn daemon_handles_basic_start_stop_flow() {
 }
 
 #[test]
+fn stop_recording_returns_transcript_text() {
+    let path = temp_socket_path("stop-text");
+    let runtime = runtime_with_fixed_transcript("hello from test");
+    let (running, handle) = start_server_with_runtime(path.clone(), runtime);
+    wait_for_socket(&path);
+
+    let (mut stream, mut reader) = connect_and_handshake(&path);
+    let _ = send_request(
+        &mut stream,
+        &mut reader,
+        "1",
+        "start_recording",
+        json!({"origin":"manual"}),
+    );
+
+    let stop = send_request(
+        &mut stream,
+        &mut reader,
+        "2",
+        "stop_recording",
+        json!({"reason":"manual"}),
+    );
+    assert_eq!(stop["accepted"], true);
+    assert_eq!(stop["text"], "hello from test");
+
+    stop_server(&path, running, handle);
+}
+
+#[test]
 fn redundant_start_and_stop_are_idempotent() {
     let path = temp_socket_path("idem");
     let (running, handle) = start_server(path.clone());
@@ -568,6 +597,26 @@ impl OutputSink for TestOutput {
             autopaste: false,
         })
     }
+}
+
+struct FixedTranscriber {
+    text: String,
+}
+
+impl Transcriber for FixedTranscriber {
+    fn transcribe(&mut self, _audio: Vec<u8>) -> Result<String, InfraError> {
+        Ok(self.text.clone())
+    }
+}
+
+fn runtime_with_fixed_transcript(text: &str) -> SessionRuntime {
+    SessionRuntime::new(
+        Box::new(TestRecorder),
+        Box::new(FixedTranscriber {
+            text: text.to_owned(),
+        }),
+        Box::new(TestOutput),
+    )
 }
 
 fn runtime_with_transcription_failure() -> SessionRuntime {

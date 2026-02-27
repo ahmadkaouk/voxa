@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 
 final class AppController: ObservableObject {
@@ -373,6 +374,10 @@ final class AppController: ObservableObject {
             {
                 self.runtimeState = state
                 self.lastErrorCode = event.data["last_error"] as? String
+            } else if event.name == "transcription_ready",
+                      let text = event.data["text"] as? String
+            {
+                self.handleTranscriptionReady(text)
             }
         }
     }
@@ -504,6 +509,89 @@ final class AppController: ObservableObject {
                 }
             }
         }
+    }
+
+    private func handleTranscriptionReady(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            statusMessage = "Transcript ready (empty)"
+            return
+        }
+
+        switch outputMode {
+        case .none:
+            statusMessage = "Transcript ready (output disabled)"
+        case .clipboardOnly:
+            if writeTextToClipboard(text) {
+                statusMessage = "Transcript copied to clipboard"
+            } else {
+                statusMessage = "Transcript ready but clipboard copy failed"
+            }
+        case .clipboardAutopaste:
+            guard writeTextToClipboard(text) else {
+                statusMessage = "Transcript ready but clipboard copy failed"
+                return
+            }
+
+            if sendCommandVShortcut() {
+                statusMessage = "Transcript copied and pasted"
+            } else {
+                statusMessage = "Transcript copied (autopaste failed)"
+            }
+        }
+    }
+
+    private func writeTextToClipboard(_ text: String) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        return pasteboard.setString(text, forType: .string)
+    }
+
+    private func sendCommandVShortcut() -> Bool {
+        let commandKey: CGKeyCode = 55
+        let vKey: CGKeyCode = 9
+        let delay = 0.02
+
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            return false
+        }
+
+        guard postKeyEvent(source: source, keyCode: commandKey, keyDown: true) else {
+            return false
+        }
+        Thread.sleep(forTimeInterval: delay)
+        guard postKeyEvent(source: source, keyCode: vKey, keyDown: true, flags: .maskCommand)
+        else {
+            return false
+        }
+
+        Thread.sleep(forTimeInterval: delay)
+        guard postKeyEvent(source: source, keyCode: vKey, keyDown: false, flags: .maskCommand)
+        else {
+            return false
+        }
+
+        Thread.sleep(forTimeInterval: delay)
+        return postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
+    }
+
+    private func postKeyEvent(
+        source: CGEventSource,
+        keyCode: CGKeyCode,
+        keyDown: Bool,
+        flags: CGEventFlags = []
+    ) -> Bool {
+        guard let event = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: keyCode,
+            keyDown: keyDown
+        ) else {
+            return false
+        }
+
+        event.flags = flags
+        event.post(tap: .cghidEventTap)
+        return true
     }
 
     private func publishState(_ snapshot: DaemonStateSnapshot) {
