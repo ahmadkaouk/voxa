@@ -78,7 +78,12 @@ pub enum DomainEventTag {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum RuntimeErrorCode {
     AudioCaptureFailed,
-    TranscriptionFailed,
+    ApiAuthFailed,
+    ApiRateLimited,
+    ApiRequestFailed,
+    ApiNetworkFailed,
+    ApiResponseInvalid,
+    ApiEmptyTranscript,
     OutputFailed,
 }
 
@@ -108,6 +113,10 @@ impl SessionMachine {
 
     pub fn last_error(&self) -> Option<RuntimeErrorCode> {
         self.last_error
+    }
+
+    pub fn set_last_error(&mut self, code: RuntimeErrorCode) {
+        self.last_error = Some(code);
     }
 
     pub fn is_recording(&self) -> bool {
@@ -167,7 +176,7 @@ impl SessionMachine {
             }
             (SessionState::Transcribing, DomainEvent::TranscriptionFailed) => {
                 self.state = SessionState::Error;
-                self.last_error = Some(RuntimeErrorCode::TranscriptionFailed);
+                self.last_error = Some(RuntimeErrorCode::ApiRequestFailed);
                 Ok(ApplyResult::Transitioned)
             }
             (SessionState::Transcribing, DomainEvent::Reset) => {

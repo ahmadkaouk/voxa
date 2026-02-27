@@ -6,6 +6,8 @@ enum IPCError: LocalizedError {
     case socketPathTooLong
     case socketCreateFailed(String)
     case socketConnectFailed(String)
+    case socketReadFailed(String)
+    case socketWriteFailed(String)
     case connectionClosed
     case invalidEnvelope
     case handshakeFailed(String)
@@ -14,6 +16,8 @@ enum IPCError: LocalizedError {
     case invalidStatePayload
     case invalidConfigPayload
     case invalidAPIKeyStatusPayload
+    case responseTimedOut
+    case subscribeTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +29,10 @@ enum IPCError: LocalizedError {
             return "Could not create socket: \(message)"
         case let .socketConnectFailed(message):
             return "Could not connect to daemon socket: \(message)"
+        case let .socketReadFailed(message):
+            return "Could not read from daemon socket: \(message)"
+        case let .socketWriteFailed(message):
+            return "Could not write to daemon socket: \(message)"
         case .connectionClosed:
             return "Connection closed"
         case .invalidEnvelope:
@@ -41,6 +49,10 @@ enum IPCError: LocalizedError {
             return "Config payload is invalid"
         case .invalidAPIKeyStatusPayload:
             return "API key status payload is invalid"
+        case .responseTimedOut:
+            return "Timed out waiting for daemon response"
+        case .subscribeTimedOut:
+            return "Subscribe timed out waiting for daemon response"
         }
     }
 }
@@ -54,6 +66,8 @@ enum ServerEnvelope {
 
 final class IPCTransport {
     static let apiVersion = "1.0"
+    private static let requestResponseTimeoutSeconds: TimeInterval = 5.0
+    private static let subscribeResponseTimeoutSeconds: TimeInterval = 2.0
 
     let socketPath: String
 
@@ -74,6 +88,7 @@ final class IPCTransport {
         let connection = try IPCConnection.connect(socketPath: socketPath)
         defer { connection.close() }
 
+        try connection.setReadTimeout(seconds: Self.requestResponseTimeoutSeconds)
         try connection.performHandshake(client: "voico-menubar-v2", clientVersion: "0.1.0")
         let requestId = UUID().uuidString
         try connection.sendRequest(id: requestId, method: method, params: params)
@@ -137,9 +152,18 @@ final class IPCTransport {
 
             let requestId = UUID().uuidString
             try connection.sendRequest(id: requestId, method: "subscribe", params: params)
+            try connection.setReadTimeout(seconds: Self.subscribeResponseTimeoutSeconds)
+            defer { try? connection.setReadTimeout(seconds: nil) }
 
             while true {
-                let envelope = try connection.readEnvelope()
+                let envelope: ServerEnvelope
+                do {
+                    envelope = try connection.readEnvelope()
+                } catch IPCError.responseTimedOut {
+                    throw IPCError.subscribeTimedOut
+                } catch {
+                    throw error
+                }
                 switch envelope {
                 case let .response(id, ok, _, error) where id == requestId:
                     if ok {
@@ -279,6 +303,27 @@ final class IPCConnection {
         try? fileHandle.close()
     }
 
+    func setReadTimeout(seconds: TimeInterval?) throws {
+        let timeout = seconds ?? 0
+        let wholeSeconds = Int(timeout)
+        let micros = Int((timeout - Double(wholeSeconds)) * 1_000_000)
+        var timevalValue = timeval(tv_sec: wholeSeconds, tv_usec: Int32(micros))
+
+        let result = withUnsafePointer(to: &timevalValue) { pointer in
+            setsockopt(
+                fileHandle.fileDescriptor,
+                SOL_SOCKET,
+                SO_RCVTIMEO,
+                pointer,
+                socklen_t(MemoryLayout<timeval>.size)
+            )
+        }
+
+        if result != 0 {
+            throw IPCError.socketConnectFailed(errnoMessage())
+        }
+    }
+
     func performHandshake(client: String, clientVersion: String) throws {
         try sendJSON([
             "type": "hello",
@@ -349,7 +394,7 @@ final class IPCConnection {
         let payload = try JSONSerialization.data(withJSONObject: object, options: [])
         var framedPayload = payload
         framedPayload.append(0x0A)
-        try fileHandle.write(contentsOf: framedPayload)
+        try writeAll(framedPayload)
     }
 
     private func readJSONObject() throws -> [String: Any] {
@@ -370,7 +415,7 @@ final class IPCConnection {
                 return dictionary
             }
 
-            let chunk = try fileHandle.read(upToCount: 4096) ?? Data()
+            let chunk = try readChunk(maxBytes: 4096)
             if chunk.isEmpty {
                 throw IPCError.connectionClosed
             }
@@ -388,6 +433,48 @@ final class IPCConnection {
         }
 
         return (code, message)
+    }
+
+    private func writeAll(_ data: Data) throws {
+        try data.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else {
+                return
+            }
+
+            var bytesWritten = 0
+            while bytesWritten < data.count {
+                let pointer = baseAddress.advanced(by: bytesWritten)
+                let written = Darwin.write(
+                    fileHandle.fileDescriptor,
+                    pointer,
+                    data.count - bytesWritten
+                )
+
+                if written < 0 {
+                    throw IPCError.socketWriteFailed(errnoMessage())
+                }
+
+                bytesWritten += written
+            }
+        }
+    }
+
+    private func readChunk(maxBytes: Int) throws -> Data {
+        var buffer = [UInt8](repeating: 0, count: maxBytes)
+        let bytesRead = Darwin.read(fileHandle.fileDescriptor, &buffer, maxBytes)
+
+        if bytesRead == 0 {
+            return Data()
+        }
+
+        if bytesRead < 0 {
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                throw IPCError.responseTimedOut
+            }
+            throw IPCError.socketReadFailed(errnoMessage())
+        }
+
+        return Data(buffer.prefix(bytesRead))
     }
 }
 

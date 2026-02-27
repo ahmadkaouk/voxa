@@ -53,7 +53,12 @@ impl Default for SessionRuntime {
 fn map_infra_error(error: InfraError) -> RuntimeErrorCode {
     match error {
         InfraError::AudioCaptureFailed => RuntimeErrorCode::AudioCaptureFailed,
-        InfraError::TranscriptionFailed => RuntimeErrorCode::TranscriptionFailed,
+        InfraError::ApiAuthFailed => RuntimeErrorCode::ApiAuthFailed,
+        InfraError::ApiRateLimited => RuntimeErrorCode::ApiRateLimited,
+        InfraError::ApiRequestFailed => RuntimeErrorCode::ApiRequestFailed,
+        InfraError::ApiNetworkFailed => RuntimeErrorCode::ApiNetworkFailed,
+        InfraError::ApiResponseInvalid => RuntimeErrorCode::ApiResponseInvalid,
+        InfraError::ApiEmptyTranscript => RuntimeErrorCode::ApiEmptyTranscript,
         InfraError::OutputFailed => RuntimeErrorCode::OutputFailed,
     }
 }
@@ -80,7 +85,7 @@ mod tests {
 
     impl Transcriber for FailingTranscriber {
         fn transcribe(&mut self, _audio: Vec<u8>) -> Result<String, InfraError> {
-            Err(InfraError::TranscriptionFailed)
+            Err(InfraError::ApiRequestFailed)
         }
     }
 
@@ -145,7 +150,7 @@ mod tests {
 
         let audio = runtime.stop_recording().expect("stop should succeed");
         let result = runtime.transcribe(audio);
-        assert_eq!(result, Err(RuntimeErrorCode::TranscriptionFailed));
+        assert_eq!(result, Err(RuntimeErrorCode::ApiRequestFailed));
     }
 
     #[test]

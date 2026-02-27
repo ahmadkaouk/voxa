@@ -584,7 +584,7 @@ struct FailingTranscriber;
 
 impl Transcriber for FailingTranscriber {
     fn transcribe(&mut self, _audio: Vec<u8>) -> Result<String, InfraError> {
-        Err(InfraError::TranscriptionFailed)
+        Err(InfraError::ApiRequestFailed)
     }
 }
 

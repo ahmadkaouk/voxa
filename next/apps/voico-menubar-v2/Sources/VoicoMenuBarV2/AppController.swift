@@ -351,7 +351,7 @@ final class AppController: ObservableObject {
 
                 publishConnectionStatus(
                     .disconnected(message: error.localizedDescription),
-                    message: "Disconnected. Reconnecting..."
+                    message: "Disconnected: \(error.localizedDescription). Reconnecting..."
                 )
 
                 let sleepDuration = backoffSchedule[min(backoffIndex, backoffSchedule.count - 1)]
@@ -512,33 +512,16 @@ final class AppController: ObservableObject {
     }
 
     private func handleTranscriptionReady(_ text: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            statusMessage = "Transcript ready (empty)"
-            return
-        }
-
-        switch outputMode {
-        case .none:
-            statusMessage = "Transcript ready (output disabled)"
-        case .clipboardOnly:
-            if writeTextToClipboard(text) {
-                statusMessage = "Transcript copied to clipboard"
-            } else {
-                statusMessage = "Transcript ready but clipboard copy failed"
+        statusMessage = processTranscriptOutput(
+            text: text,
+            mode: outputMode,
+            copyToClipboard: { [weak self] value in
+                self?.writeTextToClipboard(value) ?? false
+            },
+            sendAutopaste: { [weak self] in
+                self?.sendCommandVShortcut() ?? false
             }
-        case .clipboardAutopaste:
-            guard writeTextToClipboard(text) else {
-                statusMessage = "Transcript ready but clipboard copy failed"
-                return
-            }
-
-            if sendCommandVShortcut() {
-                statusMessage = "Transcript copied and pasted"
-            } else {
-                statusMessage = "Transcript copied (autopaste failed)"
-            }
-        }
+        )
     }
 
     private func writeTextToClipboard(_ text: String) -> Bool {

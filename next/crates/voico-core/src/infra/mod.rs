@@ -1,7 +1,12 @@
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum InfraError {
     AudioCaptureFailed,
-    TranscriptionFailed,
+    ApiAuthFailed,
+    ApiRateLimited,
+    ApiRequestFailed,
+    ApiNetworkFailed,
+    ApiResponseInvalid,
+    ApiEmptyTranscript,
     OutputFailed,
 }
 

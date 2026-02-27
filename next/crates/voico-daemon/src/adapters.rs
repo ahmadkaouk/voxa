@@ -337,7 +337,7 @@ struct FailingTranscriber;
 
 impl Transcriber for FailingTranscriber {
     fn transcribe(&mut self, _audio: Vec<u8>) -> Result<String, InfraError> {
-        Err(InfraError::TranscriptionFailed)
+        Err(InfraError::ApiRequestFailed)
     }
 }
 
@@ -373,14 +373,14 @@ impl OpenAiTranscriber {
 impl Transcriber for OpenAiTranscriber {
     fn transcribe(&mut self, audio: Vec<u8>) -> Result<String, InfraError> {
         if audio.is_empty() {
-            return Err(InfraError::TranscriptionFailed);
+            return Err(InfraError::ApiRequestFailed);
         }
 
         let api_key = self
             .api_keys
             .get_api_key()
-            .map_err(|_| InfraError::TranscriptionFailed)?
-            .ok_or(InfraError::TranscriptionFailed)?;
+            .map_err(|_| InfraError::ApiRequestFailed)?
+            .ok_or(InfraError::ApiAuthFailed)?;
 
         let form = multipart::Form::new()
             .text("model", self.model.clone())
@@ -389,7 +389,7 @@ impl Transcriber for OpenAiTranscriber {
                 multipart::Part::bytes(audio)
                     .file_name("audio.wav")
                     .mime_str("audio/wav")
-                    .map_err(|_| InfraError::TranscriptionFailed)?,
+                    .map_err(|_| InfraError::ApiRequestFailed)?,
             );
 
         let response = self
@@ -398,18 +398,28 @@ impl Transcriber for OpenAiTranscriber {
             .bearer_auth(api_key)
             .multipart(form)
             .send()
-            .map_err(|_| InfraError::TranscriptionFailed)?;
+            .map_err(|error| {
+                if error.is_timeout() || error.is_connect() {
+                    InfraError::ApiNetworkFailed
+                } else {
+                    InfraError::ApiRequestFailed
+                }
+            })?;
 
         if !response.status().is_success() {
-            return Err(InfraError::TranscriptionFailed);
+            return Err(match response.status().as_u16() {
+                401 | 403 => InfraError::ApiAuthFailed,
+                429 => InfraError::ApiRateLimited,
+                _ => InfraError::ApiRequestFailed,
+            });
         }
 
         let parsed = response
             .json::<TranscriptionResponse>()
-            .map_err(|_| InfraError::TranscriptionFailed)?;
+            .map_err(|_| InfraError::ApiResponseInvalid)?;
         let transcript = parsed.text.trim();
         if transcript.is_empty() {
-            return Err(InfraError::TranscriptionFailed);
+            return Err(InfraError::ApiEmptyTranscript);
         }
 
         Ok(transcript.to_owned())
@@ -536,7 +546,7 @@ mod tests {
             None,
         );
         let result = transcriber.transcribe(wav_bytes());
-        assert_eq!(result, Err(InfraError::TranscriptionFailed));
+        assert_eq!(result, Err(InfraError::ApiAuthFailed));
     }
 
     #[test]
@@ -550,6 +560,6 @@ mod tests {
         let mut transcriber =
             test_transcriber(server.url() + "/v1/audio/transcriptions", Some("test-key"));
         let result = transcriber.transcribe(wav_bytes());
-        assert_eq!(result, Err(InfraError::TranscriptionFailed));
+        assert_eq!(result, Err(InfraError::ApiAuthFailed));
     }
 }

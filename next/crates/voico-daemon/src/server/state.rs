@@ -358,6 +358,7 @@ impl SharedState {
 
                 if let Err(code) = self.runtime.start_recording() {
                     let _ = self.machine.apply(DomainEvent::RecordingFailed);
+                    self.machine.set_last_error(code);
                     self.session_id = None;
                     self.recording_deadline = None;
                     self.emit_state_changed();
@@ -407,6 +408,7 @@ impl SharedState {
             Ok(audio) => audio,
             Err(code) => {
                 let _ = self.machine.apply(DomainEvent::RecordingFailed);
+                self.machine.set_last_error(code);
                 self.session_id = None;
                 self.emit_state_changed();
                 return Err(runtime_error_payload(code, "Failed to stop audio capture"));
@@ -441,6 +443,7 @@ impl SharedState {
             Ok(text) => text,
             Err(code) => {
                 let _ = self.machine.apply(DomainEvent::TranscriptionFailed);
+                self.machine.set_last_error(code);
                 self.session_id = None;
                 self.emit_state_changed();
                 return Err(runtime_error_payload(code, "Transcription failed"));
@@ -524,7 +527,12 @@ impl SharedState {
 fn runtime_error_code_to_string(code: RuntimeErrorCode) -> String {
     match code {
         RuntimeErrorCode::AudioCaptureFailed => "AUDIO_CAPTURE_FAILED".to_owned(),
-        RuntimeErrorCode::TranscriptionFailed => "API_REQUEST_FAILED".to_owned(),
+        RuntimeErrorCode::ApiAuthFailed => "API_AUTH_FAILED".to_owned(),
+        RuntimeErrorCode::ApiRateLimited => "API_RATE_LIMITED".to_owned(),
+        RuntimeErrorCode::ApiRequestFailed => "API_REQUEST_FAILED".to_owned(),
+        RuntimeErrorCode::ApiNetworkFailed => "API_NETWORK_FAILED".to_owned(),
+        RuntimeErrorCode::ApiResponseInvalid => "API_RESPONSE_INVALID".to_owned(),
+        RuntimeErrorCode::ApiEmptyTranscript => "API_EMPTY_TRANSCRIPT".to_owned(),
         RuntimeErrorCode::OutputFailed => "OUTPUT_FAILED".to_owned(),
     }
 }
