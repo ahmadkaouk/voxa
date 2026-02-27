@@ -80,6 +80,15 @@ fn run() -> Result<(), String> {
                 }
             }
         }
+        "events" => {
+            let _ = client.request("subscribe", json!({}))?;
+            loop {
+                let envelope = client.read()?;
+                if let ServerEnvelope::Event(event) = envelope {
+                    print_json(&json!(event))?;
+                }
+            }
+        }
         _ => {
             return Err(format!(
                 "Unknown command '{command}'. Run 'voicoctl help' for usage."
@@ -99,6 +108,7 @@ fn print_usage() {
     println!("  voicoctl stop [manual|hotkey_toggle|hotkey_hold_release|max_duration]");
     println!("  voicoctl config get");
     println!("  voicoctl config set <key> <value>");
+    println!("  voicoctl events");
     println!("    keys: toggle_hotkey, hold_hotkey, model, output_mode, max_recording_seconds");
     println!("\nEnvironment:");
     println!("  VOICO_SOCKET   Override daemon socket path");
@@ -214,7 +224,7 @@ impl IpcClient {
 
         write_envelope(&mut self.stream, &request).map_err(|err| err.to_string())?;
 
-        let envelope = read_server_envelope(&mut self.reader).map_err(|err| err.to_string())?;
+        let envelope = self.read()?;
         match envelope {
             ServerEnvelope::Response(response) if response.ok => response
                 .result
@@ -227,6 +237,10 @@ impl IpcClient {
             }
             other => Err(format!("unexpected envelope: {other:?}")),
         }
+    }
+
+    fn read(&mut self) -> Result<ServerEnvelope, String> {
+        read_server_envelope(&mut self.reader).map_err(|err| err.to_string())
     }
 }
 

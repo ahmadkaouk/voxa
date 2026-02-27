@@ -13,6 +13,7 @@ cargo run -p voicoctl -- stop manual
 cargo run -p voicoctl -- config get
 cargo run -p voicoctl -- config set model gpt-4o-transcribe
 cargo run -p voicoctl -- config set max_recording_seconds 120
+cargo run -p voicoctl -- events
 ```
 
 Defaults:
@@ -23,6 +24,11 @@ Allowed values:
 - start origins: `manual`, `hotkey_toggle`, `hotkey_hold`
 - stop reasons: `manual`, `hotkey_toggle`, `hotkey_hold_release`, `max_duration`
 - config keys: `toggle_hotkey`, `hold_hotkey`, `model`, `output_mode`, `max_recording_seconds`
+
+`events`:
+- subscribes to daemon event stream
+- prints each event payload as JSON
+- runs until interrupted
 
 ## Socket
 
