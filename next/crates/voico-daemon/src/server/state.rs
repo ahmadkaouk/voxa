@@ -95,7 +95,11 @@ impl SharedState {
     pub(super) fn from_disk() -> io::Result<Self> {
         let config_path = default_config_path()?;
         let config = load_config_from_disk(&config_path);
-        let runtime = build_runtime_for_output_mode(&config.output_mode);
+        let runtime = build_runtime_for_output_mode(
+            &config.output_mode,
+            &config.model,
+            &config.api_key_source,
+        );
         let api_keys = build_api_key_store(&config.api_key_source);
         Ok(Self::with_config_and_runtime(
             config,
@@ -273,7 +277,11 @@ impl SharedState {
                 details: None,
             })?;
         }
-        self.runtime = build_runtime_for_output_mode(&next_config.output_mode);
+        self.runtime = build_runtime_for_output_mode(
+            &next_config.output_mode,
+            &next_config.model,
+            &next_config.api_key_source,
+        );
         self.config = next_config;
         Ok(json!({ "revision": self.config.revision }))
     }
