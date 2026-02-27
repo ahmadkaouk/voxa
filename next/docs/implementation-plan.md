@@ -59,22 +59,22 @@
 
 ## Phase 3: Daemon Runtime + IPC Server
 ### Tasks
-- [ ] Add daemon process entrypoint (`voico-daemon`).
+- [x] Add daemon process entrypoint (`voico-daemon`).
 - [ ] Integrate adapters: hotkey, audio capture, STT, output.
-- [ ] Expose IPC endpoints:
-  - [ ] `health`
-  - [ ] `get_state`
-  - [ ] `start_recording`
-  - [ ] `stop_recording`
-  - [ ] `set_config` / `get_config`
-- [ ] Add event broadcast subscription channel.
+- [x] Expose IPC endpoints:
+  - [x] `health`
+  - [x] `get_state`
+  - [x] `start_recording`
+  - [x] `stop_recording`
+  - [x] `set_config` / `get_config`
+- [x] Add event broadcast subscription channel.
 
 ### Deliverables
-- [ ] Headless daemon that can be controlled entirely through IPC.
+- [x] Headless daemon that can be controlled entirely through IPC.
 
 ### Acceptance Criteria
-- [ ] Manual smoke: connect client, call `get_state`, start/stop recording.
-- [ ] Event stream emits lifecycle events in correct order.
+- [x] Manual smoke: connect client, call `get_state`, start/stop recording.
+- [x] Event stream emits lifecycle events in correct order.
 - [ ] Daemon remains alive after session-level failures.
 
 ## Phase 4: Menubar v2 Client Integration

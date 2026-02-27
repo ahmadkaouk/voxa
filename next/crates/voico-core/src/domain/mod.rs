@@ -24,6 +24,7 @@ pub enum RecordingOrigin {
 pub enum DomainEvent {
     TogglePressed,
     HoldPressed,
+    ManualPressed,
     HoldReleased,
     MaxDurationReached,
     RecordingStopped,
@@ -62,6 +63,7 @@ pub enum SessionStateTag {
 pub enum DomainEventTag {
     TogglePressed,
     HoldPressed,
+    ManualPressed,
     HoldReleased,
     MaxDurationReached,
     RecordingStopped,
@@ -122,6 +124,10 @@ impl SessionMachine {
                 self.start_recording(RecordingOrigin::Hold);
                 Ok(ApplyResult::Transitioned)
             }
+            (SessionState::Idle, DomainEvent::ManualPressed) => {
+                self.start_recording(RecordingOrigin::Manual);
+                Ok(ApplyResult::Transitioned)
+            }
             (SessionState::Idle, DomainEvent::Reset) => Ok(ApplyResult::Noop),
 
             (SessionState::Recording(recording), DomainEvent::TogglePressed) => {
@@ -129,6 +135,7 @@ impl SessionMachine {
                 Ok(ApplyResult::Noop)
             }
             (SessionState::Recording(_), DomainEvent::HoldPressed) => Ok(ApplyResult::Noop),
+            (SessionState::Recording(_), DomainEvent::ManualPressed) => Ok(ApplyResult::Noop),
             (SessionState::Recording(recording), DomainEvent::HoldReleased) => {
                 if recording.origin == RecordingOrigin::Hold {
                     self.request_stop(recording);
@@ -235,6 +242,7 @@ impl DomainEvent {
         match self {
             Self::TogglePressed => DomainEventTag::TogglePressed,
             Self::HoldPressed => DomainEventTag::HoldPressed,
+            Self::ManualPressed => DomainEventTag::ManualPressed,
             Self::HoldReleased => DomainEventTag::HoldReleased,
             Self::MaxDurationReached => DomainEventTag::MaxDurationReached,
             Self::RecordingStopped => DomainEventTag::RecordingStopped,
@@ -281,6 +289,21 @@ mod tests {
             machine.state(),
             SessionState::Recording(RecordingState {
                 origin: RecordingOrigin::Hold,
+                stop_requested: false,
+            })
+        );
+    }
+
+    #[test]
+    fn manual_start_starts_recording_from_idle() {
+        let mut machine = SessionMachine::new();
+
+        let result = machine.apply(DomainEvent::ManualPressed);
+        assert_eq!(result, Ok(ApplyResult::Transitioned));
+        assert_eq!(
+            machine.state(),
+            SessionState::Recording(RecordingState {
+                origin: RecordingOrigin::Manual,
                 stop_requested: false,
             })
         );
@@ -376,7 +399,10 @@ mod tests {
         let record_failed = machine.apply(DomainEvent::RecordingFailed);
         assert_eq!(record_failed, Ok(ApplyResult::Transitioned));
         assert_eq!(machine.state(), SessionState::Error);
-        assert_eq!(machine.last_error(), Some(RuntimeErrorCode::AudioCaptureFailed));
+        assert_eq!(
+            machine.last_error(),
+            Some(RuntimeErrorCode::AudioCaptureFailed)
+        );
 
         let reset = machine.apply(DomainEvent::Reset);
         assert_eq!(reset, Ok(ApplyResult::Transitioned));
