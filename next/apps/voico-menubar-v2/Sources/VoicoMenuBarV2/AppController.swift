@@ -63,7 +63,6 @@ final class AppController: ObservableObject {
         ) { [weak self] _ in
             self?.handleAppTermination()
         }
-        autoStartDaemonOnLaunch()
         startEventLoop()
     }
 
@@ -328,9 +327,11 @@ final class AppController: ObservableObject {
                 return
             }
 
-            publishConnectionStatus(.connecting, message: "Connecting to daemon...")
+            publishConnectionStatus(.connecting, message: "Starting daemon...")
 
             do {
+                try ensureDaemonRunning()
+                publishConnectionStatus(.connecting, message: "Connecting to daemon...")
                 let state = try transport.getState()
                 let config = try transport.getConfig()
                 let apiKeyStatus = try transport.getAPIKeyStatus()
@@ -673,13 +674,6 @@ final class AppController: ObservableObject {
     private var daemonLogsDirectory: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Library/Logs/voico-v2"
-    }
-
-    private func autoStartDaemonOnLaunch() {
-        requestQueue.async { [weak self] in
-            guard let self else { return }
-            _ = try? self.ensureDaemonRunning()
-        }
     }
 
     private func ensureDaemonRunning() throws {
