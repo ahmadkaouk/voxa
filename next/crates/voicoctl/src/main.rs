@@ -4,7 +4,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use voico_core::ipc::{
     API_VERSION, ClientEnvelope, HelloRequest, RequestEnvelope, ServerEnvelope, StartOrigin,
     StopReason,
@@ -51,6 +51,35 @@ fn run() -> Result<(), String> {
             let result = client.request("stop_recording", json!({ "reason": reason }))?;
             print_json(&result)?;
         }
+        "config" => {
+            let Some(action) = args.next() else {
+                return Err("Missing config action. Expected 'get' or 'set'.".to_owned());
+            };
+
+            match action.as_str() {
+                "get" => {
+                    let result = client.request("get_config", json!({}))?;
+                    print_json(&result)?;
+                }
+                "set" => {
+                    let Some(key) = args.next() else {
+                        return Err("Missing config key for 'config set'.".to_owned());
+                    };
+                    let Some(value) = args.next() else {
+                        return Err("Missing config value for 'config set'.".to_owned());
+                    };
+
+                    let params = parse_config_set_params(&key, &value)?;
+                    let result = client.request("set_config", params)?;
+                    print_json(&result)?;
+                }
+                _ => {
+                    return Err(format!(
+                        "Unknown config action '{action}'. Expected 'get' or 'set'."
+                    ));
+                }
+            }
+        }
         _ => {
             return Err(format!(
                 "Unknown command '{command}'. Run 'voicoctl help' for usage."
@@ -68,6 +97,9 @@ fn print_usage() {
     println!("  voicoctl status");
     println!("  voicoctl start [manual|hotkey_toggle|hotkey_hold]");
     println!("  voicoctl stop [manual|hotkey_toggle|hotkey_hold_release|max_duration]");
+    println!("  voicoctl config get");
+    println!("  voicoctl config set <key> <value>");
+    println!("    keys: toggle_hotkey, hold_hotkey, model, output_mode, max_recording_seconds");
     println!("\nEnvironment:");
     println!("  VOICO_SOCKET   Override daemon socket path");
 }
@@ -105,6 +137,28 @@ fn parse_stop_reason(value: Option<&str>) -> Result<StopReason, String> {
             "Invalid stop reason '{other}'. Expected manual, hotkey_toggle, hotkey_hold_release, or max_duration."
         )),
     }
+}
+
+fn parse_config_set_params(key: &str, value: &str) -> Result<Value, String> {
+    let mut params = Map::new();
+    match key {
+        "toggle_hotkey" | "hold_hotkey" | "model" | "output_mode" => {
+            params.insert(key.to_owned(), Value::String(value.to_owned()));
+        }
+        "max_recording_seconds" => {
+            let parsed = value
+                .parse::<u64>()
+                .map_err(|_| "max_recording_seconds must be a positive integer".to_owned())?;
+            params.insert(key.to_owned(), json!(parsed));
+        }
+        _ => {
+            return Err(format!(
+                "Invalid config key '{key}'. Expected toggle_hotkey, hold_hotkey, model, output_mode, or max_recording_seconds."
+            ));
+        }
+    }
+
+    Ok(Value::Object(params))
 }
 
 fn print_json(value: &Value) -> Result<(), String> {
@@ -200,7 +254,9 @@ fn read_server_envelope(reader: &mut BufReader<UnixStream>) -> io::Result<Server
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_start_origin, parse_stop_reason};
+    use serde_json::json;
+
+    use super::{parse_config_set_params, parse_start_origin, parse_stop_reason};
     use voico_core::ipc::{StartOrigin, StopReason};
 
     #[test]
@@ -240,6 +296,28 @@ mod tests {
         assert_eq!(
             parse_stop_reason(Some("max_duration")),
             Ok(StopReason::MaxDuration)
+        );
+    }
+
+    #[test]
+    fn parse_config_set_params_supports_string_fields() {
+        let result = parse_config_set_params("model", "gpt-4o-mini-transcribe");
+        assert_eq!(
+            result,
+            Ok(json!({
+                "model": "gpt-4o-mini-transcribe"
+            }))
+        );
+    }
+
+    #[test]
+    fn parse_config_set_params_supports_numeric_fields() {
+        let result = parse_config_set_params("max_recording_seconds", "120");
+        assert_eq!(
+            result,
+            Ok(json!({
+                "max_recording_seconds": 120
+            }))
         );
     }
 }
