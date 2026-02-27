@@ -1,0 +1,328 @@
+use std::time::Instant;
+
+use serde::Deserialize;
+use serde_json::{Value, json};
+use voico_core::domain::{
+    ApplyResult, DomainEvent, RecordingOrigin, RuntimeErrorCode, SessionMachine, SessionState,
+};
+use voico_core::ipc::{
+    ConfigResult, ErrorPayload, EventEnvelope, IpcRuntimeState, ServerEnvelope, StartOrigin,
+    StateResult, StopReason,
+};
+
+use super::connection::ConnectionHandle;
+
+#[derive(Debug, Clone)]
+struct DaemonConfig {
+    toggle_hotkey: String,
+    hold_hotkey: String,
+    model: String,
+    output_mode: String,
+    max_recording_seconds: u64,
+    api_key_source: String,
+    revision: u64,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            toggle_hotkey: "right_option".to_owned(),
+            hold_hotkey: "fn".to_owned(),
+            model: "gpt-4o-mini-transcribe".to_owned(),
+            output_mode: "clipboard_autopaste".to_owned(),
+            max_recording_seconds: 300,
+            api_key_source: "keychain".to_owned(),
+            revision: 1,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct SetConfigParams {
+    #[serde(default)]
+    toggle_hotkey: Option<String>,
+    #[serde(default)]
+    hold_hotkey: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    output_mode: Option<String>,
+    #[serde(default)]
+    max_recording_seconds: Option<u64>,
+}
+
+pub(super) struct SharedState {
+    machine: SessionMachine,
+    session_counter: u64,
+    session_id: Option<String>,
+    event_seq: u64,
+    outbox: Vec<EventEnvelope>,
+    started_at: Instant,
+    subscribers: Vec<ConnectionHandle>,
+    config: DaemonConfig,
+}
+
+impl SharedState {
+    pub(super) fn new() -> Self {
+        Self {
+            machine: SessionMachine::new(),
+            session_counter: 0,
+            session_id: None,
+            event_seq: 0,
+            outbox: Vec::new(),
+            started_at: Instant::now(),
+            subscribers: Vec::new(),
+            config: DaemonConfig::default(),
+        }
+    }
+
+    pub(super) fn uptime_ms(&self) -> u64 {
+        self.started_at.elapsed().as_millis() as u64
+    }
+
+    pub(super) fn state_result(&self) -> StateResult {
+        let state = match self.machine.state() {
+            SessionState::Idle => IpcRuntimeState::Idle,
+            SessionState::Recording(_) => IpcRuntimeState::Recording,
+            SessionState::Transcribing => IpcRuntimeState::Transcribing,
+            SessionState::Outputting => IpcRuntimeState::Outputting,
+            SessionState::Error => IpcRuntimeState::Error,
+        };
+
+        let recording_origin = match self.machine.state() {
+            SessionState::Recording(recording) => Some(match recording.origin {
+                RecordingOrigin::Manual => StartOrigin::Manual,
+                RecordingOrigin::Toggle => StartOrigin::HotkeyToggle,
+                RecordingOrigin::Hold => StartOrigin::HotkeyHold,
+            }),
+            _ => None,
+        };
+
+        let last_error = self.machine.last_error().map(runtime_error_code_to_string);
+
+        StateResult {
+            state,
+            session: self.session_id.clone(),
+            recording_origin,
+            is_busy: !matches!(self.machine.state(), SessionState::Idle),
+            last_error,
+            config_revision: self.config.revision,
+            event_seq: self.event_seq,
+        }
+    }
+
+    pub(super) fn config_result(&self) -> ConfigResult {
+        ConfigResult {
+            toggle_hotkey: self.config.toggle_hotkey.clone(),
+            hold_hotkey: self.config.hold_hotkey.clone(),
+            model: self.config.model.clone(),
+            output_mode: self.config.output_mode.clone(),
+            max_recording_seconds: self.config.max_recording_seconds,
+            api_key_source: self.config.api_key_source.clone(),
+            revision: self.config.revision,
+        }
+    }
+
+    pub(super) fn subscribe(&mut self, connection: ConnectionHandle) -> Value {
+        self.subscribers.push(connection);
+        json!({
+            "subscribed": true,
+            "current_seq": self.event_seq
+        })
+    }
+
+    pub(super) fn notify_subscribers(&mut self, envelope: &ServerEnvelope) {
+        let mut index = 0;
+        while index < self.subscribers.len() {
+            if self.subscribers[index].send(envelope.clone()).is_err() {
+                self.subscribers.swap_remove(index);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    pub(super) fn set_config(&mut self, params: SetConfigParams) -> Result<Value, ErrorPayload> {
+        let mut next_config = self.config.clone();
+
+        if let Some(toggle_hotkey) = params.toggle_hotkey {
+            next_config.toggle_hotkey = toggle_hotkey;
+        }
+        if let Some(hold_hotkey) = params.hold_hotkey {
+            next_config.hold_hotkey = hold_hotkey;
+        }
+        if let Some(model) = params.model {
+            next_config.model = model;
+        }
+        if let Some(output_mode) = params.output_mode {
+            next_config.output_mode = output_mode;
+        }
+        if let Some(max_recording_seconds) = params.max_recording_seconds {
+            if max_recording_seconds == 0 {
+                return Err(ErrorPayload {
+                    code: "CONFIG_INVALID".to_owned(),
+                    message: "max_recording_seconds must be greater than 0".to_owned(),
+                    details: None,
+                });
+            }
+            next_config.max_recording_seconds = max_recording_seconds;
+        }
+
+        if next_config.toggle_hotkey == next_config.hold_hotkey {
+            return Err(ErrorPayload {
+                code: "CONFIG_HOTKEY_CONFLICT".to_owned(),
+                message: "toggle_hotkey and hold_hotkey cannot be the same".to_owned(),
+                details: None,
+            });
+        }
+
+        next_config.revision = self.config.revision + 1;
+        self.config = next_config;
+        Ok(json!({ "revision": self.config.revision }))
+    }
+
+    pub(super) fn start_recording(&mut self, origin: StartOrigin) -> Result<Value, ErrorPayload> {
+        if !matches!(self.machine.state(), SessionState::Idle) {
+            return Ok(json!({ "accepted": true }));
+        }
+
+        let event = match origin {
+            StartOrigin::Manual => DomainEvent::ManualPressed,
+            StartOrigin::HotkeyToggle => DomainEvent::TogglePressed,
+            StartOrigin::HotkeyHold => DomainEvent::HoldPressed,
+        };
+
+        let result = self.machine.apply(event);
+        match result {
+            Ok(ApplyResult::Transitioned) => {
+                self.session_counter += 1;
+                self.session_id = Some(format!("s-{}", self.session_counter));
+                self.emit_state_changed();
+                self.emit_event(
+                    "recording_started",
+                    json!({
+                        "session_id": self.session_id,
+                        "origin": origin
+                    }),
+                );
+                Ok(json!({ "accepted": true }))
+            }
+            Ok(ApplyResult::Noop) => Ok(json!({ "accepted": true })),
+            Err(_) => Err(ErrorPayload {
+                code: "INVALID_STATE_TRANSITION".to_owned(),
+                message: "Invalid start_recording transition".to_owned(),
+                details: None,
+            }),
+        }
+    }
+
+    pub(super) fn stop_recording(&mut self, reason: StopReason) -> Result<Value, ErrorPayload> {
+        if !matches!(self.machine.state(), SessionState::Recording(_)) {
+            return Ok(json!({ "accepted": true }));
+        }
+
+        let stop_event = match reason {
+            StopReason::Manual | StopReason::HotkeyToggle => DomainEvent::TogglePressed,
+            StopReason::HotkeyHoldRelease => DomainEvent::HoldReleased,
+            StopReason::MaxDuration => DomainEvent::MaxDurationReached,
+        };
+
+        let _ = self.machine.apply(stop_event).map_err(|_| ErrorPayload {
+            code: "INVALID_STATE_TRANSITION".to_owned(),
+            message: "Invalid stop request transition".to_owned(),
+            details: None,
+        })?;
+
+        let _ = self
+            .machine
+            .apply(DomainEvent::RecordingStopped)
+            .map_err(|_| ErrorPayload {
+                code: "INVALID_STATE_TRANSITION".to_owned(),
+                message: "Could not move to transcribing state".to_owned(),
+                details: None,
+            })?;
+
+        self.emit_event(
+            "recording_stopped",
+            json!({
+                "session_id": self.session_id,
+                "reason": reason
+            }),
+        );
+        self.emit_state_changed();
+        self.emit_event(
+            "transcribing_started",
+            json!({
+                "session_id": self.session_id
+            }),
+        );
+
+        let _ = self
+            .machine
+            .apply(DomainEvent::TranscriptionSucceeded)
+            .map_err(|_| ErrorPayload {
+                code: "INVALID_STATE_TRANSITION".to_owned(),
+                message: "Could not move to outputting state".to_owned(),
+                details: None,
+            })?;
+
+        self.emit_event(
+            "transcription_ready",
+            json!({
+                "session_id": self.session_id,
+                "text_length": 0
+            }),
+        );
+        self.emit_state_changed();
+
+        let _ = self
+            .machine
+            .apply(DomainEvent::OutputCompleted)
+            .map_err(|_| ErrorPayload {
+                code: "INVALID_STATE_TRANSITION".to_owned(),
+                message: "Could not complete output transition".to_owned(),
+                details: None,
+            })?;
+
+        self.emit_event(
+            "output_done",
+            json!({
+                "session_id": self.session_id,
+                "clipboard": false,
+                "autopaste": false
+            }),
+        );
+        self.session_id = None;
+        self.emit_state_changed();
+
+        Ok(json!({ "accepted": true }))
+    }
+
+    fn emit_state_changed(&mut self) {
+        let state = self.state_result();
+        if let Ok(data) = serde_json::to_value(state) {
+            self.emit_event("state_changed", data);
+        }
+    }
+
+    fn emit_event(&mut self, name: &str, data: Value) {
+        self.event_seq += 1;
+        self.outbox.push(EventEnvelope {
+            name: name.to_owned(),
+            seq: self.event_seq,
+            data,
+        });
+    }
+
+    pub(super) fn drain_outbox(&mut self) -> Vec<EventEnvelope> {
+        std::mem::take(&mut self.outbox)
+    }
+}
+
+fn runtime_error_code_to_string(code: RuntimeErrorCode) -> String {
+    match code {
+        RuntimeErrorCode::AudioCaptureFailed => "AUDIO_CAPTURE_FAILED".to_owned(),
+        RuntimeErrorCode::TranscriptionFailed => "API_REQUEST_FAILED".to_owned(),
+        RuntimeErrorCode::OutputFailed => "OUTPUT_FAILED".to_owned(),
+    }
+}
