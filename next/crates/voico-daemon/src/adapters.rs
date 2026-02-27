@@ -8,19 +8,36 @@ use voico_core::infra::{
 };
 
 const PBCOPY_PATH: &str = "/usr/bin/pbcopy";
+const OUTPUT_MODE_CLIPBOARD_AUTOPASTE: &str = "clipboard_autopaste";
+const OUTPUT_MODE_CLIPBOARD_ONLY: &str = "clipboard_only";
+const OUTPUT_MODE_NONE: &str = "none";
 
 pub(crate) fn build_runtime() -> SessionRuntime {
-    let output: Box<dyn OutputSink> = if Path::new(PBCOPY_PATH).exists() {
-        Box::new(ClipboardOutputSink)
-    } else {
-        Box::new(NullOutputSink)
-    };
+    build_runtime_for_output_mode(OUTPUT_MODE_CLIPBOARD_AUTOPASTE)
+}
+
+pub(crate) fn build_runtime_for_output_mode(output_mode: &str) -> SessionRuntime {
+    let output = build_output_sink(output_mode);
 
     SessionRuntime::new(
         Box::new(NullRecorder::default()),
         Box::new(NullTranscriber),
         output,
     )
+}
+
+fn build_output_sink(output_mode: &str) -> Box<dyn OutputSink> {
+    match output_mode {
+        OUTPUT_MODE_NONE => Box::new(NullOutputSink),
+        OUTPUT_MODE_CLIPBOARD_ONLY | OUTPUT_MODE_CLIPBOARD_AUTOPASTE => {
+            if Path::new(PBCOPY_PATH).exists() {
+                Box::new(ClipboardOutputSink)
+            } else {
+                Box::new(NullOutputSink)
+            }
+        }
+        _ => Box::new(NullOutputSink),
+    }
 }
 
 struct ClipboardOutputSink;

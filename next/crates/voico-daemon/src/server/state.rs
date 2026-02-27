@@ -12,6 +12,7 @@ use voico_core::ipc::{
 };
 
 use super::connection::ConnectionHandle;
+use crate::adapters::build_runtime_for_output_mode;
 
 #[derive(Debug, Clone)]
 struct DaemonConfig {
@@ -179,7 +180,24 @@ impl SharedState {
             });
         }
 
+        if !is_valid_model(&next_config.model) {
+            return Err(ErrorPayload {
+                code: "CONFIG_INVALID".to_owned(),
+                message: "model is not supported".to_owned(),
+                details: None,
+            });
+        }
+
+        if !is_valid_output_mode(&next_config.output_mode) {
+            return Err(ErrorPayload {
+                code: "CONFIG_INVALID".to_owned(),
+                message: "output_mode is not supported".to_owned(),
+                details: None,
+            });
+        }
+
         next_config.revision = self.config.revision + 1;
+        self.runtime = build_runtime_for_output_mode(&next_config.output_mode);
         self.config = next_config;
         Ok(json!({ "revision": self.config.revision }))
     }
@@ -374,4 +392,12 @@ fn runtime_error_payload(code: RuntimeErrorCode, message: &str) -> ErrorPayload 
         message: message.to_owned(),
         details: None,
     }
+}
+
+fn is_valid_model(model: &str) -> bool {
+    matches!(model, "gpt-4o-mini-transcribe" | "gpt-4o-transcribe")
+}
+
+fn is_valid_output_mode(mode: &str) -> bool {
+    matches!(mode, "clipboard_autopaste" | "clipboard_only" | "none")
 }

@@ -276,6 +276,47 @@ fn set_config_failure_does_not_mutate_existing_config() {
 }
 
 #[test]
+fn set_config_rejects_unsupported_model_and_output_mode() {
+    let path = temp_socket_path("cfg-values");
+    let (running, handle) = start_server(path.clone());
+    wait_for_socket(&path);
+
+    let (mut stream, mut reader) = connect_and_handshake(&path);
+
+    let initial = send_request(&mut stream, &mut reader, "1", "get_config", json!({}));
+    let initial_revision = initial["revision"].as_u64().unwrap_or(0);
+
+    let model_error = send_request_expect_error(
+        &mut stream,
+        &mut reader,
+        "2",
+        "set_config",
+        json!({
+            "model": "unknown-model"
+        }),
+    );
+    assert_eq!(model_error, "CONFIG_INVALID");
+
+    let output_mode_error = send_request_expect_error(
+        &mut stream,
+        &mut reader,
+        "3",
+        "set_config",
+        json!({
+            "output_mode": "invalid_mode"
+        }),
+    );
+    assert_eq!(output_mode_error, "CONFIG_INVALID");
+
+    let after = send_request(&mut stream, &mut reader, "4", "get_config", json!({}));
+    assert_eq!(after["model"], initial["model"]);
+    assert_eq!(after["output_mode"], initial["output_mode"]);
+    assert_eq!(after["revision"].as_u64().unwrap_or(0), initial_revision);
+
+    stop_server(&path, running, handle);
+}
+
+#[test]
 fn malformed_request_returns_error_and_closes_connection() {
     let path = temp_socket_path("bad");
     let (running, handle) = start_server(path.clone());
