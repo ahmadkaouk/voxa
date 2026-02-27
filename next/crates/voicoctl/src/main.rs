@@ -80,6 +80,35 @@ fn run() -> Result<(), String> {
                 }
             }
         }
+        "api-key" => {
+            let Some(action) = args.next() else {
+                return Err("Missing api-key action. Expected 'status' or 'set'.".to_owned());
+            };
+
+            match action.as_str() {
+                "status" => {
+                    let result = client.request("get_api_key_status", json!({}))?;
+                    print_json(&result)?;
+                }
+                "set" => {
+                    let Some(api_key) = args.next() else {
+                        return Err("Missing API key for 'api-key set'.".to_owned());
+                    };
+                    let result = client.request(
+                        "set_api_key",
+                        json!({
+                            "api_key": api_key
+                        }),
+                    )?;
+                    print_json(&result)?;
+                }
+                _ => {
+                    return Err(format!(
+                        "Unknown api-key action '{action}'. Expected 'status' or 'set'."
+                    ));
+                }
+            }
+        }
         "events" => {
             let _ = client.request("subscribe", json!({}))?;
             loop {
@@ -108,6 +137,8 @@ fn print_usage() {
     println!("  voicoctl stop [manual|hotkey_toggle|hotkey_hold_release|max_duration]");
     println!("  voicoctl config get");
     println!("  voicoctl config set <key> <value>");
+    println!("  voicoctl api-key status");
+    println!("  voicoctl api-key set <value>");
     println!("  voicoctl events");
     println!("    keys: toggle_hotkey, hold_hotkey, model, output_mode, max_recording_seconds");
     println!("\nEnvironment:");

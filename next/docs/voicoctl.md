@@ -13,6 +13,8 @@ cargo run -p voicoctl -- stop manual
 cargo run -p voicoctl -- config get
 cargo run -p voicoctl -- config set model gpt-4o-transcribe
 cargo run -p voicoctl -- config set max_recording_seconds 120
+cargo run -p voicoctl -- api-key status
+cargo run -p voicoctl -- api-key set sk-your-key
 cargo run -p voicoctl -- events
 ```
 
@@ -24,6 +26,7 @@ Allowed values:
 - start origins: `manual`, `hotkey_toggle`, `hotkey_hold`
 - stop reasons: `manual`, `hotkey_toggle`, `hotkey_hold_release`, `max_duration`
 - config keys: `toggle_hotkey`, `hold_hotkey`, `model`, `output_mode`, `max_recording_seconds`
+- api-key actions: `status`, `set <value>`
 
 `events`:
 - subscribes to daemon event stream
@@ -59,3 +62,7 @@ VOICO_SOCKET=/tmp/voico-test.sock cargo run -p voicoctl -- status
 - `Malformed request`:
   - Usually indicates protocol mismatch or a local binary mismatch.
   - Rebuild workspace and retry.
+
+- `Failed to store API key`:
+  - Keychain write failed (permissions or keychain unavailable).
+  - Retry while logged in to the user session; if needed use `OPENAI_API_KEY` env fallback.
