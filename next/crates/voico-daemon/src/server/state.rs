@@ -212,17 +212,6 @@ impl SharedState {
         }
     }
 
-    pub(super) fn hotkey_bindings(&self) -> (String, String) {
-        (
-            self.config.toggle_hotkey.clone(),
-            self.config.hold_hotkey.clone(),
-        )
-    }
-
-    pub(super) fn is_recording(&self) -> bool {
-        matches!(self.machine.state(), SessionState::Recording(_))
-    }
-
     pub(super) fn subscribe(&mut self, connection: ConnectionHandle) -> Value {
         self.subscribers.push(connection);
         json!({

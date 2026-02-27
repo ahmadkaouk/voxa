@@ -1,5 +1,4 @@
 mod connection;
-mod hotkeys;
 mod state;
 
 #[cfg(test)]
@@ -18,7 +17,7 @@ use serde_json::Value;
 use voico_core::ipc::{
     API_VERSION, ClientEnvelope, ErrorPayload, EventEnvelope, HealthResult, RequestEnvelope,
     ResponseEnvelope, ServerEnvelope, SetApiKeyParams, StartOrigin, StartRecordingParams,
-    StopReason, StopRecordingParams, SubscribeParams,
+    StopRecordingParams, SubscribeParams,
 };
 
 use self::connection::ConnectionHandle;
@@ -26,7 +25,6 @@ use self::state::{SetConfigParams, SharedState};
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_DURATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const HOTKEY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub fn run(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Result<()> {
     let state = SharedState::from_disk()?;
@@ -93,22 +91,6 @@ fn run_with_state(
             event_tx_for_watchdog,
         )
     });
-    #[cfg(not(test))]
-    {
-        let (hotkey_tx, hotkey_rx) = mpsc::channel::<hotkeys::HotkeyInputEvent>();
-        hotkeys::spawn_hotkey_event_listener(hotkey_tx);
-        let shared_for_hotkey = Arc::clone(&shared);
-        let running_for_hotkey = Arc::clone(&running);
-        let event_tx_for_hotkey = event_tx.clone();
-        thread::spawn(move || {
-            run_hotkey_worker(
-                running_for_hotkey,
-                shared_for_hotkey,
-                event_tx_for_hotkey,
-                hotkey_rx,
-            )
-        });
-    }
 
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
@@ -481,78 +463,6 @@ fn run_max_duration_watchdog(
         }
         drop(state);
         thread::sleep(MAX_DURATION_POLL_INTERVAL);
-    }
-}
-
-#[cfg(not(test))]
-fn run_hotkey_worker(
-    running: Arc<AtomicBool>,
-    shared: Arc<Mutex<SharedState>>,
-    event_tx: mpsc::Sender<EventEnvelope>,
-    hotkey_rx: mpsc::Receiver<hotkeys::HotkeyInputEvent>,
-) {
-    use self::hotkeys::{ConfiguredHotkey, HotkeyMatcher, HotkeySignal};
-
-    let mut toggle_hotkey_raw = String::new();
-    let mut hold_hotkey_raw = String::new();
-    let mut toggle_matcher = HotkeyMatcher::new(ConfiguredHotkey::Unsupported);
-    let mut hold_matcher = HotkeyMatcher::new(ConfiguredHotkey::Unsupported);
-
-    while running.load(Ordering::SeqCst) {
-        let event = match hotkey_rx.recv_timeout(HOTKEY_POLL_INTERVAL) {
-            Ok(event) => event,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-        };
-
-        let mut state = match shared.lock() {
-            Ok(state) => state,
-            Err(_) => return,
-        };
-
-        let (next_toggle_hotkey, next_hold_hotkey) = state.hotkey_bindings();
-        if next_toggle_hotkey != toggle_hotkey_raw {
-            toggle_hotkey_raw = next_toggle_hotkey;
-            toggle_matcher = HotkeyMatcher::new(ConfiguredHotkey::from_raw(&toggle_hotkey_raw));
-        }
-        if next_hold_hotkey != hold_hotkey_raw {
-            hold_hotkey_raw = next_hold_hotkey;
-            hold_matcher = HotkeyMatcher::new(ConfiguredHotkey::from_raw(&hold_hotkey_raw));
-        }
-
-        let toggle_signal = toggle_matcher.on_event(event.kind, event.key);
-        let hold_signal = hold_matcher.on_event(event.kind, event.key);
-
-        if let Some(signal) = toggle_signal {
-            if signal == HotkeySignal::Activated {
-                if state.is_recording() {
-                    let _ = state.stop_recording(StopReason::HotkeyToggle);
-                } else {
-                    let _ = state.start_recording(StartOrigin::HotkeyToggle);
-                }
-                if dispatch_outbox(&mut state, &event_tx).is_err() {
-                    return;
-                }
-            }
-            continue;
-        }
-
-        if let Some(signal) = hold_signal {
-            match signal {
-                HotkeySignal::Activated => {
-                    let _ = state.start_recording(StartOrigin::HotkeyHold);
-                    if dispatch_outbox(&mut state, &event_tx).is_err() {
-                        return;
-                    }
-                }
-                HotkeySignal::Deactivated => {
-                    let _ = state.stop_recording(StopReason::HotkeyHoldRelease);
-                    if dispatch_outbox(&mut state, &event_tx).is_err() {
-                        return;
-                    }
-                }
-            }
-        }
     }
 }
 

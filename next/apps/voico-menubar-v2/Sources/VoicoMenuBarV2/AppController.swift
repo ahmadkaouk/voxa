@@ -23,6 +23,7 @@ final class AppController: ObservableObject {
     @Published var apiKeyInput = ""
 
     private let transport: IPCTransport
+    private let hotkeyBridge = GlobalHotkeyBridge()
     private let eventQueue = DispatchQueue(label: "voico.v2.menubar.events", qos: .userInitiated)
     private let requestQueue = DispatchQueue(label: "voico.v2.menubar.requests", qos: .userInitiated)
 
@@ -41,11 +42,23 @@ final class AppController: ObservableObject {
 
         socketPath = path
         transport = IPCTransport(socketPath: path)
+        hotkeyBridge.onToggleActivated = { [weak self] in
+            self?.handleToggleHotkeyActivated()
+        }
+        hotkeyBridge.onHoldActivated = { [weak self] in
+            self?.handleHoldHotkeyActivated()
+        }
+        hotkeyBridge.onHoldDeactivated = { [weak self] in
+            self?.handleHoldHotkeyDeactivated()
+        }
+        hotkeyBridge.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
+        hotkeyBridge.start()
         autoStartDaemonOnLaunch()
         startEventLoop()
     }
 
     deinit {
+        hotkeyBridge.stop()
         stopEventLoop()
     }
 
@@ -432,6 +445,67 @@ final class AppController: ObservableObject {
         }
     }
 
+    private func handleToggleHotkeyActivated() {
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                let state = try self.transport.getState()
+                if state.state == .recording {
+                    _ = try self.transport.request(
+                        method: "stop_recording",
+                        params: ["reason": "hotkey_toggle"]
+                    )
+                } else {
+                    _ = try self.transport.request(
+                        method: "start_recording",
+                        params: ["origin": "hotkey_toggle"]
+                    )
+                }
+                let refreshedState = try self.transport.getState()
+                DispatchQueue.main.async {
+                    self.publishState(refreshedState)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func handleHoldHotkeyActivated() {
+        sendHotkeyCommand(
+            method: "start_recording",
+            params: ["origin": "hotkey_hold"]
+        )
+    }
+
+    private func handleHoldHotkeyDeactivated() {
+        sendHotkeyCommand(
+            method: "stop_recording",
+            params: ["reason": "hotkey_hold_release"]
+        )
+    }
+
+    private func sendHotkeyCommand(method: String, params: [String: Any]) {
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                _ = try self.transport.request(method: method, params: params)
+                let state = try self.transport.getState()
+                DispatchQueue.main.async {
+                    self.publishState(state)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     private func publishState(_ snapshot: DaemonStateSnapshot) {
         DispatchQueue.main.async {
             self.runtimeState = snapshot.state
@@ -449,6 +523,7 @@ final class AppController: ObservableObject {
             self.outputMode = OutputModeOption.fromRawOrDefault(snapshot.outputMode)
             self.maxRecordingSeconds = snapshot.maxRecordingSeconds
             self.configRevision = snapshot.revision
+            self.hotkeyBridge.updateBindings(toggle: self.toggleHotkey, hold: self.holdHotkey)
         }
     }
 
