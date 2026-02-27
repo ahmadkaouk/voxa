@@ -11,7 +11,7 @@ use voico_core::app::SessionRuntime;
 use voico_core::infra::{InfraError, OutputResult, OutputSink, Recorder, Transcriber};
 use voico_core::ipc::ServerEnvelope;
 
-use super::run_with_runtime;
+use super::{run_with_runtime, run_with_runtime_and_shared_api_keys};
 
 fn temp_socket_path(name: &str) -> PathBuf {
     let pid = std::process::id();
@@ -50,6 +50,19 @@ fn start_server_with_runtime(
     let running = Arc::new(AtomicBool::new(true));
     let running_for_thread = Arc::clone(&running);
     let handle = thread::spawn(move || run_with_runtime(path, running_for_thread, runtime));
+    (running, handle)
+}
+
+fn start_server_with_runtime_and_shared_api_keys(
+    path: PathBuf,
+    runtime: SessionRuntime,
+    shared_api_keys: Arc<std::sync::Mutex<Option<String>>>,
+) -> (Arc<AtomicBool>, thread::JoinHandle<std::io::Result<()>>) {
+    let running = Arc::new(AtomicBool::new(true));
+    let running_for_thread = Arc::clone(&running);
+    let handle = thread::spawn(move || {
+        run_with_runtime_and_shared_api_keys(path, running_for_thread, runtime, shared_api_keys)
+    });
     (running, handle)
 }
 
@@ -481,4 +494,87 @@ fn daemon_stays_alive_after_transcription_failure() {
     assert_eq!(health["status"], "ok");
 
     stop_server(&path, running, handle);
+}
+
+#[test]
+fn api_key_status_reflects_set_api_key() {
+    let path = temp_socket_path("api-key");
+    let (running, handle) = start_server(path.clone());
+    wait_for_socket(&path);
+
+    let (mut stream, mut reader) = connect_and_handshake(&path);
+
+    let initial = send_request(
+        &mut stream,
+        &mut reader,
+        "1",
+        "get_api_key_status",
+        json!({}),
+    );
+    assert_eq!(initial["is_set"], false);
+
+    let _ = send_request(
+        &mut stream,
+        &mut reader,
+        "2",
+        "set_api_key",
+        json!({
+            "api_key": "sk-test-value"
+        }),
+    );
+
+    let after = send_request(
+        &mut stream,
+        &mut reader,
+        "3",
+        "get_api_key_status",
+        json!({}),
+    );
+    assert_eq!(after["is_set"], true);
+
+    stop_server(&path, running, handle);
+}
+
+#[test]
+fn api_key_store_survives_daemon_restart_with_shared_store() {
+    let shared_api_keys = Arc::new(std::sync::Mutex::new(None));
+    let path = temp_socket_path("api-restart");
+
+    let (running_first, handle_first) = start_server_with_runtime_and_shared_api_keys(
+        path.clone(),
+        SessionRuntime::default(),
+        Arc::clone(&shared_api_keys),
+    );
+    wait_for_socket(&path);
+
+    let (mut stream_first, mut reader_first) = connect_and_handshake(&path);
+    let _ = send_request(
+        &mut stream_first,
+        &mut reader_first,
+        "1",
+        "set_api_key",
+        json!({
+            "api_key": "sk-persisted"
+        }),
+    );
+    stop_server(&path, running_first, handle_first);
+
+    let (running_second, handle_second) = start_server_with_runtime_and_shared_api_keys(
+        path.clone(),
+        SessionRuntime::default(),
+        Arc::clone(&shared_api_keys),
+    );
+    wait_for_socket(&path);
+
+    let (mut stream_second, mut reader_second) = connect_and_handshake(&path);
+    let status = send_request(
+        &mut stream_second,
+        &mut reader_second,
+        "2",
+        "get_api_key_status",
+        json!({}),
+    );
+    assert_eq!(status["is_set"], true);
+
+    stop_server(&path, running_second, handle_second);
 }

@@ -116,6 +116,17 @@ pub struct SubscribeParams {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct SetApiKeyParams {
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ApiKeyStatusResult {
+    pub source: String,
+    pub is_set: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct HealthResult {
     pub status: String,
     pub uptime_ms: u64,

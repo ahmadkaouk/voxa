@@ -218,6 +218,36 @@ Success result:
 {"revision": 4}
 ```
 
+### `get_api_key_status`
+Request:
+```json
+{"type":"request","id":"8","method":"get_api_key_status","params":{}}
+```
+
+Response result:
+```json
+{
+  "source": "keychain",
+  "is_set": true
+}
+```
+
+### `set_api_key`
+Request:
+```json
+{
+  "type":"request",
+  "id":"9",
+  "method":"set_api_key",
+  "params":{"api_key":"sk-..."}
+}
+```
+
+Success result:
+```json
+{"stored":true,"source":"keychain"}
+```
+
 ### `subscribe`
 Request:
 ```json

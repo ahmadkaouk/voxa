@@ -18,6 +18,9 @@ final class AppController: ObservableObject {
     @Published private(set) var model: ModelOption = .gpt4oMiniTranscribe
     @Published private(set) var outputMode: OutputModeOption = .clipboardAutopaste
     @Published private(set) var maxRecordingSeconds: UInt64 = 300
+    @Published private(set) var apiKeySource: String = "keychain"
+    @Published private(set) var isAPIKeySet = false
+    @Published var apiKeyInput = ""
 
     private let transport: IPCTransport
     private let eventQueue = DispatchQueue(label: "voico.v2.menubar.events", qos: .userInitiated)
@@ -94,8 +97,10 @@ final class AppController: ObservableObject {
 
             do {
                 let config = try self.transport.getConfig()
+                let apiKeyStatus = try self.transport.getAPIKeyStatus()
                 DispatchQueue.main.async {
                     self.publishConfig(config)
+                    self.publishAPIKeyStatus(apiKeyStatus)
                     self.statusMessage = "Config refreshed"
                     self.isBusy = false
                 }
@@ -169,6 +174,39 @@ final class AppController: ObservableObject {
         )
     }
 
+    func saveAPIKey() {
+        let trimmed = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            statusMessage = "API key cannot be empty"
+            return
+        }
+
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = "Saving API key..."
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                try self.transport.setAPIKey(trimmed)
+                let status = try self.transport.getAPIKeyStatus()
+                DispatchQueue.main.async {
+                    self.publishAPIKeyStatus(status)
+                    self.statusMessage = "API key saved"
+                    self.apiKeyInput = ""
+                    self.isBusy = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                    self.isBusy = false
+                }
+            }
+        }
+    }
+
     func reconnectNow() {
         lifecycleLock.lock()
         eventConnection?.close()
@@ -227,8 +265,10 @@ final class AppController: ObservableObject {
             do {
                 let state = try transport.getState()
                 let config = try transport.getConfig()
+                let apiKeyStatus = try transport.getAPIKeyStatus()
                 publishState(state)
                 publishConfig(config)
+                publishAPIKeyStatus(apiKeyStatus)
 
                 let subscribeFrom = currentLastSeenSeq()
                 let connection = try transport.subscribe(
@@ -313,10 +353,12 @@ final class AppController: ObservableObject {
                 _ = try self.transport.request(method: method, params: params)
                 let state = try self.transport.getState()
                 let config = try self.transport.getConfig()
+                let apiKeyStatus = try self.transport.getAPIKeyStatus()
 
                 DispatchQueue.main.async {
                     self.publishState(state)
                     self.publishConfig(config)
+                    self.publishAPIKeyStatus(apiKeyStatus)
                     self.statusMessage = successMessage
                     self.isBusy = false
                 }
@@ -345,8 +387,10 @@ final class AppController: ObservableObject {
             do {
                 _ = try self.transport.request(method: "set_config", params: params)
                 let config = try self.transport.getConfig()
+                let apiKeyStatus = try self.transport.getAPIKeyStatus()
                 DispatchQueue.main.async {
                     self.publishConfig(config)
+                    self.publishAPIKeyStatus(apiKeyStatus)
                     self.statusMessage = successMessage
                     self.isBusy = false
                 }
@@ -376,6 +420,13 @@ final class AppController: ObservableObject {
             self.outputMode = OutputModeOption.fromRawOrDefault(snapshot.outputMode)
             self.maxRecordingSeconds = snapshot.maxRecordingSeconds
             self.configRevision = snapshot.revision
+        }
+    }
+
+    private func publishAPIKeyStatus(_ snapshot: ApiKeyStatusSnapshot) {
+        DispatchQueue.main.async {
+            self.apiKeySource = snapshot.source
+            self.isAPIKeySet = snapshot.isSet
         }
     }
 

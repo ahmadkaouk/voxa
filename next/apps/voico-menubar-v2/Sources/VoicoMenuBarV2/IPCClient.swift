@@ -13,6 +13,7 @@ enum IPCError: LocalizedError {
     case missingResult
     case invalidStatePayload
     case invalidConfigPayload
+    case invalidAPIKeyStatusPayload
 
     var errorDescription: String? {
         switch self {
@@ -38,6 +39,8 @@ enum IPCError: LocalizedError {
             return "State payload is invalid"
         case .invalidConfigPayload:
             return "Config payload is invalid"
+        case .invalidAPIKeyStatusPayload:
+            return "API key status payload is invalid"
         }
     }
 }
@@ -108,6 +111,15 @@ final class IPCTransport {
     func getConfig() throws -> DaemonConfigSnapshot {
         let result = try request(method: "get_config", params: [:])
         return try Self.parseConfigSnapshot(result)
+    }
+
+    func getAPIKeyStatus() throws -> ApiKeyStatusSnapshot {
+        let result = try request(method: "get_api_key_status", params: [:])
+        return try Self.parseAPIKeyStatusSnapshot(result)
+    }
+
+    func setAPIKey(_ apiKey: String) throws {
+        _ = try request(method: "set_api_key", params: ["api_key": apiKey])
     }
 
     func subscribe(fromSeq: UInt64?) throws -> IPCConnection {
@@ -189,6 +201,18 @@ final class IPCTransport {
             maxRecordingSeconds: maxRecordingSeconds.uint64Value,
             revision: revision.uint64Value
         )
+    }
+
+    private static func parseAPIKeyStatusSnapshot(
+        _ payload: [String: Any]
+    ) throws -> ApiKeyStatusSnapshot {
+        guard let source = payload["source"] as? String,
+              let isSet = payload["is_set"] as? Bool
+        else {
+            throw IPCError.invalidAPIKeyStatusPayload
+        }
+
+        return ApiKeyStatusSnapshot(source: source, isSet: isSet)
     }
 
     private static func numberToUInt64(_ value: Any?) -> UInt64 {

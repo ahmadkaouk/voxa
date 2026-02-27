@@ -149,6 +149,11 @@ struct DaemonConfigSnapshot {
     let revision: UInt64
 }
 
+struct ApiKeyStatusSnapshot {
+    let source: String
+    let isSet: Bool
+}
+
 struct DaemonEventSnapshot {
     let name: String
     let seq: UInt64

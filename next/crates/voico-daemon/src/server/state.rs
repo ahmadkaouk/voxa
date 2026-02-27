@@ -10,12 +10,15 @@ use voico_core::domain::{
     ApplyResult, DomainEvent, RecordingOrigin, RuntimeErrorCode, SessionMachine, SessionState,
 };
 use voico_core::ipc::{
-    ConfigResult, ErrorPayload, EventEnvelope, IpcRuntimeState, ServerEnvelope, StartOrigin,
-    StateResult, StopReason,
+    ApiKeyStatusResult, ConfigResult, ErrorPayload, EventEnvelope, IpcRuntimeState, ServerEnvelope,
+    SetApiKeyParams, StartOrigin, StateResult, StopReason,
 };
 
 use super::connection::ConnectionHandle;
 use crate::adapters::build_runtime_for_output_mode;
+use crate::secrets::{ApiKeyStore, build_api_key_store};
+#[cfg(test)]
+use crate::secrets::{in_memory_api_key_store, in_memory_api_key_store_with_shared};
 
 #[derive(Debug, Clone, Serialize)]
 struct DaemonConfig {
@@ -85,6 +88,7 @@ pub(super) struct SharedState {
     config: DaemonConfig,
     runtime: SessionRuntime,
     config_path: Option<PathBuf>,
+    api_keys: Box<dyn ApiKeyStore>,
 }
 
 impl SharedState {
@@ -92,22 +96,43 @@ impl SharedState {
         let config_path = default_config_path()?;
         let config = load_config_from_disk(&config_path);
         let runtime = build_runtime_for_output_mode(&config.output_mode);
+        let api_keys = build_api_key_store(&config.api_key_source);
         Ok(Self::with_config_and_runtime(
             config,
             runtime,
             Some(config_path),
+            api_keys,
         ))
     }
 
     #[cfg(test)]
     pub(super) fn with_runtime(runtime: SessionRuntime) -> Self {
-        Self::with_config_and_runtime(DaemonConfig::default(), runtime, None)
+        Self::with_config_and_runtime(
+            DaemonConfig::default(),
+            runtime,
+            None,
+            in_memory_api_key_store(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_runtime_and_shared_api_keys(
+        runtime: SessionRuntime,
+        shared: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    ) -> Self {
+        Self::with_config_and_runtime(
+            DaemonConfig::default(),
+            runtime,
+            None,
+            in_memory_api_key_store_with_shared(shared),
+        )
     }
 
     fn with_config_and_runtime(
         config: DaemonConfig,
         runtime: SessionRuntime,
         config_path: Option<PathBuf>,
+        api_keys: Box<dyn ApiKeyStore>,
     ) -> Self {
         Self {
             machine: SessionMachine::new(),
@@ -120,6 +145,7 @@ impl SharedState {
             config,
             runtime,
             config_path,
+            api_keys,
         }
     }
 
@@ -250,6 +276,47 @@ impl SharedState {
         self.runtime = build_runtime_for_output_mode(&next_config.output_mode);
         self.config = next_config;
         Ok(json!({ "revision": self.config.revision }))
+    }
+
+    pub(super) fn api_key_status(&self) -> Result<ApiKeyStatusResult, ErrorPayload> {
+        let is_set = self
+            .api_keys
+            .get_api_key()
+            .map_err(|_| ErrorPayload {
+                code: "INTERNAL_ERROR".to_owned(),
+                message: "Failed to read API key".to_owned(),
+                details: None,
+            })?
+            .is_some();
+
+        Ok(ApiKeyStatusResult {
+            source: self.config.api_key_source.clone(),
+            is_set,
+        })
+    }
+
+    pub(super) fn set_api_key(&self, params: SetApiKeyParams) -> Result<Value, ErrorPayload> {
+        let api_key = params.api_key.trim();
+        if api_key.is_empty() {
+            return Err(ErrorPayload {
+                code: "INVALID_PARAMS".to_owned(),
+                message: "api_key cannot be empty".to_owned(),
+                details: None,
+            });
+        }
+
+        self.api_keys
+            .set_api_key(api_key)
+            .map_err(|_| ErrorPayload {
+                code: "INTERNAL_ERROR".to_owned(),
+                message: "Failed to store API key".to_owned(),
+                details: None,
+            })?;
+
+        Ok(json!({
+            "stored": true,
+            "source": self.config.api_key_source.clone()
+        }))
     }
 
     pub(super) fn start_recording(&mut self, origin: StartOrigin) -> Result<Value, ErrorPayload> {

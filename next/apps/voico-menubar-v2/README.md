@@ -8,6 +8,7 @@ Greenfield Swift menu bar client for Voico v2.
 - Performs protocol handshake (`api_version = 1.0`).
 - Resyncs state via `get_state` on connect/reconnect.
 - Resyncs config via `get_config` and updates config via `set_config`.
+- Reads API key status via `get_api_key_status` and saves key via `set_api_key`.
 - Subscribes to daemon events via `subscribe` and updates UI from events.
 - Drives listening/transcribing animation from daemon runtime state (`recording`, `transcribing`).
 - Exposes daemon lifecycle actions via `launchctl` (`start`/`stop`) for `com.voico.v2.daemon`.

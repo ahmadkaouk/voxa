@@ -16,8 +16,8 @@ use std::time::Duration;
 use serde_json::Value;
 use voico_core::ipc::{
     API_VERSION, ClientEnvelope, ErrorPayload, EventEnvelope, HealthResult, RequestEnvelope,
-    ResponseEnvelope, ServerEnvelope, StartOrigin, StartRecordingParams, StopRecordingParams,
-    SubscribeParams,
+    ResponseEnvelope, ServerEnvelope, SetApiKeyParams, StartOrigin, StartRecordingParams,
+    StopRecordingParams, SubscribeParams,
 };
 
 use self::connection::ConnectionHandle;
@@ -37,6 +37,17 @@ fn run_with_runtime(
     runtime: voico_core::app::SessionRuntime,
 ) -> io::Result<()> {
     let state = SharedState::with_runtime(runtime);
+    run_with_state(socket_path, running, state)
+}
+
+#[cfg(test)]
+fn run_with_runtime_and_shared_api_keys(
+    socket_path: PathBuf,
+    running: Arc<AtomicBool>,
+    runtime: voico_core::app::SessionRuntime,
+    shared: Arc<Mutex<Option<String>>>,
+) -> io::Result<()> {
+    let state = SharedState::with_runtime_and_shared_api_keys(runtime, shared);
     run_with_state(socket_path, running, state)
 }
 
@@ -270,6 +281,47 @@ fn handle_request(
                 &request.id,
                 payload,
             )))
+        }
+        "get_api_key_status" => {
+            let result = {
+                let state = shared
+                    .lock()
+                    .map_err(|_| io::Error::other("state poisoned"))?;
+                state.api_key_status()
+            };
+
+            match result {
+                Ok(value) => {
+                    let payload = json_value(value)?;
+                    connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
+                        &request.id,
+                        payload,
+                    )))
+                }
+                Err(error) => write_response_error(connection, &request.id, error),
+            }
+        }
+        "set_api_key" => {
+            let params = request.parse_params::<SetApiKeyParams>();
+            let params = match params {
+                Ok(params) => params,
+                Err(error) => return write_response_error(connection, &request.id, error),
+            };
+
+            let result = {
+                let state = shared
+                    .lock()
+                    .map_err(|_| io::Error::other("state poisoned"))?;
+                state.set_api_key(params)
+            };
+
+            match result {
+                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
+                    &request.id,
+                    value,
+                ))),
+                Err(error) => write_response_error(connection, &request.id, error),
+            }
         }
         "set_config" => {
             let params = request.parse_params::<SetConfigParams>();

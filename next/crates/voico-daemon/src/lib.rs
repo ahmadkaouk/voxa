@@ -1,4 +1,5 @@
 mod adapters;
+mod secrets;
 mod server;
 
 use std::env;

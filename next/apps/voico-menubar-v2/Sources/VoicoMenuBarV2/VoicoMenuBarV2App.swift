@@ -156,6 +156,29 @@ struct VoicoMenuView: View {
 
             Divider()
 
+            SecureField("OPENAI_API_KEY", text: $controller.apiKeyInput)
+                .textFieldStyle(.roundedBorder)
+                .disabled(controller.isBusy)
+
+            HStack {
+                Text(
+                    controller.isAPIKeySet
+                        ? "API key set (\(controller.apiKeySource))"
+                        : "API key not set (\(controller.apiKeySource))"
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Save Key") {
+                    controller.saveAPIKey()
+                }
+                .disabled(controller.isBusy)
+            }
+
+            Divider()
+
             HStack {
                 Button("Reconnect") {
                     controller.reconnectNow()
