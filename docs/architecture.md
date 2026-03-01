@@ -1,4 +1,4 @@
-# Voico Architecture (Target)
+# Voico Architecture
 
 ## Goals
 - Keep the product simple: one reliable dictation app for macOS.
@@ -7,20 +7,13 @@
 - Avoid duplicate logic across UI surfaces.
 
 ## Product Surfaces
-- `voico-menubar-v2` (primary): user-facing control and status UI.
+- `voico-menubar` (primary): user-facing control and status UI.
 - `voico-daemon` (core): always-on runtime for hotkeys, recording, transcription, output.
 - `voicoctl` (optional/internal): thin troubleshooting client for support/dev/CI.
 
 `voicoctl` is intentionally minimal and not the main user experience.
 
-## Current State (Today)
-- Swift menu bar app invokes `voico` CLI commands as subprocesses.
-- Rust binary includes daemon runtime, service lifecycle, config mutation, and provider calls.
-- Runtime status is currently inferred from logs for some UI signals.
-
-This works for MVP, but coupling through CLI output/log parsing is fragile as features grow.
-
-## Target System Architecture
+## Current System Architecture
 Daemon-first, API-first architecture:
 
 1. One daemon process owns runtime state and executes all recording/transcription work.
@@ -40,7 +33,7 @@ Use module boundaries first, crate boundaries second.
 
 ## Component Model
 ### 1) Clients
-- `voico-menubar-v2`
+- `voico-menubar`
   - UI only.
   - Sends commands over IPC.
   - Subscribes to daemon events for live state.
@@ -166,18 +159,17 @@ Logs:
 
 ## Repository Shape (Target)
 ```text
-next/
-  apps/
-    voico-menubar-v2/
-  crates/
+apps/
+  voico-menubar/
+crates/
   voico-core/                # library crate
     src/
       domain/                # state machine + domain types
       app/                   # use-cases/orchestration
       infra/                 # audio, stt, output, hotkey, storage, launchd
       ipc/                   # protocol and server/client primitives
-    voico-daemon/            # daemon binary crate
-    voicoctl/                # optional thin client binary crate
+  voico-daemon/              # daemon binary crate
+  voicoctl/                  # optional thin client binary crate
 ```
 
 Keep this flat and simple; prefer internal modules over many crates.

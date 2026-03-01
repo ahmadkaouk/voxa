@@ -1,111 +1,53 @@
 # voico
 
-Local macOS voice-to-text CLI.
+Local macOS dictation app with a Swift menu bar client and a Rust daemon.
+
+## Workspace
+
+- `apps/voico-menubar`: Swift menu bar app
+- `crates/voico-daemon`: daemon runtime
+- `crates/voicoctl`: optional IPC troubleshooting client
+- `crates/voico-core`: shared backend/domain logic
 
 ## Prerequisites
 
-- macOS terminal environment
-- Rust toolchain (Cargo)
+- macOS
+- Rust toolchain
+- Swift 5.9+ / Xcode command line tools
 
 ## Install
 
-Recommended:
+Install the daemon and control CLI:
 
 ```bash
 ./scripts/install.sh
 ```
 
-Direct Cargo install:
+This installs:
+
+- `voico-daemon`
+- `voicoctl`
+
+## Run
+
+Run the menu bar app:
 
 ```bash
-cargo install --path . --force
+cd apps/voico-menubar
+swift run voico-menubar
 ```
 
-If `voico` is not found after install, add Cargo bin to your PATH:
+The menu bar app will install or update a per-user LaunchAgent for `voico-daemon` and connect over local IPC.
+
+## Quick Checks
 
 ```bash
-export PATH="$HOME/.cargo/bin:$PATH"
+./scripts/check.sh
 ```
 
-## Verify Install
+## Notes
 
-```bash
-voico --help
-```
-
-## Usage
-
-Set your OpenAI API key:
-
-```bash
-export OPENAI_API_KEY="your_api_key"
-```
-
-## Hotkey Mode (Daemon)
-
-Show daemon config:
-
-```bash
-voico config show
-```
-
-Set toggle hotkey:
-
-```bash
-voico config set toggle-hotkey right_option
-# or: cmd_space, fn
-```
-
-Set hold hotkey:
-
-```bash
-voico config set hold-hotkey fn
-# or: right_option, cmd_space
-```
-
-Run daemon in foreground:
-
-```bash
-voico daemon
-```
-
-Install as macOS LaunchAgent:
-
-```bash
-voico service install
-voico service status
-```
-
-Remove service:
-
-```bash
-voico service uninstall
-```
-
-Notes:
-- Toggle hotkey: press once to start recording, press again to stop and transcribe.
-- Hold hotkey: press to start recording, release to stop and transcribe.
-- Daemon always copies transcript to clipboard, then sends `Cmd+V` (auto-paste).
-- macOS may require Accessibility permission for global hotkey capture and auto-paste.
-
-## Menu Bar App
-
-A native macOS menu bar controller is available at:
-
-```text
-next/apps/voico-menubar-v2
-```
-
-Run it:
-
-```bash
-cd next/apps/voico-menubar-v2
-swift run voico-menubar-v2
-```
-
-It talks to the daemon over local IPC, including:
-- recording controls
-- toggle/hold hotkey changes
-- model/output/max-duration config
-- OpenAI API key management
-- daemon reconnect and status
+- IPC socket: `~/Library/Application Support/voico/run/daemon.sock`
+- Config path: `~/Library/Application Support/voico/config.toml`
+- The menu bar app manages the daemon lifecycle through `launchd`
+- Autopaste may require macOS Accessibility permission for the menu bar app process
