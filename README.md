@@ -88,23 +88,24 @@ Notes:
 - Daemon always copies transcript to clipboard, then sends `Cmd+V` (auto-paste).
 - macOS may require Accessibility permission for global hotkey capture and auto-paste.
 
-## Menu Bar App (MVP)
+## Menu Bar App
 
-A thin native macOS menu bar controller is available at:
+A native macOS menu bar controller is available at:
 
 ```text
-apps/voico-menubar
+next/apps/voico-menubar-v2
 ```
 
 Run it:
 
 ```bash
-cd apps/voico-menubar
-swift run
+cd next/apps/voico-menubar-v2
+swift run voico-menubar-v2
 ```
 
-It controls the existing backend using `voico service ...` and `voico config ...`, including:
-- start/stop/reinstall service
+It talks to the daemon over local IPC, including:
+- recording controls
 - toggle/hold hotkey changes
-- API key save with `launchctl setenv`
-- log opening and refresh
+- model/output/max-duration config
+- OpenAI API key management
+- daemon reconnect and status

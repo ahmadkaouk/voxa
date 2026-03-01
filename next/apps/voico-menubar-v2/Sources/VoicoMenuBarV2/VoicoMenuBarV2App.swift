@@ -675,16 +675,18 @@ struct ActivityOverlayView: View {
     let onStop: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            leadingControl
-
+        ZStack {
             TimelineView(.animation(minimumInterval: 0.05)) { timeline in
                 waveform(time: timeline.date.timeIntervalSinceReferenceDate)
             }
 
-            trailingControl
+            HStack(spacing: 0) {
+                leadingControl
+                Spacer(minLength: 0)
+                trailingControl
+            }
+            .padding(.horizontal, 6)
         }
-        .padding(.horizontal, 5)
         .frame(width: 96, height: 28)
         .background(
             Capsule(style: .continuous)
