@@ -665,56 +665,82 @@ private struct MenuRowChrome<Content: View>: View {
     }
 }
 
-private struct WhisperLikeIndicatorView: View {
-    let isActive: Bool
+enum ActivityOverlayPhase: Equatable {
+    case recording
+}
+
+struct ActivityOverlayView: View {
+    let phase: ActivityOverlayPhase
+    let onDismiss: () -> Void
+    let onStop: () -> Void
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 7)
-                .fill(Color.white.opacity(0.06))
-                .frame(width: 32, height: 18)
+        HStack(spacing: 8) {
+            leadingControl
 
-            if isActive {
-                TimelineView(.animation(minimumInterval: 0.08)) { timeline in
-                    barStack(time: timeline.date.timeIntervalSinceReferenceDate)
-                }
-            } else {
-                barStack(time: 0)
-                    .opacity(0.6)
+            TimelineView(.animation(minimumInterval: 0.05)) { timeline in
+                waveform(time: timeline.date.timeIntervalSinceReferenceDate)
             }
+
+            trailingControl
         }
-        .accessibilityLabel(isActive ? "Listening active" : "Listening idle")
+        .padding(.horizontal, 5)
+        .frame(width: 96, height: 28)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.96))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.16), radius: 7, y: 3)
     }
 
-    @ViewBuilder
-    private func barStack(time: TimeInterval) -> some View {
-        HStack(alignment: .center, spacing: 2.5) {
-            ForEach(0..<5, id: \.self) { index in
-                Capsule(style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.03, green: 0.68, blue: 0.64),
-                                Color(red: 0.98, green: 0.55, blue: 0.24),
-                            ],
-                            startPoint: .bottom,
-                            endPoint: .top
-                        )
-                    )
-                    .frame(width: 3, height: barHeight(index: index, time: time))
+    private var leadingControl: some View {
+        Button(action: onDismiss) {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.16))
+                    .frame(width: 18, height: 18)
+
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(Color.white.opacity(0.92))
             }
         }
-        .frame(width: 24, height: 10, alignment: .center)
+        .buttonStyle(.plain)
+    }
+
+    private var trailingControl: some View {
+        Button(action: onStop) {
+            ZStack {
+                Circle()
+                    .fill(Color(red: 0.95, green: 0.52, blue: 0.50))
+                    .frame(width: 18, height: 18)
+
+                RoundedRectangle(cornerRadius: 2.2, style: .continuous)
+                    .fill(Color.white)
+                    .frame(width: 8, height: 8)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func waveform(time: TimeInterval) -> some View {
+        HStack(alignment: .center, spacing: 2.2) {
+            ForEach(0..<7, id: \.self) { index in
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.9))
+                    .frame(width: 2, height: barHeight(index: index, time: time))
+            }
+        }
+        .frame(width: 20, height: 10)
     }
 
     private func barHeight(index: Int, time: TimeInterval) -> CGFloat {
-        if !isActive {
-            return 3
-        }
-
-        let base = sin((time * 8) + Double(index) * 0.9)
-        let secondary = sin((time * 5.3) + Double(index) * 1.7)
-        let normalized = abs((base * 0.6) + (secondary * 0.4))
-        return 3 + (normalized * 7)
+        let primary = sin((time * 10) + Double(index) * 0.72)
+        let secondary = sin((time * 5.1) + Double(index) * 1.05)
+        return 2.5 + (abs((primary * 0.7) + (secondary * 0.3)) * 4.2)
     }
 }

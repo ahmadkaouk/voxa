@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import SwiftUI
 
 final class AppController: ObservableObject {
     private let daemonLabel = "com.voico.v2.daemon"
@@ -27,6 +28,7 @@ final class AppController: ObservableObject {
 
     private let transport: IPCTransport
     private let hotkeyBridge = GlobalHotkeyBridge()
+    private let activityOverlay = ActivityOverlayController()
     private let eventQueue = DispatchQueue(label: "voico.v2.menubar.events", qos: .userInitiated)
     private let requestQueue = DispatchQueue(label: "voico.v2.menubar.requests", qos: .userInitiated)
 
@@ -36,6 +38,7 @@ final class AppController: ObservableObject {
     private var eventConnection: IPCConnection?
     private var terminationObserver: NSObjectProtocol?
     private var shutdownHandled = false
+    private var overlayDismissedForCurrentRecording = false
 
     init() {
         let path: String
@@ -97,6 +100,7 @@ final class AppController: ObservableObject {
 
         hotkeyBridge.stop()
         stopEventLoop()
+        activityOverlay.hide()
         _ = stopLaunchAgentIfNeeded()
     }
 
@@ -116,6 +120,17 @@ final class AppController: ObservableObject {
             pendingMessage: "Requesting recording stop...",
             successMessage: "Recording stop request accepted"
         )
+    }
+
+    func dismissActivityOverlay() {
+        overlayDismissedForCurrentRecording = true
+        activityOverlay.hide()
+    }
+
+    func stopRecordingFromOverlay() {
+        overlayDismissedForCurrentRecording = false
+        activityOverlay.hide()
+        stopRecording()
     }
 
     func refreshState() {
@@ -480,6 +495,20 @@ final class AppController: ObservableObject {
     }
 
     private func handleToggleHotkeyActivated() {
+        DispatchQueue.main.async {
+            if self.runtimeState == .recording {
+                self.overlayDismissedForCurrentRecording = false
+                self.activityOverlay.hide()
+            } else {
+                self.overlayDismissedForCurrentRecording = false
+                self.activityOverlay.show(.recording, onDismiss: { [weak self] in
+                    self?.dismissActivityOverlay()
+                }, onStop: { [weak self] in
+                    self?.stopRecordingFromOverlay()
+                })
+            }
+        }
+
         requestQueue.async { [weak self] in
             guard let self else { return }
 
@@ -504,11 +533,21 @@ final class AppController: ObservableObject {
                 DispatchQueue.main.async {
                     self.statusMessage = error.localizedDescription
                 }
+                self.refreshOverlayStateAfterHotkeyError()
             }
         }
     }
 
     private func handleHoldHotkeyActivated() {
+        DispatchQueue.main.async {
+            self.overlayDismissedForCurrentRecording = false
+            self.activityOverlay.show(.recording, onDismiss: { [weak self] in
+                self?.dismissActivityOverlay()
+            }, onStop: { [weak self] in
+                self?.stopRecordingFromOverlay()
+            })
+        }
+
         sendHotkeyCommand(
             method: "start_recording",
             params: ["origin": "hotkey_hold"]
@@ -516,6 +555,10 @@ final class AppController: ObservableObject {
     }
 
     private func handleHoldHotkeyDeactivated() {
+        DispatchQueue.main.async {
+            self.activityOverlay.hide()
+        }
+
         sendHotkeyCommand(
             method: "stop_recording",
             params: ["reason": "hotkey_hold_release"]
@@ -536,6 +579,7 @@ final class AppController: ObservableObject {
                 DispatchQueue.main.async {
                     self.statusMessage = error.localizedDescription
                 }
+                self.refreshOverlayStateAfterHotkeyError()
             }
         }
     }
@@ -612,6 +656,10 @@ final class AppController: ObservableObject {
             self.lastErrorCode = snapshot.lastError
             self.eventSequence = max(self.eventSequence, snapshot.eventSeq)
             self.updateLastSeenSeq(snapshot.eventSeq)
+            if snapshot.state != .recording {
+                self.overlayDismissedForCurrentRecording = false
+            }
+            self.syncActivityOverlay()
         }
     }
 
@@ -639,6 +687,36 @@ final class AppController: ObservableObject {
         DispatchQueue.main.async {
             self.connectionStatus = status
             self.statusMessage = message
+            self.syncActivityOverlay()
+        }
+    }
+
+    private func syncActivityOverlay() {
+        switch connectionStatus {
+        case .connected:
+            if runtimeState == .recording && !overlayDismissedForCurrentRecording {
+                activityOverlay.show(.recording, onDismiss: { [weak self] in
+                    self?.dismissActivityOverlay()
+                }, onStop: { [weak self] in
+                    self?.stopRecordingFromOverlay()
+                })
+            } else {
+                activityOverlay.hide()
+            }
+        case .connecting, .disconnected:
+            self.activityOverlay.hide()
+        }
+    }
+
+    private func refreshOverlayStateAfterHotkeyError() {
+        let state = try? transport.getState()
+
+        DispatchQueue.main.async {
+            if let state {
+                self.publishState(state)
+            } else {
+                self.activityOverlay.hide()
+            }
         }
     }
 
@@ -931,4 +1009,86 @@ private func runProcess(executable: String, arguments: [String]) throws -> Strin
     }
 
     return stdoutText
+}
+
+private final class ActivityOverlayController {
+    private let panelSize = NSSize(width: 96, height: 28)
+    private var panel: NSPanel?
+    private var hostingView: NSHostingView<ActivityOverlayView>?
+
+    func show(
+        _ phase: ActivityOverlayPhase,
+        onDismiss: @escaping () -> Void,
+        onStop: @escaping () -> Void
+    ) {
+        let panel = ensurePanel()
+        if let hostingView {
+            hostingView.rootView = ActivityOverlayView(
+                phase: phase,
+                onDismiss: onDismiss,
+                onStop: onStop
+            )
+        }
+        position(panel)
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+    }
+
+    @discardableResult
+    private func ensurePanel() -> NSPanel {
+        if let panel {
+            return panel
+        }
+
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: panelSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        panel.ignoresMouseEvents = false
+        panel.isMovable = false
+        panel.isReleasedWhenClosed = false
+
+        let hostingView = NSHostingView(
+            rootView: ActivityOverlayView(
+                phase: .recording,
+                onDismiss: {},
+                onStop: {}
+            )
+        )
+        hostingView.frame = NSRect(origin: .zero, size: panelSize)
+        panel.contentView = hostingView
+
+        self.hostingView = hostingView
+        self.panel = panel
+        return panel
+    }
+
+    private func position(_ panel: NSPanel) {
+        let screen = currentScreen() ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen else { return }
+
+        let visibleFrame = screen.visibleFrame
+        let origin = CGPoint(
+            x: round(visibleFrame.midX - (panelSize.width / 2)),
+            y: visibleFrame.minY + 56
+        )
+        panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
+    }
+
+    private func currentScreen() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
+    }
 }
