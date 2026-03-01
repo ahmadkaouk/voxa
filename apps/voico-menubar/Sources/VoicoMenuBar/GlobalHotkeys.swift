@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 
 final class GlobalHotkeyBridge {
@@ -18,8 +19,14 @@ final class GlobalHotkeyBridge {
     private var comboHoldActive = false
     private var globalMonitor: Any?
     private var localMonitor: Any?
+    private var eventTap: CFMachPort?
+    private var eventTapSource: CFRunLoopSource?
 
     func start() {
+        if startEventTap() {
+            return
+        }
+
         let mask: NSEvent.EventTypeMask = [.keyDown, .keyUp, .flagsChanged]
         if globalMonitor == nil {
             globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
@@ -43,6 +50,14 @@ final class GlobalHotkeyBridge {
             NSEvent.removeMonitor(localMonitor)
             self.localMonitor = nil
         }
+        if let eventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
+            self.eventTapSource = nil
+        }
+        if let eventTap {
+            CFMachPortInvalidate(eventTap)
+            self.eventTap = nil
+        }
     }
 
     func updateBindings(toggle: HotkeyOption, hold: HotkeyOption) {
@@ -64,6 +79,67 @@ final class GlobalHotkeyBridge {
         queue.async { [weak self] in
             self?.handle(mapped)
         }
+    }
+
+    private func startEventTap() -> Bool {
+        guard eventTap == nil else {
+            return true
+        }
+
+        let mask =
+            (CGEventMask(1) << CGEventType.keyDown.rawValue)
+            | (CGEventMask(1) << CGEventType.keyUp.rawValue)
+            | (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard let userInfo else {
+                    return Unmanaged.passUnretained(event)
+                }
+
+                let bridge = Unmanaged<GlobalHotkeyBridge>.fromOpaque(userInfo).takeUnretainedValue()
+                return bridge.handleTapEvent(type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            return false
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        eventTap = tap
+        eventTapSource = source
+        return true
+    }
+
+    private func handleTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let eventTap {
+                CGEvent.tapEnable(tap: eventTap, enable: true)
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard let mapped = HotkeyInputEvent.from(
+            eventType: type,
+            keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
+            flags: event.flags
+        ) else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let shouldConsume = queue.sync {
+            let shouldConsume = self.shouldConsume(mapped, flags: event.flags)
+            self.handle(mapped)
+            return shouldConsume
+        }
+
+        return shouldConsume ? nil : Unmanaged.passUnretained(event)
     }
 
     private func handle(_ event: HotkeyInputEvent) {
@@ -106,6 +182,30 @@ final class GlobalHotkeyBridge {
 
     private var comboFunctionAction: DeferredFunctionAction {
         toggleConfiguredHotkey == .fnSpace ? .toggle : .hold
+    }
+
+    private var hasFnSpaceHotkey: Bool {
+        toggleConfiguredHotkey == .fnSpace || holdConfiguredHotkey == .fnSpace
+    }
+
+    private var hasCmdSpaceHotkey: Bool {
+        toggleConfiguredHotkey == .cmdSpace || holdConfiguredHotkey == .cmdSpace
+    }
+
+    private func shouldConsume(_ event: HotkeyInputEvent, flags: CGEventFlags) -> Bool {
+        guard event.kind == .press, event.key == .space else {
+            return false
+        }
+
+        if hasFnSpaceHotkey && (flags.contains(.maskSecondaryFn) || pendingFunctionAction != nil) {
+            return true
+        }
+
+        if hasCmdSpaceHotkey && flags.contains(.maskCommand) {
+            return true
+        }
+
+        return false
     }
 
     private func handleFunctionOverlap(_ event: HotkeyInputEvent) {
@@ -282,6 +382,19 @@ private struct HotkeyInputEvent {
         }
     }
 
+    static func from(eventType: CGEventType, keyCode: UInt16, flags: CGEventFlags) -> HotkeyInputEvent? {
+        switch eventType {
+        case .keyDown:
+            return HotkeyInputEvent(kind: .press, key: keyFromCode(keyCode))
+        case .keyUp:
+            return HotkeyInputEvent(kind: .release, key: keyFromCode(keyCode))
+        case .flagsChanged:
+            return modifierEvent(keyCode: keyCode, flags: flags)
+        default:
+            return nil
+        }
+    }
+
     private static func modifierEvent(from event: NSEvent) -> HotkeyInputEvent? {
         let key = modifierKeyFromCode(event.keyCode)
         if key == .other {
@@ -296,6 +409,27 @@ private struct HotkeyInputEvent {
             isDown = event.modifierFlags.contains(.option)
         case .functionKey:
             isDown = event.modifierFlags.contains(.function)
+        default:
+            return nil
+        }
+
+        return HotkeyInputEvent(kind: isDown ? .press : .release, key: key)
+    }
+
+    private static func modifierEvent(keyCode: UInt16, flags: CGEventFlags) -> HotkeyInputEvent? {
+        let key = modifierKeyFromCode(keyCode)
+        if key == .other {
+            return nil
+        }
+
+        let isDown: Bool
+        switch key {
+        case .command:
+            isDown = flags.contains(.maskCommand)
+        case .rightOption:
+            isDown = flags.contains(.maskAlternate)
+        case .functionKey:
+            isDown = flags.contains(.maskSecondaryFn)
         default:
             return nil
         }
