@@ -299,19 +299,21 @@ impl SharedState {
     }
 
     pub(super) fn api_key_status(&self) -> Result<ApiKeyStatusResult, ErrorPayload> {
-        let is_set = self
+        let api_key = self
             .api_keys
             .get_api_key()
             .map_err(|_| ErrorPayload {
                 code: "INTERNAL_ERROR".to_owned(),
                 message: "Failed to read API key".to_owned(),
                 details: None,
-            })?
-            .is_some();
+            })?;
+        let hint = api_key.as_deref().map(mask_api_key_hint);
+        let is_set = api_key.is_some();
 
         Ok(ApiKeyStatusResult {
             source: self.config.api_key_source.clone(),
             is_set,
+            hint,
         })
     }
 
@@ -558,6 +560,15 @@ fn is_valid_model(model: &str) -> bool {
 
 fn is_valid_output_mode(mode: &str) -> bool {
     matches!(mode, "clipboard_autopaste" | "clipboard_only" | "none")
+}
+
+fn mask_api_key_hint(api_key: &str) -> String {
+    let prefix: String = api_key.chars().take(10).collect();
+    if prefix.is_empty() {
+        return "set".to_owned();
+    }
+
+    format!("{prefix}...")
 }
 
 fn default_config_path() -> io::Result<PathBuf> {

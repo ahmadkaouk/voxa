@@ -68,6 +68,7 @@ final class IPCTransport {
     static let apiVersion = "1.0"
     private static let requestResponseTimeoutSeconds: TimeInterval = 5.0
     private static let subscribeResponseTimeoutSeconds: TimeInterval = 2.0
+    private static let reachabilityTimeoutSeconds: TimeInterval = 0.15
 
     let socketPath: String
 
@@ -115,6 +116,19 @@ final class IPCTransport {
             default:
                 continue
             }
+        }
+    }
+
+    func isReachable(timeout: TimeInterval = IPCTransport.reachabilityTimeoutSeconds) -> Bool {
+        do {
+            let connection = try IPCConnection.connect(socketPath: socketPath)
+            defer { connection.close() }
+
+            try connection.setReadTimeout(seconds: timeout)
+            try connection.performHandshake(client: "voico-menubar-v2", clientVersion: "0.1.0")
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -236,7 +250,11 @@ final class IPCTransport {
             throw IPCError.invalidAPIKeyStatusPayload
         }
 
-        return ApiKeyStatusSnapshot(source: source, isSet: isSet)
+        return ApiKeyStatusSnapshot(
+            source: source,
+            isSet: isSet,
+            hint: payload["hint"] as? String
+        )
     }
 
     private static func numberToUInt64(_ value: Any?) -> UInt64 {

@@ -751,6 +751,7 @@ fn api_key_status_reflects_set_api_key() {
         json!({}),
     );
     assert_eq!(initial["is_set"], false);
+    assert!(initial["hint"].is_null());
 
     let _ = send_request(
         &mut stream,
@@ -770,6 +771,7 @@ fn api_key_status_reflects_set_api_key() {
         json!({}),
     );
     assert_eq!(after["is_set"], true);
+    assert_eq!(after["hint"], "sk-test-va...");
 
     stop_server(&path, running, handle);
 }
@@ -814,6 +816,7 @@ fn api_key_store_survives_daemon_restart_with_shared_store() {
         json!({}),
     );
     assert_eq!(status["is_set"], true);
+    assert_eq!(status["hint"], "sk-persist...");
 
     stop_server(&path, running_second, handle_second);
 }

@@ -21,6 +21,8 @@ final class AppController: ObservableObject {
     @Published private(set) var maxRecordingSeconds: UInt64 = 300
     @Published private(set) var apiKeySource: String = "keychain"
     @Published private(set) var isAPIKeySet = false
+    @Published private(set) var apiKeyHint: String?
+    @Published private(set) var apiKeySaveCount: UInt64 = 0
     @Published var apiKeyInput = ""
 
     private let transport: IPCTransport
@@ -234,6 +236,7 @@ final class AppController: ObservableObject {
                 DispatchQueue.main.async {
                     self.publishAPIKeyStatus(status)
                     self.statusMessage = "API key saved"
+                    self.apiKeySaveCount += 1
                     self.apiKeyInput = ""
                     self.isBusy = false
                 }
@@ -628,6 +631,7 @@ final class AppController: ObservableObject {
         DispatchQueue.main.async {
             self.apiKeySource = snapshot.source
             self.isAPIKeySet = snapshot.isSet
+            self.apiKeyHint = snapshot.hint
         }
     }
 
@@ -681,11 +685,6 @@ final class AppController: ObservableObject {
             return
         }
 
-        launchDaemonWithLaunchctl()
-        if waitForDaemonAvailability(timeout: 1.2) {
-            return
-        }
-
         guard let daemonPath = resolveDaemonExecutablePath() else {
             throw NSError(
                 domain: "voico.daemon",
@@ -695,6 +694,10 @@ final class AppController: ObservableObject {
         }
 
         try ensureLaunchAgentInstalled(daemonPath: daemonPath)
+        if waitForDaemonAvailability(timeout: 0.3) {
+            return
+        }
+
         launchDaemonWithLaunchctl()
         if waitForDaemonAvailability(timeout: 1.2) {
             return
@@ -708,7 +711,7 @@ final class AppController: ObservableObject {
     }
 
     private func daemonIsReachable() -> Bool {
-        (try? transport.getState()) != nil
+        transport.isReachable()
     }
 
     private func waitForDaemonAvailability(timeout: TimeInterval) -> Bool {
@@ -717,13 +720,13 @@ final class AppController: ObservableObject {
             if daemonIsReachable() {
                 return true
             }
-            Thread.sleep(forTimeInterval: 0.2)
+            Thread.sleep(forTimeInterval: 0.1)
         }
         return false
     }
 
     private func launchDaemonWithLaunchctl() {
-        _ = try? runProcess(executable: "/bin/launchctl", arguments: ["kickstart", "-k", launchTarget])
+        _ = try? runProcess(executable: "/bin/launchctl", arguments: ["kickstart", launchTarget])
     }
 
     private func ensureLaunchAgentInstalled(daemonPath: String) throws {

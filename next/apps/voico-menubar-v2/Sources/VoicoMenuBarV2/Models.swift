@@ -70,6 +70,7 @@ enum ConnectionStatus {
 enum HotkeyOption: String, CaseIterable, Identifiable {
     case rightOption = "right_option"
     case functionKey = "fn"
+    case functionSpace = "fn_space"
     case commandSpace = "cmd_space"
 
     var id: String { rawValue }
@@ -80,6 +81,8 @@ enum HotkeyOption: String, CaseIterable, Identifiable {
             return "Right Option"
         case .functionKey:
             return "Fn"
+        case .functionSpace:
+            return "Fn+Space"
         case .commandSpace:
             return "Cmd+Space"
         }
@@ -152,6 +155,7 @@ struct DaemonConfigSnapshot {
 struct ApiKeyStatusSnapshot {
     let source: String
     let isSet: Bool
+    let hint: String?
 }
 
 struct DaemonEventSnapshot {

@@ -124,6 +124,7 @@ pub struct SetApiKeyParams {
 pub struct ApiKeyStatusResult {
     pub source: String,
     pub is_set: bool,
+    pub hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

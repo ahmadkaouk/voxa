@@ -7,8 +7,15 @@ final class GlobalHotkeyBridge {
     var onHoldDeactivated: (() -> Void)?
 
     private let queue = DispatchQueue(label: "voico.v2.menubar.hotkeys")
+    private let overlapDelay: DispatchTimeInterval = .milliseconds(160)
     private var toggleMatcher = HotkeyMatcher(hotkey: .rightOption)
     private var holdMatcher = HotkeyMatcher(hotkey: .functionKey)
+    private var toggleConfiguredHotkey: ConfiguredHotkey = .rightOption
+    private var holdConfiguredHotkey: ConfiguredHotkey = .functionKey
+    private var pendingFunctionAction: DeferredFunctionAction?
+    private var pendingFunctionDidActivate = false
+    private var pendingFunctionWorkItem: DispatchWorkItem?
+    private var comboHoldActive = false
     private var globalMonitor: Any?
     private var localMonitor: Any?
 
@@ -41,8 +48,11 @@ final class GlobalHotkeyBridge {
     func updateBindings(toggle: HotkeyOption, hold: HotkeyOption) {
         queue.async { [weak self] in
             guard let self else { return }
-            self.toggleMatcher = HotkeyMatcher(hotkey: ConfiguredHotkey.from(option: toggle))
-            self.holdMatcher = HotkeyMatcher(hotkey: ConfiguredHotkey.from(option: hold))
+            self.toggleConfiguredHotkey = ConfiguredHotkey.from(option: toggle)
+            self.holdConfiguredHotkey = ConfiguredHotkey.from(option: hold)
+            self.toggleMatcher = HotkeyMatcher(hotkey: self.toggleConfiguredHotkey)
+            self.holdMatcher = HotkeyMatcher(hotkey: self.holdConfiguredHotkey)
+            self.resetFunctionOverlapState()
         }
     }
 
@@ -57,6 +67,11 @@ final class GlobalHotkeyBridge {
     }
 
     private func handle(_ event: HotkeyInputEvent) {
+        if isFunctionOverlapEnabled {
+            handleFunctionOverlap(event)
+            return
+        }
+
         if let signal = toggleMatcher.onEvent(event),
            signal == .activated
         {
@@ -79,6 +94,131 @@ final class GlobalHotkeyBridge {
             }
         }
     }
+
+    private var isFunctionOverlapEnabled: Bool {
+        (toggleConfiguredHotkey == .fnSpace && holdConfiguredHotkey == .functionKey)
+            || (toggleConfiguredHotkey == .functionKey && holdConfiguredHotkey == .fnSpace)
+    }
+
+    private var singleFunctionAction: DeferredFunctionAction {
+        toggleConfiguredHotkey == .functionKey ? .toggle : .hold
+    }
+
+    private var comboFunctionAction: DeferredFunctionAction {
+        toggleConfiguredHotkey == .fnSpace ? .toggle : .hold
+    }
+
+    private func handleFunctionOverlap(_ event: HotkeyInputEvent) {
+        _ = toggleMatcher.onEvent(event)
+        _ = holdMatcher.onEvent(event)
+
+        switch (event.kind, event.key) {
+        case (.press, .functionKey):
+            schedulePendingFunctionAction(singleFunctionAction)
+
+        case (.press, .space):
+            guard pendingFunctionAction != nil, !pendingFunctionDidActivate else {
+                return
+            }
+
+            cancelPendingFunctionAction()
+            switch comboFunctionAction {
+            case .toggle:
+                dispatchToggleActivated()
+            case .hold:
+                comboHoldActive = true
+                dispatchHoldActivated()
+            }
+
+        case (.release, .space):
+            if comboHoldActive {
+                comboHoldActive = false
+                dispatchHoldDeactivated()
+            }
+
+        case (.release, .functionKey):
+            if comboHoldActive {
+                comboHoldActive = false
+                dispatchHoldDeactivated()
+                return
+            }
+
+            guard let pendingFunctionAction else {
+                return
+            }
+
+            if !pendingFunctionDidActivate {
+                switch pendingFunctionAction {
+                case .toggle:
+                    dispatchToggleActivated()
+                case .hold:
+                    dispatchHoldActivated()
+                    dispatchHoldDeactivated()
+                }
+            } else if pendingFunctionAction == .hold {
+                dispatchHoldDeactivated()
+            }
+
+            cancelPendingFunctionAction()
+
+        default:
+            break
+        }
+    }
+
+    private func schedulePendingFunctionAction(_ action: DeferredFunctionAction) {
+        cancelPendingFunctionAction()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.pendingFunctionAction == action else { return }
+
+            self.pendingFunctionDidActivate = true
+            self.pendingFunctionWorkItem = nil
+
+            switch action {
+            case .toggle:
+                self.dispatchToggleActivated()
+            case .hold:
+                self.dispatchHoldActivated()
+            }
+        }
+
+        pendingFunctionAction = action
+        pendingFunctionDidActivate = false
+        pendingFunctionWorkItem = workItem
+        queue.asyncAfter(deadline: .now() + overlapDelay, execute: workItem)
+    }
+
+    private func cancelPendingFunctionAction() {
+        pendingFunctionWorkItem?.cancel()
+        pendingFunctionWorkItem = nil
+        pendingFunctionAction = nil
+        pendingFunctionDidActivate = false
+    }
+
+    private func resetFunctionOverlapState() {
+        cancelPendingFunctionAction()
+        comboHoldActive = false
+    }
+
+    private func dispatchToggleActivated() {
+        DispatchQueue.main.async { [weak self] in
+            self?.onToggleActivated?()
+        }
+    }
+
+    private func dispatchHoldActivated() {
+        DispatchQueue.main.async { [weak self] in
+            self?.onHoldActivated?()
+        }
+    }
+
+    private func dispatchHoldDeactivated() {
+        DispatchQueue.main.async { [weak self] in
+            self?.onHoldDeactivated?()
+        }
+    }
 }
 
 private enum HotkeyEventKind {
@@ -99,9 +239,15 @@ private enum HotkeySignal {
     case deactivated
 }
 
-private enum ConfiguredHotkey {
+private enum DeferredFunctionAction {
+    case toggle
+    case hold
+}
+
+private enum ConfiguredHotkey: Equatable {
     case rightOption
     case functionKey
+    case fnSpace
     case cmdSpace
     case unsupported
 
@@ -111,6 +257,8 @@ private enum ConfiguredHotkey {
             return .rightOption
         case .functionKey:
             return .functionKey
+        case .functionSpace:
+            return .fnSpace
         case .commandSpace:
             return .cmdSpace
         }
@@ -234,6 +382,9 @@ private struct HotkeyMatcher {
             if firstPress && hotkey == .cmdSpace && commandDown {
                 return .activated
             }
+            if firstPress && hotkey == .fnSpace && functionDown {
+                return .activated
+            }
             return nil
         case .other:
             return nil
@@ -262,11 +413,17 @@ private struct HotkeyMatcher {
             if hotkey == .functionKey && wasDown {
                 return .deactivated
             }
+            if hotkey == .fnSpace && wasDown && spaceDown {
+                return .deactivated
+            }
             return nil
         case .space:
             let wasDown = spaceDown
             spaceDown = false
             if hotkey == .cmdSpace && wasDown {
+                return .deactivated
+            }
+            if hotkey == .fnSpace && wasDown {
                 return .deactivated
             }
             return nil
