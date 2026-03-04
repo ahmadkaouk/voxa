@@ -17,6 +17,21 @@ Local macOS dictation app with a Swift menu bar client and a Rust daemon.
 
 ## Install
 
+Build a distributable macOS app bundle and disk image:
+
+```bash
+./scripts/package-macos.sh
+```
+
+This produces:
+
+- `dist/Voico.app`
+- `dist/Voico.dmg`
+
+The app bundle embeds `voico-daemon`, and the menu bar app will install or update a per-user LaunchAgent that points at the bundled daemon.
+
+## Developer Install
+
 Install the daemon and control CLI:
 
 ```bash

@@ -25,7 +25,7 @@ enum RuntimeStateKind: String {
     var menuBarSymbol: String {
         switch self {
         case .idle:
-            return "mic"
+            return "waveform"
         case .recording:
             return "waveform"
         case .transcribing:

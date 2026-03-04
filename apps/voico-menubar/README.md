@@ -24,6 +24,14 @@ cd apps/voico-menubar
 swift run voico-menubar
 ```
 
+## Package
+
+```bash
+./scripts/package-macos.sh
+```
+
+The packaged `Voico.app` embeds `voico-daemon` at `Contents/Resources/bin/voico-daemon`, and the menu bar app will prefer that bundled daemon when installing the LaunchAgent.
+
 ## Notes
 
 - This app does not parse daemon logs.

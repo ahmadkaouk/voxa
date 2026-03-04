@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import SwiftUI
@@ -25,6 +26,7 @@ final class AppController: ObservableObject {
     @Published private(set) var isAPIKeySet = false
     @Published private(set) var apiKeyHint: String?
     @Published private(set) var apiKeySaveCount: UInt64 = 0
+    @Published private(set) var hasAccessibilityPermission = true
     @Published var apiKeyInput = ""
 
     private let transport: IPCTransport
@@ -38,8 +40,10 @@ final class AppController: ObservableObject {
     private var lastSeenSeq: UInt64 = 0
     private var eventConnection: IPCConnection?
     private var terminationObserver: NSObjectProtocol?
+    private var becameActiveObserver: NSObjectProtocol?
     private var shutdownHandled = false
     private var overlayDismissedForCurrentRecording = false
+    private var hasPromptedForInputPermissions = false
 
     init() {
         let path: String
@@ -62,6 +66,10 @@ final class AppController: ObservableObject {
         }
         hotkeyBridge.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
         hotkeyBridge.start()
+        refreshAccessibilityPermission(prompt: false)
+        if !hasAccessibilityPermission {
+            _ = refreshAccessibilityPermission(prompt: true)
+        }
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
@@ -69,12 +77,22 @@ final class AppController: ObservableObject {
         ) { [weak self] _ in
             self?.handleAppTermination()
         }
+        becameActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            _ = self?.refreshAccessibilityPermission(prompt: false)
+        }
         startEventLoop()
     }
 
     deinit {
         if let terminationObserver {
             NotificationCenter.default.removeObserver(terminationObserver)
+        }
+        if let becameActiveObserver {
+            NotificationCenter.default.removeObserver(becameActiveObserver)
         }
         handleAppTermination()
     }
@@ -132,6 +150,11 @@ final class AppController: ObservableObject {
         overlayDismissedForCurrentRecording = false
         activityOverlay.hide()
         stopRecording()
+    }
+
+    func requestInputPermissions() {
+        _ = refreshAccessibilityPermission(prompt: true)
+        openInputMonitoringSettings()
     }
 
     func refreshState() {
@@ -605,6 +628,10 @@ final class AppController: ObservableObject {
     }
 
     private func sendCommandVShortcut() -> Bool {
+        guard refreshAccessibilityPermission(prompt: true) else {
+            return false
+        }
+
         let commandKey: CGKeyCode = 55
         let vKey: CGKeyCode = 9
         let delay = 0.02
@@ -649,6 +676,34 @@ final class AppController: ObservableObject {
         event.flags = flags
         event.post(tap: .cghidEventTap)
         return true
+    }
+
+    @discardableResult
+    private func refreshAccessibilityPermission(prompt: Bool) -> Bool {
+        let shouldPrompt = prompt && !hasPromptedForInputPermissions
+        if shouldPrompt {
+            hasPromptedForInputPermissions = true
+        }
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: shouldPrompt]
+            as CFDictionary
+        let trusted = AXIsProcessTrustedWithOptions(options)
+        hasAccessibilityPermission = trusted
+        if !trusted {
+            statusMessage = "Grant Accessibility/Input Monitoring for hotkeys and autopaste"
+        }
+        return trusted
+    }
+
+    private func openInputMonitoringSettings() {
+        let urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+        ]
+        for raw in urls {
+            if let url = URL(string: raw) {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     private func publishState(_ snapshot: DaemonStateSnapshot) {
@@ -952,6 +1007,15 @@ final class AppController: ObservableObject {
     private func resolveDaemonExecutablePath() -> String? {
         let env = ProcessInfo.processInfo.environment
         var candidates: [String] = []
+
+        if let bundledResourceURL = Bundle.main.resourceURL {
+            candidates.append(
+                bundledResourceURL
+                    .appendingPathComponent("bin/voico-daemon")
+                    .standardizedFileURL
+                    .path
+            )
+        }
 
         if let override = env["VOICO_DAEMON_BIN"], !override.isEmpty {
             candidates.append(override)

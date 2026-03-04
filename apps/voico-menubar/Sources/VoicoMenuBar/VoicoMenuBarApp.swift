@@ -187,6 +187,12 @@ struct VoicoPopoverView: View {
 
     private var footerActions: some View {
         sectionGroup {
+            if !controller.hasAccessibilityPermission {
+                menuActionRow("Enable Input Permissions…", systemImage: "hand.raised.fill") {
+                    controller.requestInputPermissions()
+                }
+            }
+
             menuActionRow("Reconnect", systemImage: "arrow.clockwise") {
                 controller.reconnectNow()
             }
@@ -271,6 +277,9 @@ struct VoicoPopoverView: View {
         case .connected:
             switch controller.runtimeState {
             case .idle:
+                if !controller.hasAccessibilityPermission {
+                    return "Enable input permissions for hotkeys and autopaste"
+                }
                 return controller.isAPIKeySet ? "Ready when you are" : "Add an API key to start transcribing"
             case .recording:
                 return "Listening for your transcript"

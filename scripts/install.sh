@@ -28,3 +28,6 @@ fi
 
 echo "Run the menu bar app with:"
 echo "  cd apps/voico-menubar && swift run voico-menubar"
+echo
+echo "Build a distributable app bundle with:"
+echo "  ./scripts/package-macos.sh"
