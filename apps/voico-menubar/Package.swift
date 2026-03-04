@@ -14,5 +14,10 @@ let package = Package(
             name: "VoicoMenuBar",
             path: "Sources/VoicoMenuBar"
         ),
+        .testTarget(
+            name: "VoicoMenuBarTests",
+            dependencies: ["VoicoMenuBar"],
+            path: "Tests/VoicoMenuBarTests"
+        ),
     ]
 )

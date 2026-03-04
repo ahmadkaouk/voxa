@@ -1,42 +1,77 @@
 import Foundation
 
-enum ServiceState: String {
-    case checking
-    case running
-    case stopped
+enum RuntimeStateKind: String {
+    case idle
+    case recording
+    case transcribing
+    case outputting
     case error
 
     var label: String {
         switch self {
-        case .checking:
-            return "Checking"
-        case .running:
-            return "Running"
-        case .stopped:
-            return "Stopped"
+        case .idle:
+            return "Idle"
+        case .recording:
+            return "Recording"
+        case .transcribing:
+            return "Transcribing"
+        case .outputting:
+            return "Outputting"
         case .error:
             return "Error"
         }
     }
 
-    var iconName: String {
+    var menuBarSymbol: String {
         switch self {
-        case .checking:
-            return "hourglass"
-        case .running:
-            return "waveform.badge.mic"
-        case .stopped:
-            return "mic.slash"
+        case .idle:
+            return "waveform"
+        case .recording:
+            return "waveform"
+        case .transcribing:
+            return "waveform.and.mic"
+        case .outputting:
+            return "square.and.arrow.up"
         case .error:
             return "exclamationmark.triangle"
         }
     }
+
+    var isListeningActive: Bool {
+        self == .recording || self == .transcribing
+    }
 }
 
-enum VoicoHotkey: String, CaseIterable, Identifiable {
+enum ConnectionStatus {
+    case connecting
+    case connected
+    case disconnected(message: String)
+
+    var label: String {
+        switch self {
+        case .connecting:
+            return "Connecting"
+        case .connected:
+            return "Connected"
+        case let .disconnected(message):
+            return "Disconnected: \(message)"
+        }
+    }
+
+    var isConnected: Bool {
+        if case .connected = self {
+            return true
+        }
+
+        return false
+    }
+}
+
+enum HotkeyOption: String, CaseIterable, Identifiable {
     case rightOption = "right_option"
-    case cmdSpace = "cmd_space"
     case functionKey = "fn"
+    case functionSpace = "fn_space"
+    case commandSpace = "cmd_space"
 
     var id: String { rawValue }
 
@@ -44,26 +79,87 @@ enum VoicoHotkey: String, CaseIterable, Identifiable {
         switch self {
         case .rightOption:
             return "Right Option"
-        case .cmdSpace:
-            return "Cmd+Space"
         case .functionKey:
             return "Fn"
+        case .functionSpace:
+            return "Fn+Space"
+        case .commandSpace:
+            return "Cmd+Space"
         }
+    }
+
+    static func fromRawOrDefault(_ raw: String) -> HotkeyOption {
+        HotkeyOption(rawValue: raw) ?? .rightOption
     }
 }
 
-struct ServiceStatus {
-    let plistPresent: Bool
-    let loaded: Bool
+enum ModelOption: String, CaseIterable, Identifiable {
+    case gpt4oMiniTranscribe = "gpt-4o-mini-transcribe"
+    case gpt4oTranscribe = "gpt-4o-transcribe"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .gpt4oMiniTranscribe:
+            return "GPT-4o Mini Transcribe"
+        case .gpt4oTranscribe:
+            return "GPT-4o Transcribe"
+        }
+    }
+
+    static func fromRawOrDefault(_ raw: String) -> ModelOption {
+        ModelOption(rawValue: raw) ?? .gpt4oMiniTranscribe
+    }
 }
 
-struct DaemonSettings {
-    let toggleHotkey: VoicoHotkey
-    let holdHotkey: VoicoHotkey
+enum OutputModeOption: String, CaseIterable, Identifiable {
+    case clipboardAutopaste = "clipboard_autopaste"
+    case clipboardOnly = "clipboard_only"
+    case none = "none"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .clipboardAutopaste:
+            return "Clipboard + Autopaste"
+        case .clipboardOnly:
+            return "Clipboard Only"
+        case .none:
+            return "None"
+        }
+    }
+
+    static func fromRawOrDefault(_ raw: String) -> OutputModeOption {
+        OutputModeOption(rawValue: raw) ?? .clipboardAutopaste
+    }
 }
 
-struct AppSnapshot {
-    let service: ServiceStatus
-    let settings: DaemonSettings
-    let apiKeySet: Bool
+struct DaemonStateSnapshot {
+    let state: RuntimeStateKind
+    let eventSeq: UInt64
+    let lastError: String?
+    let recordingOrigin: String?
+}
+
+struct DaemonConfigSnapshot {
+    let toggleHotkey: String
+    let holdHotkey: String
+    let model: String
+    let outputMode: String
+    let maxRecordingSeconds: UInt64
+    let revision: UInt64
+}
+
+struct ApiKeyStatusSnapshot {
+    let source: String
+    let isSet: Bool
+    let hint: String?
+}
+
+struct DaemonEventSnapshot {
+    let name: String
+    let seq: UInt64
+    let data: [String: Any]
 }

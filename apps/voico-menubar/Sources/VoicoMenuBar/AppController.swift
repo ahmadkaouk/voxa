@@ -1,111 +1,257 @@
 import AppKit
+import ApplicationServices
+import CoreGraphics
 import Foundation
+import SwiftUI
 
-@MainActor
 final class AppController: ObservableObject {
-    @Published private(set) var serviceState: ServiceState = .checking
-    @Published private(set) var toggleHotkey: VoicoHotkey = .rightOption
-    @Published private(set) var holdHotkey: VoicoHotkey = .functionKey
-    @Published private(set) var apiKeySet = false
+    private let daemonLabel = "com.voico.daemon"
+    private let legacyDaemonLabel = "com.voico.v2.daemon"
+    @Published private(set) var connectionStatus: ConnectionStatus = .connecting
+    @Published private(set) var runtimeState: RuntimeStateKind = .idle
+    @Published private(set) var lastEventName: String = "none"
+    @Published private(set) var lastErrorCode: String?
+    @Published private(set) var statusMessage: String = "Starting daemon connection..."
     @Published private(set) var isBusy = false
-    @Published private(set) var statusMessage = "Starting..."
+    @Published private(set) var eventSequence: UInt64 = 0
+    @Published private(set) var socketPath: String
+
+    @Published private(set) var configRevision: UInt64 = 0
+    @Published private(set) var toggleHotkey: HotkeyOption = .rightOption
+    @Published private(set) var holdHotkey: HotkeyOption = .functionKey
+    @Published private(set) var model: ModelOption = .gpt4oMiniTranscribe
+    @Published private(set) var outputMode: OutputModeOption = .clipboardAutopaste
+    @Published private(set) var maxRecordingSeconds: UInt64 = 300
+    @Published private(set) var apiKeySource: String = "keychain"
+    @Published private(set) var isAPIKeySet = false
+    @Published private(set) var apiKeyHint: String?
+    @Published private(set) var apiKeySaveCount: UInt64 = 0
+    @Published private(set) var hasAccessibilityPermission = true
     @Published var apiKeyInput = ""
 
-    private let cli = VoicoCLI()
+    private let transport: IPCTransport
+    private let hotkeyBridge = GlobalHotkeyBridge()
+    private let activityOverlay = ActivityOverlayController()
+    private let eventQueue = DispatchQueue(label: "voico.menubar.events", qos: .userInitiated)
+    private let requestQueue = DispatchQueue(label: "voico.menubar.requests", qos: .userInitiated)
+
+    private let lifecycleLock = NSLock()
+    private var shouldStop = false
+    private var lastSeenSeq: UInt64 = 0
+    private var eventConnection: IPCConnection?
+    private var terminationObserver: NSObjectProtocol?
+    private var becameActiveObserver: NSObjectProtocol?
+    private var shutdownHandled = false
+    private var overlayDismissedForCurrentRecording = false
+    private var hasPromptedForInputPermissions = false
 
     init() {
-        startup()
+        let path: String
+        do {
+            path = try IPCTransport.defaultSocketPath()
+        } catch {
+            path = "/tmp/voico-daemon.sock"
+        }
+
+        socketPath = path
+        transport = IPCTransport(socketPath: path)
+        hotkeyBridge.onToggleActivated = { [weak self] in
+            self?.handleToggleHotkeyActivated()
+        }
+        hotkeyBridge.onHoldActivated = { [weak self] in
+            self?.handleHoldHotkeyActivated()
+        }
+        hotkeyBridge.onHoldDeactivated = { [weak self] in
+            self?.handleHoldHotkeyDeactivated()
+        }
+        hotkeyBridge.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
+        hotkeyBridge.start()
+        refreshAccessibilityPermission(prompt: false)
+        if !hasAccessibilityPermission {
+            _ = refreshAccessibilityPermission(prompt: true)
+        }
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.handleAppTermination()
+        }
+        becameActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            _ = self?.refreshAccessibilityPermission(prompt: false)
+        }
+        startEventLoop()
     }
 
-    func startup() {
-        runRead(
-            startMessage: "Initializing Voico service...",
-            successMessage: "Voico ready"
-        ) { cli in
-            try cli.ensureServiceInstalledAndRunning()
-            return try cli.snapshot()
+    deinit {
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
+        if let becameActiveObserver {
+            NotificationCenter.default.removeObserver(becameActiveObserver)
+        }
+        handleAppTermination()
+    }
+
+    var menuBarSymbol: String {
+        switch connectionStatus {
+        case .connected:
+            return runtimeState.menuBarSymbol
+        case .connecting:
+            return "bolt.horizontal.circle"
+        case .disconnected:
+            return "wifi.exclamationmark"
         }
     }
 
-    func refresh() {
-        runRead(
-            startMessage: "Refreshing status...",
-            successMessage: "Voico ready"
-        ) { cli in
-            try cli.snapshot()
+    private func handleAppTermination() {
+        lifecycleLock.lock()
+        if shutdownHandled {
+            lifecycleLock.unlock()
+            return
         }
+        shutdownHandled = true
+        lifecycleLock.unlock()
+
+        hotkeyBridge.stop()
+        stopEventLoop()
+        activityOverlay.hide()
+        _ = stopLaunchAgentIfNeeded()
     }
 
-    func startOrRestartService() {
-        runMutation(
-            startMessage: "Starting service...",
-            successMessage: "Service running"
-        ) { cli in
-            let status = try cli.serviceStatus()
-            if status.loaded {
-                try cli.restartService()
-            } else {
-                try cli.installService()
+    func startRecording() {
+        sendCommand(
+            method: "start_recording",
+            params: ["origin": "manual"],
+            pendingMessage: "Requesting recording start...",
+            successMessage: "Recording request accepted"
+        )
+    }
+
+    func stopRecording() {
+        sendCommand(
+            method: "stop_recording",
+            params: ["reason": "manual"],
+            pendingMessage: "Requesting recording stop...",
+            successMessage: "Recording stop request accepted"
+        )
+    }
+
+    func dismissActivityOverlay() {
+        overlayDismissedForCurrentRecording = true
+        activityOverlay.hide()
+    }
+
+    func stopRecordingFromOverlay() {
+        overlayDismissedForCurrentRecording = false
+        activityOverlay.hide()
+        stopRecording()
+    }
+
+    func requestInputPermissions() {
+        _ = refreshAccessibilityPermission(prompt: true)
+        openInputMonitoringSettings()
+    }
+
+    func refreshState() {
+        sendCommand(
+            method: "get_state",
+            params: [:],
+            pendingMessage: "Refreshing daemon state...",
+            successMessage: "State refreshed"
+        )
+    }
+
+    func refreshConfig() {
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = "Refreshing daemon config..."
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                let config = try self.transport.getConfig()
+                let apiKeyStatus = try self.transport.getAPIKeyStatus()
+                DispatchQueue.main.async {
+                    self.publishConfig(config)
+                    self.publishAPIKeyStatus(apiKeyStatus)
+                    self.statusMessage = "Config refreshed"
+                    self.isBusy = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                    self.isBusy = false
+                }
             }
         }
     }
 
-    func stopService() {
-        runMutation(
-            startMessage: "Stopping service...",
-            successMessage: "Service stopped"
-        ) { cli in
-            try cli.uninstallService()
-        }
-    }
-
-    func reinstallService() {
-        runMutation(
-            startMessage: "Reinstalling service...",
-            successMessage: "Service reinstalled"
-        ) { cli in
-            try cli.installService()
-        }
-    }
-
-    func setToggleHotkey(_ value: VoicoHotkey) {
+    func setToggleHotkey(_ value: HotkeyOption) {
         if value == toggleHotkey {
             return
         }
 
-        let previous = toggleHotkey
-        toggleHotkey = value
-
-        runMutation(
-            startMessage: "Updating toggle hotkey...",
-            successMessage: "Toggle hotkey updated",
-            onFailure: { [weak self] in
-                self?.toggleHotkey = previous
-            }
-        ) { cli in
-            try cli.setToggleHotkey(value)
-            try cli.restartService()
-        }
+        updateConfig(
+            params: ["toggle_hotkey": value.rawValue],
+            pendingMessage: "Updating toggle hotkey...",
+            successMessage: "Toggle hotkey updated"
+        )
     }
 
-    func setHoldHotkey(_ value: VoicoHotkey) {
+    func setHoldHotkey(_ value: HotkeyOption) {
         if value == holdHotkey {
             return
         }
 
-        let previous = holdHotkey
-        holdHotkey = value
+        updateConfig(
+            params: ["hold_hotkey": value.rawValue],
+            pendingMessage: "Updating hold hotkey...",
+            successMessage: "Hold hotkey updated"
+        )
+    }
 
-        runMutation(
-            startMessage: "Updating hold hotkey...",
-            successMessage: "Hold hotkey updated",
-            onFailure: { [weak self] in
-                self?.holdHotkey = previous
-            }
-        ) { cli in
-            try cli.setHoldHotkey(value)
-            try cli.restartService()
+    func setModel(_ value: ModelOption) {
+        if value == model {
+            return
         }
+
+        updateConfig(
+            params: ["model": value.rawValue],
+            pendingMessage: "Updating model...",
+            successMessage: "Model updated"
+        )
+    }
+
+    func setOutputMode(_ value: OutputModeOption) {
+        if value == outputMode {
+            return
+        }
+
+        updateConfig(
+            params: ["output_mode": value.rawValue],
+            pendingMessage: "Updating output mode...",
+            successMessage: "Output mode updated"
+        )
+    }
+
+    func setMaxRecordingSeconds(_ value: UInt64) {
+        let clamped = max(1, min(value, 3600))
+        if clamped == maxRecordingSeconds {
+            return
+        }
+
+        updateConfig(
+            params: ["max_recording_seconds": clamped],
+            pendingMessage: "Updating max recording duration...",
+            successMessage: "Max recording duration updated"
+        )
     }
 
     func saveAPIKey() {
@@ -115,101 +261,922 @@ final class AppController: ObservableObject {
             return
         }
 
-        runMutation(
-            startMessage: "Saving API key...",
-            successMessage: "API key saved"
-        ) { cli in
-            try cli.setAPIKey(trimmed)
-            try cli.restartService()
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = "Saving API key..."
         }
 
-        apiKeyInput = ""
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                try self.transport.setAPIKey(trimmed)
+                let status = try self.transport.getAPIKeyStatus()
+                DispatchQueue.main.async {
+                    self.publishAPIKeyStatus(status)
+                    self.statusMessage = "API key saved"
+                    self.apiKeySaveCount += 1
+                    self.apiKeyInput = ""
+                    self.isBusy = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                    self.isBusy = false
+                }
+            }
+        }
     }
 
-    func openStdoutLog() {
-        openLogFile(named: "voico-daemon.out.log")
+    func reconnectNow() {
+        lifecycleLock.lock()
+        eventConnection?.close()
+        eventConnection = nil
+        lifecycleLock.unlock()
     }
 
-    func openStderrLog() {
-        openLogFile(named: "voico-daemon.err.log")
+    func startDaemon() {
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = "Starting daemon..."
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                try self.ensureDaemonRunning()
+                DispatchQueue.main.async {
+                    self.statusMessage = "Daemon ready"
+                    self.isBusy = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                    self.isBusy = false
+                }
+            }
+        }
+    }
+
+    func stopDaemon() {
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = "Stopping daemon..."
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            let stopped = self.stopLaunchAgentIfNeeded()
+
+            DispatchQueue.main.async {
+                self.statusMessage = stopped
+                    ? "Daemon stop requested"
+                    : "LaunchAgent service not loaded"
+                self.isBusy = false
+            }
+        }
     }
 
     func quit() {
-        NSApplication.shared.terminate(nil)
+        handleAppTermination()
+        DispatchQueue.main.async {
+            NSApplication.shared.terminate(nil)
+        }
     }
 
-    private func openLogFile(named fileName: String) {
-        let path = NSString(string: "~/Library/Logs/\(fileName)").expandingTildeInPath
-        let url = URL(fileURLWithPath: path)
-        NSWorkspace.shared.open(url)
+    private func startEventLoop() {
+        eventQueue.async { [weak self] in
+            self?.runEventLoop()
+        }
     }
 
-    private func runRead(
-        startMessage: String,
-        successMessage: String,
-        work: @escaping (VoicoCLI) throws -> AppSnapshot
-    ) {
-        isBusy = true
-        statusMessage = startMessage
+    private func stopEventLoop() {
+        lifecycleLock.lock()
+        shouldStop = true
+        eventConnection?.close()
+        eventConnection = nil
+        lifecycleLock.unlock()
+    }
 
-        DispatchQueue.global(qos: .userInitiated).async {
+    private func runEventLoop() {
+        let backoffSchedule: [TimeInterval] = [0.2, 0.5, 1.0, 2.0, 5.0]
+        var backoffIndex = 0
+
+        while true {
+            if isStopping() {
+                return
+            }
+
+            publishConnectionStatus(.connecting, message: "Starting daemon...")
+
             do {
-                let snapshot = try work(self.cli)
+                try ensureDaemonRunning()
+                publishConnectionStatus(.connecting, message: "Connecting to daemon...")
+                let state = try transport.getState()
+                let config = try transport.getConfig()
+                let apiKeyStatus = try transport.getAPIKeyStatus()
+                publishState(state)
+                publishConfig(config)
+                publishAPIKeyStatus(apiKeyStatus)
+
+                let subscribeFrom = currentLastSeenSeq()
+                let connection = try transport.subscribe(
+                    fromSeq: subscribeFrom == 0 ? nil : subscribeFrom
+                )
+
+                lifecycleLock.lock()
+                eventConnection = connection
+                lifecycleLock.unlock()
+
+                publishConnectionStatus(.connected, message: "Connected")
+                backoffIndex = 0
+
+                while true {
+                    if isStopping() {
+                        connection.close()
+                        return
+                    }
+
+                    let envelope = try connection.readEnvelope()
+                    switch envelope {
+                    case let .event(event):
+                        handleEvent(event)
+                    default:
+                        continue
+                    }
+                }
+            } catch {
+                lifecycleLock.lock()
+                eventConnection?.close()
+                eventConnection = nil
+                lifecycleLock.unlock()
+
+                if isStopping() {
+                    return
+                }
+
+                publishConnectionStatus(
+                    .disconnected(message: error.localizedDescription),
+                    message: "Disconnected: \(error.localizedDescription). Reconnecting..."
+                )
+
+                let sleepDuration = backoffSchedule[min(backoffIndex, backoffSchedule.count - 1)]
+                Thread.sleep(forTimeInterval: sleepDuration)
+                backoffIndex += 1
+            }
+        }
+    }
+
+    private func handleEvent(_ event: DaemonEventSnapshot) {
+        updateLastSeenSeq(event.seq)
+
+        DispatchQueue.main.async {
+            self.lastEventName = event.name
+            self.eventSequence = event.seq
+
+            if event.name == "state_changed",
+               let stateRaw = event.data["state"] as? String,
+               let state = RuntimeStateKind(rawValue: stateRaw)
+            {
+                self.runtimeState = state
+                self.lastErrorCode = event.data["last_error"] as? String
+            } else if event.name == "transcription_ready",
+                      let text = event.data["text"] as? String
+            {
+                self.handleTranscriptionReady(text)
+            }
+        }
+    }
+
+    private func sendCommand(
+        method: String,
+        params: [String: Any],
+        pendingMessage: String,
+        successMessage: String
+    ) {
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = pendingMessage
+        }
+
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                _ = try self.transport.request(method: method, params: params)
+                let state = try self.transport.getState()
+                let config = try self.transport.getConfig()
+                let apiKeyStatus = try self.transport.getAPIKeyStatus()
+
                 DispatchQueue.main.async {
-                    self.apply(snapshot: snapshot)
+                    self.publishState(state)
+                    self.publishConfig(config)
+                    self.publishAPIKeyStatus(apiKeyStatus)
                     self.statusMessage = successMessage
                     self.isBusy = false
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.serviceState = .error
-                    self.statusMessage = self.displayMessage(for: error)
+                    self.statusMessage = error.localizedDescription
                     self.isBusy = false
                 }
             }
         }
     }
 
-    private func runMutation(
-        startMessage: String,
-        successMessage: String,
-        onFailure: (() -> Void)? = nil,
-        work: @escaping (VoicoCLI) throws -> Void
+    private func updateConfig(
+        params: [String: Any],
+        pendingMessage: String,
+        successMessage: String
     ) {
-        isBusy = true
-        statusMessage = startMessage
+        DispatchQueue.main.async {
+            self.isBusy = true
+            self.statusMessage = pendingMessage
+        }
 
-        DispatchQueue.global(qos: .userInitiated).async {
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
             do {
-                try work(self.cli)
-                let snapshot = try self.cli.snapshot()
+                _ = try self.transport.request(method: "set_config", params: params)
+                let config = try self.transport.getConfig()
+                let apiKeyStatus = try self.transport.getAPIKeyStatus()
                 DispatchQueue.main.async {
-                    self.apply(snapshot: snapshot)
+                    self.publishConfig(config)
+                    self.publishAPIKeyStatus(apiKeyStatus)
                     self.statusMessage = successMessage
                     self.isBusy = false
                 }
             } catch {
                 DispatchQueue.main.async {
-                    onFailure?()
-                    self.statusMessage = self.displayMessage(for: error)
+                    self.statusMessage = error.localizedDescription
                     self.isBusy = false
                 }
             }
         }
     }
 
-    private func apply(snapshot: AppSnapshot) {
-        toggleHotkey = snapshot.settings.toggleHotkey
-        holdHotkey = snapshot.settings.holdHotkey
-        apiKeySet = snapshot.apiKeySet
-        serviceState = snapshot.service.loaded ? .running : .stopped
-    }
-
-    private func displayMessage(for error: Error) -> String {
-        if let cliError = error as? VoicoCLIError {
-            return cliError.message
+    private func handleToggleHotkeyActivated() {
+        DispatchQueue.main.async {
+            if self.runtimeState == .recording {
+                self.overlayDismissedForCurrentRecording = false
+                self.activityOverlay.hide()
+            } else {
+                self.overlayDismissedForCurrentRecording = false
+                self.activityOverlay.show(.recording, onDismiss: { [weak self] in
+                    self?.dismissActivityOverlay()
+                }, onStop: { [weak self] in
+                    self?.stopRecordingFromOverlay()
+                })
+            }
         }
 
-        return error.localizedDescription
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                let state = try self.transport.getState()
+                if state.state == .recording {
+                    _ = try self.transport.request(
+                        method: "stop_recording",
+                        params: ["reason": "hotkey_toggle"]
+                    )
+                } else {
+                    _ = try self.transport.request(
+                        method: "start_recording",
+                        params: ["origin": "hotkey_toggle"]
+                    )
+                }
+                let refreshedState = try self.transport.getState()
+                DispatchQueue.main.async {
+                    self.publishState(refreshedState)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                }
+                self.refreshOverlayStateAfterHotkeyError()
+            }
+        }
+    }
+
+    private func handleHoldHotkeyActivated() {
+        DispatchQueue.main.async {
+            self.overlayDismissedForCurrentRecording = false
+            self.activityOverlay.show(.recording, onDismiss: { [weak self] in
+                self?.dismissActivityOverlay()
+            }, onStop: { [weak self] in
+                self?.stopRecordingFromOverlay()
+            })
+        }
+
+        sendHotkeyCommand(
+            method: "start_recording",
+            params: ["origin": "hotkey_hold"]
+        )
+    }
+
+    private func handleHoldHotkeyDeactivated() {
+        DispatchQueue.main.async {
+            self.activityOverlay.hide()
+        }
+
+        sendHotkeyCommand(
+            method: "stop_recording",
+            params: ["reason": "hotkey_hold_release"]
+        )
+    }
+
+    private func sendHotkeyCommand(method: String, params: [String: Any]) {
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+
+            do {
+                _ = try self.transport.request(method: method, params: params)
+                let state = try self.transport.getState()
+                DispatchQueue.main.async {
+                    self.publishState(state)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.statusMessage = error.localizedDescription
+                }
+                self.refreshOverlayStateAfterHotkeyError()
+            }
+        }
+    }
+
+    private func handleTranscriptionReady(_ text: String) {
+        statusMessage = processTranscriptOutput(
+            text: text,
+            mode: outputMode,
+            copyToClipboard: { [weak self] value in
+                self?.writeTextToClipboard(value) ?? false
+            },
+            sendAutopaste: { [weak self] in
+                self?.sendCommandVShortcut() ?? false
+            }
+        )
+    }
+
+    private func writeTextToClipboard(_ text: String) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        return pasteboard.setString(text, forType: .string)
+    }
+
+    private func sendCommandVShortcut() -> Bool {
+        guard refreshAccessibilityPermission(prompt: true) else {
+            return false
+        }
+
+        let commandKey: CGKeyCode = 55
+        let vKey: CGKeyCode = 9
+        let delay = 0.02
+
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            return false
+        }
+
+        guard postKeyEvent(source: source, keyCode: commandKey, keyDown: true) else {
+            return false
+        }
+        Thread.sleep(forTimeInterval: delay)
+        guard postKeyEvent(source: source, keyCode: vKey, keyDown: true, flags: .maskCommand)
+        else {
+            return false
+        }
+
+        Thread.sleep(forTimeInterval: delay)
+        guard postKeyEvent(source: source, keyCode: vKey, keyDown: false, flags: .maskCommand)
+        else {
+            return false
+        }
+
+        Thread.sleep(forTimeInterval: delay)
+        return postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
+    }
+
+    private func postKeyEvent(
+        source: CGEventSource,
+        keyCode: CGKeyCode,
+        keyDown: Bool,
+        flags: CGEventFlags = []
+    ) -> Bool {
+        guard let event = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: keyCode,
+            keyDown: keyDown
+        ) else {
+            return false
+        }
+
+        event.flags = flags
+        event.post(tap: .cghidEventTap)
+        return true
+    }
+
+    @discardableResult
+    private func refreshAccessibilityPermission(prompt: Bool) -> Bool {
+        let shouldPrompt = prompt && !hasPromptedForInputPermissions
+        if shouldPrompt {
+            hasPromptedForInputPermissions = true
+        }
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: shouldPrompt]
+            as CFDictionary
+        let trusted = AXIsProcessTrustedWithOptions(options)
+        hasAccessibilityPermission = trusted
+        if !trusted {
+            statusMessage = "Grant Accessibility/Input Monitoring for hotkeys and autopaste"
+        }
+        return trusted
+    }
+
+    private func openInputMonitoringSettings() {
+        let urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+        ]
+        for raw in urls {
+            if let url = URL(string: raw) {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    private func publishState(_ snapshot: DaemonStateSnapshot) {
+        DispatchQueue.main.async {
+            self.runtimeState = snapshot.state
+            self.lastErrorCode = snapshot.lastError
+            self.eventSequence = max(self.eventSequence, snapshot.eventSeq)
+            self.updateLastSeenSeq(snapshot.eventSeq)
+            if snapshot.state != .recording {
+                self.overlayDismissedForCurrentRecording = false
+            }
+            self.syncActivityOverlay()
+        }
+    }
+
+    private func publishConfig(_ snapshot: DaemonConfigSnapshot) {
+        DispatchQueue.main.async {
+            self.toggleHotkey = HotkeyOption.fromRawOrDefault(snapshot.toggleHotkey)
+            self.holdHotkey = HotkeyOption.fromRawOrDefault(snapshot.holdHotkey)
+            self.model = ModelOption.fromRawOrDefault(snapshot.model)
+            self.outputMode = OutputModeOption.fromRawOrDefault(snapshot.outputMode)
+            self.maxRecordingSeconds = snapshot.maxRecordingSeconds
+            self.configRevision = snapshot.revision
+            self.hotkeyBridge.updateBindings(toggle: self.toggleHotkey, hold: self.holdHotkey)
+        }
+    }
+
+    private func publishAPIKeyStatus(_ snapshot: ApiKeyStatusSnapshot) {
+        DispatchQueue.main.async {
+            self.apiKeySource = snapshot.source
+            self.isAPIKeySet = snapshot.isSet
+            self.apiKeyHint = snapshot.hint
+        }
+    }
+
+    private func publishConnectionStatus(_ status: ConnectionStatus, message: String) {
+        DispatchQueue.main.async {
+            self.connectionStatus = status
+            self.statusMessage = message
+            self.syncActivityOverlay()
+        }
+    }
+
+    private func syncActivityOverlay() {
+        switch connectionStatus {
+        case .connected:
+            if runtimeState == .recording && !overlayDismissedForCurrentRecording {
+                activityOverlay.show(.recording, onDismiss: { [weak self] in
+                    self?.dismissActivityOverlay()
+                }, onStop: { [weak self] in
+                    self?.stopRecordingFromOverlay()
+                })
+            } else {
+                activityOverlay.hide()
+            }
+        case .connecting, .disconnected:
+            self.activityOverlay.hide()
+        }
+    }
+
+    private func refreshOverlayStateAfterHotkeyError() {
+        let state = try? transport.getState()
+
+        DispatchQueue.main.async {
+            if let state {
+                self.publishState(state)
+            } else {
+                self.activityOverlay.hide()
+            }
+        }
+    }
+
+    private func isStopping() -> Bool {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        return shouldStop
+    }
+
+    private func currentLastSeenSeq() -> UInt64 {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        return lastSeenSeq
+    }
+
+    private func updateLastSeenSeq(_ value: UInt64) {
+        lifecycleLock.lock()
+        if value > lastSeenSeq {
+            lastSeenSeq = value
+        }
+        lifecycleLock.unlock()
+    }
+
+    private var launchDomain: String {
+        "gui/\(getuid())"
+    }
+
+    private var launchTarget: String {
+        "\(launchDomain)/\(daemonLabel)"
+    }
+
+    private var legacyLaunchTarget: String {
+        "\(launchDomain)/\(legacyDaemonLabel)"
+    }
+
+    private var launchAgentPlistPath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/LaunchAgents/\(daemonLabel).plist"
+    }
+
+    private var legacyLaunchAgentPlistPath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/LaunchAgents/\(legacyDaemonLabel).plist"
+    }
+
+    private var daemonLogsDirectory: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Logs/voico"
+    }
+
+    private func ensureDaemonRunning() throws {
+        if daemonIsReachable() {
+            return
+        }
+
+        stopLegacyLaunchAgentIfNeeded()
+
+        guard let daemonPath = resolveDaemonExecutablePath() else {
+            throw NSError(
+                domain: "voico.daemon",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Could not resolve voico-daemon executable path for LaunchAgent installation"]
+            )
+        }
+
+        try ensureLaunchAgentInstalled(daemonPath: daemonPath)
+        if waitForDaemonAvailability(timeout: 0.3) {
+            return
+        }
+
+        launchDaemonWithLaunchctl()
+        if waitForDaemonAvailability(timeout: 1.2) {
+            return
+        }
+
+        throw NSError(
+            domain: "voico.daemon",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Failed to start voico-daemon via launchd"]
+        )
+    }
+
+    private func daemonIsReachable() -> Bool {
+        transport.isReachable()
+    }
+
+    private func waitForDaemonAvailability(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if daemonIsReachable() {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return false
+    }
+
+    private func launchDaemonWithLaunchctl() {
+        _ = try? runProcess(executable: "/bin/launchctl", arguments: ["kickstart", launchTarget])
+    }
+
+    private func ensureLaunchAgentInstalled(daemonPath: String) throws {
+        let fileManager = FileManager.default
+        let launchAgentsDirectory = NSString(string: launchAgentPlistPath).deletingLastPathComponent
+        try fileManager.createDirectory(atPath: launchAgentsDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(atPath: daemonLogsDirectory, withIntermediateDirectories: true)
+
+        let stdoutPath = "\(daemonLogsDirectory)/daemon.out.log"
+        let stderrPath = "\(daemonLogsDirectory)/daemon.err.log"
+        if !fileManager.fileExists(atPath: stdoutPath) {
+            _ = fileManager.createFile(atPath: stdoutPath, contents: nil)
+        }
+        if !fileManager.fileExists(atPath: stderrPath) {
+            _ = fileManager.createFile(atPath: stderrPath, contents: nil)
+        }
+
+        let plist = buildLaunchAgentPlist(
+            daemonPath: daemonPath,
+            stdoutPath: stdoutPath,
+            stderrPath: stderrPath
+        )
+        let currentPlist = try? String(contentsOfFile: launchAgentPlistPath, encoding: .utf8)
+        if currentPlist == plist {
+            if !isLaunchAgentLoaded() {
+                try bootstrapLaunchAgent()
+            }
+            return
+        }
+
+        try plist.write(toFile: launchAgentPlistPath, atomically: true, encoding: .utf8)
+        _ = try? runProcess(
+            executable: "/bin/launchctl",
+            arguments: ["bootout", launchDomain, launchAgentPlistPath]
+        )
+        try bootstrapLaunchAgent()
+    }
+
+    private func isLaunchAgentLoaded() -> Bool {
+        (try? runProcess(executable: "/bin/launchctl", arguments: ["print", launchTarget])) != nil
+    }
+
+    private func bootstrapLaunchAgent() throws {
+        do {
+            _ = try runProcess(
+                executable: "/bin/launchctl",
+                arguments: ["bootstrap", launchDomain, launchAgentPlistPath]
+            )
+        } catch {
+            if isServiceAlreadyLoadedError(error) {
+                return
+            }
+            throw error
+        }
+    }
+
+    private func isServiceAlreadyLoadedError(_ error: Error) -> Bool {
+        let message = (error as NSError).localizedDescription.lowercased()
+        return message.contains("already loaded")
+    }
+
+    private func buildLaunchAgentPlist(
+        daemonPath: String,
+        stdoutPath: String,
+        stderrPath: String
+    ) -> String {
+        let escapedLabel = xmlEscape(daemonLabel)
+        let escapedDaemonPath = xmlEscape(daemonPath)
+        let escapedStdoutPath = xmlEscape(stdoutPath)
+        let escapedStderrPath = xmlEscape(stderrPath)
+
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>Label</key>
+          <string>\(escapedLabel)</string>
+          <key>ProgramArguments</key>
+          <array>
+            <string>\(escapedDaemonPath)</string>
+          </array>
+          <key>RunAtLoad</key>
+          <true/>
+          <key>ProcessType</key>
+          <string>Interactive</string>
+          <key>LimitLoadToSessionType</key>
+          <string>Aqua</string>
+          <key>StandardOutPath</key>
+          <string>\(escapedStdoutPath)</string>
+          <key>StandardErrorPath</key>
+          <string>\(escapedStderrPath)</string>
+        </dict>
+        </plist>
+        """
+    }
+
+    private func xmlEscape(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+    }
+
+    private func stopLaunchAgentIfNeeded() -> Bool {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: launchAgentPlistPath),
+           (try? runProcess(
+               executable: "/bin/launchctl",
+               arguments: ["bootout", launchDomain, launchAgentPlistPath]
+           )) != nil
+        {
+            return true
+        }
+
+        return (try? runProcess(executable: "/bin/launchctl", arguments: ["bootout", launchTarget])) != nil
+    }
+
+    private func stopLegacyLaunchAgentIfNeeded() {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: legacyLaunchAgentPlistPath) {
+            _ = try? runProcess(
+                executable: "/bin/launchctl",
+                arguments: ["bootout", launchDomain, legacyLaunchAgentPlistPath]
+            )
+        }
+
+        _ = try? runProcess(executable: "/bin/launchctl", arguments: ["bootout", legacyLaunchTarget])
+    }
+
+    private func resolveDaemonExecutablePath() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        var candidates: [String] = []
+
+        if let bundledResourceURL = Bundle.main.resourceURL {
+            candidates.append(
+                bundledResourceURL
+                    .appendingPathComponent("bin/voico-daemon")
+                    .standardizedFileURL
+                    .path
+            )
+        }
+
+        if let override = env["VOICO_DAEMON_BIN"], !override.isEmpty {
+            candidates.append(override)
+        }
+
+        if let pathEnv = env["PATH"] {
+            for entry in pathEnv.split(separator: ":") {
+                candidates.append("\(entry)/voico-daemon")
+            }
+        }
+
+        candidates.append("~/.cargo/bin/voico-daemon")
+        candidates.append("/opt/homebrew/bin/voico-daemon")
+        candidates.append("/usr/local/bin/voico-daemon")
+
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        candidates.append(
+            cwd
+                .appendingPathComponent("../../target/debug/voico-daemon")
+                .standardizedFileURL
+                .path
+        )
+        candidates.append(
+            cwd
+                .appendingPathComponent("../target/debug/voico-daemon")
+                .standardizedFileURL
+                .path
+        )
+
+        for candidate in candidates {
+            let expanded = NSString(string: candidate).expandingTildeInPath
+            if FileManager.default.isExecutableFile(atPath: expanded) {
+                return expanded
+            }
+        }
+
+        return nil
+    }
+}
+
+private func runProcess(executable: String, arguments: [String]) throws -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    try process.run()
+    process.waitUntilExit()
+
+    let stderrText = String(
+        data: stderr.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+    ) ?? ""
+    let stdoutText = String(
+        data: stdout.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+    ) ?? ""
+
+    guard process.terminationStatus == 0 else {
+        let message = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let command = ([executable] + arguments).joined(separator: " ")
+        if message.isEmpty {
+            throw NSError(
+                domain: "voico.process",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: "Command failed (\(process.terminationStatus)): \(command)"]
+            )
+        }
+
+        throw NSError(
+            domain: "voico.process",
+            code: Int(process.terminationStatus),
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
+    }
+
+    return stdoutText
+}
+
+private final class ActivityOverlayController {
+    private let panelSize = NSSize(width: 96, height: 28)
+    private var panel: NSPanel?
+    private var hostingView: NSHostingView<ActivityOverlayView>?
+
+    func show(
+        _ phase: ActivityOverlayPhase,
+        onDismiss: @escaping () -> Void,
+        onStop: @escaping () -> Void
+    ) {
+        let panel = ensurePanel()
+        if let hostingView {
+            hostingView.rootView = ActivityOverlayView(
+                phase: phase,
+                onDismiss: onDismiss,
+                onStop: onStop
+            )
+        }
+        position(panel)
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+    }
+
+    @discardableResult
+    private func ensurePanel() -> NSPanel {
+        if let panel {
+            return panel
+        }
+
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: panelSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        panel.ignoresMouseEvents = false
+        panel.isMovable = false
+        panel.isReleasedWhenClosed = false
+
+        let hostingView = NSHostingView(
+            rootView: ActivityOverlayView(
+                phase: .recording,
+                onDismiss: {},
+                onStop: {}
+            )
+        )
+        hostingView.frame = NSRect(origin: .zero, size: panelSize)
+        panel.contentView = hostingView
+
+        self.hostingView = hostingView
+        self.panel = panel
+        return panel
+    }
+
+    private func position(_ panel: NSPanel) {
+        let screen = currentScreen() ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen else { return }
+
+        let visibleFrame = screen.visibleFrame
+        let origin = CGPoint(
+            x: round(visibleFrame.midX - (panelSize.width / 2)),
+            y: visibleFrame.minY + 56
+        )
+        panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
+    }
+
+    private func currentScreen() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
     }
 }

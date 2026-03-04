@@ -1,35 +1,40 @@
 # voico-menubar
 
-Native macOS menu bar controller for the `voico` daemon.
+Greenfield Swift menu bar client for Voico.
 
-## Requirements
+## What it does
 
-- macOS 13+
-- Xcode Command Line Tools
-- `voico` installed and available on PATH (or at `~/.cargo/bin/voico`)
-
-Install/update backend binary:
-
-```bash
-cd /Users/ahmadkaouk/projects/voico
-./scripts/install.sh
-```
+- Connects to `voico-daemon` over IPC (`~/Library/Application Support/voico/run/daemon.sock`).
+- Performs protocol handshake (`api_version = 1.0`).
+- Resyncs state via `get_state` on connect/reconnect.
+- Resyncs config via `get_config` and updates config via `set_config`.
+- Reads API key status via `get_api_key_status` and saves key via `set_api_key`.
+- Subscribes to daemon events via `subscribe` and updates UI from events.
+- Drives listening/transcribing animation from daemon runtime state (`recording`, `transcribing`).
+- Captures global hotkeys in the menubar process and forwards start/stop commands via IPC.
+- Handles transcript output in the menubar process (clipboard / clipboard+autopaste / none).
+- Auto-installs/updates a per-user LaunchAgent for `voico-daemon` and starts it on app launch.
+- Uses LaunchAgent lifecycle control (`bootstrap`, `kickstart`, `bootout`) for daemon management.
+- Exposes daemon lifecycle actions (`start`/`stop`) from the menu.
 
 ## Run
 
 ```bash
-cd /Users/ahmadkaouk/projects/voico/apps/voico-menubar
-swift run
+cd apps/voico-menubar
+swift run voico-menubar
 ```
 
-This launches a menu bar app (no Dock icon) with controls for:
+## Package
 
-- service start/stop/reinstall
-- daemon toggle/hold hotkey config
-- API key save via `launchctl setenv OPENAI_API_KEY ...`
-- log opening and refresh
+```bash
+./scripts/package-macos.sh
+```
+
+The packaged `Voico.app` embeds `voico-daemon` at `Contents/Resources/bin/voico-daemon`, and the menu bar app will prefer that bundled daemon when installing the LaunchAgent.
 
 ## Notes
 
-- The app auto-ensures the daemon service is installed/running on startup.
-- If hotkey capture or autopaste fails, grant Accessibility and Microphone permissions in macOS settings.
+- This app does not parse daemon logs.
+- This app does not shell out to CLI for runtime state.
+- Automatic reconnect backoff: `200ms`, `500ms`, `1s`, `2s`, `5s`.
+- Autopaste (`Cmd+V`) may require macOS Accessibility permission for the menubar app process.
