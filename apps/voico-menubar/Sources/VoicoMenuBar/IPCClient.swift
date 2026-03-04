@@ -6,6 +6,7 @@ enum IPCError: LocalizedError {
     case socketPathTooLong
     case socketCreateFailed(String)
     case socketConnectFailed(String)
+    case socketOptionFailed(String)
     case socketReadFailed(String)
     case socketWriteFailed(String)
     case connectionClosed
@@ -29,6 +30,8 @@ enum IPCError: LocalizedError {
             return "Could not create socket: \(message)"
         case let .socketConnectFailed(message):
             return "Could not connect to daemon socket: \(message)"
+        case let .socketOptionFailed(message):
+            return "Could not set socket option: \(message)"
         case let .socketReadFailed(message):
             return "Could not read from daemon socket: \(message)"
         case let .socketWriteFailed(message):
@@ -338,7 +341,7 @@ final class IPCConnection {
         }
 
         if result != 0 {
-            throw IPCError.socketConnectFailed(errnoMessage())
+            throw IPCError.socketOptionFailed(errnoMessage())
         }
     }
 

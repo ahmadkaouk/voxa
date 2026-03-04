@@ -640,23 +640,50 @@ final class AppController: ObservableObject {
             return false
         }
 
-        guard postKeyEvent(source: source, keyCode: commandKey, keyDown: true) else {
+        // Pre-create events to validate availability, then post asynchronously to avoid blocking the main thread.
+        guard let cmdDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: commandKey,
+            keyDown: true
+        ) else {
             return false
         }
-        Thread.sleep(forTimeInterval: delay)
-        guard postKeyEvent(source: source, keyCode: vKey, keyDown: true, flags: .maskCommand)
-        else {
+        guard let vDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: vKey,
+            keyDown: true
+        ) else {
+            return false
+        }
+        guard let vUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: vKey,
+            keyDown: false
+        ) else {
+            return false
+        }
+        guard let cmdUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: commandKey,
+            keyDown: false
+        ) else {
             return false
         }
 
-        Thread.sleep(forTimeInterval: delay)
-        guard postKeyEvent(source: source, keyCode: vKey, keyDown: false, flags: .maskCommand)
-        else {
-            return false
+        vDown.flags = .maskCommand
+        vUp.flags = .maskCommand
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            cmdDown.post(tap: .cghidEventTap)
+            Thread.sleep(forTimeInterval: delay)
+            vDown.post(tap: .cghidEventTap)
+            Thread.sleep(forTimeInterval: delay)
+            vUp.post(tap: .cghidEventTap)
+            Thread.sleep(forTimeInterval: delay)
+            cmdUp.post(tap: .cghidEventTap)
         }
 
-        Thread.sleep(forTimeInterval: delay)
-        return postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
+        return true
     }
 
     private func postKeyEvent(
@@ -1067,16 +1094,31 @@ private func runProcess(executable: String, arguments: [String]) throws -> Strin
     process.standardError = stderr
 
     try process.run()
+    // Read both stdout and stderr concurrently to avoid potential pipe deadlocks
+    // if the subprocess writes more than the kernel pipe buffer.
+    let group = DispatchGroup()
+    var capturedStdout = Data()
+    var capturedStderr = Data()
+
+    group.enter()
+    DispatchQueue.global(qos: .utility).async {
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        capturedStdout = data
+        group.leave()
+    }
+
+    group.enter()
+    DispatchQueue.global(qos: .utility).async {
+        let data = stderr.fileHandleForReading.readDataToEndOfFile()
+        capturedStderr = data
+        group.leave()
+    }
+
+    group.wait()
     process.waitUntilExit()
 
-    let stderrText = String(
-        data: stderr.fileHandleForReading.readDataToEndOfFile(),
-        encoding: .utf8
-    ) ?? ""
-    let stdoutText = String(
-        data: stdout.fileHandleForReading.readDataToEndOfFile(),
-        encoding: .utf8
-    ) ?? ""
+    let stderrText = String(data: capturedStderr, encoding: .utf8) ?? ""
+    let stdoutText = String(data: capturedStdout, encoding: .utf8) ?? ""
 
     guard process.terminationStatus == 0 else {
         let message = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
