@@ -1,8 +1,8 @@
 [workspace]
 members = [
-  "crates/voico-core",
-  "crates/voico-daemon",
-  "crates/voicoctl",
+  "crates/voxa-core",
+  "crates/voxa-daemon",
+  "crates/voxactl",
 ]
 resolver = "2"
 
@@ -10,7 +10,7 @@ resolver = "2"
 edition = "2024"
 version = "0.1.0"
 license = "MIT"
-authors = ["Voico Team"]
+authors = ["Voxa Team"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

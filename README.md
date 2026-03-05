@@ -1,9 +1,9 @@
-# Voico
+# Voxa
 
-Voico is a local macOS dictation app with:
-- a Swift menu bar client (`voico-menubar`)
-- a Rust daemon runtime (`voico-daemon`)
-- an optional IPC troubleshooting CLI (`voicoctl`)
+Voxa is a local macOS dictation app with:
+- a Swift menu bar client (`voxa-menubar`)
+- a Rust daemon runtime (`voxa-daemon`)
+- an optional IPC troubleshooting CLI (`voxactl`)
 
 ## Current Status
 
@@ -17,10 +17,10 @@ Implemented today:
 
 ## Repository Layout
 
-- `apps/voico-menubar`: SwiftUI menu bar app (primary UX)
-- `crates/voico-daemon`: daemon process (recording/transcription state authority)
-- `crates/voicoctl`: thin IPC client for support/dev workflows
-- `crates/voico-core`: shared domain/app/infra/IPC primitives
+- `apps/voxa-menubar`: SwiftUI menu bar app (primary UX)
+- `crates/voxa-daemon`: daemon process (recording/transcription state authority)
+- `crates/voxactl`: thin IPC client for support/dev workflows
+- `crates/voxa-core`: shared domain/app/infra/IPC primitives
 - `docs/`: architecture, IPC contract, and supporting notes
 
 ## Requirements
@@ -42,15 +42,15 @@ For DMG packaging, macOS tools `sips`, `iconutil`, and `hdiutil` are also requir
 2. Run the menu bar app:
 
 ```bash
-cd apps/voico-menubar
-swift run voico-menubar
+cd apps/voxa-menubar
+swift run voxa-menubar
 ```
 
 3. On first run:
 - Add your OpenAI API key from the menu bar UI.
 - Grant Accessibility + Input Monitoring if you want global hotkeys/autopaste.
 
-The menu bar app auto-installs/updates a per-user LaunchAgent and starts `voico-daemon`.
+The menu bar app auto-installs/updates a per-user LaunchAgent and starts `voxa-daemon`.
 
 ## Build Distributable App
 
@@ -59,34 +59,34 @@ The menu bar app auto-installs/updates a per-user LaunchAgent and starts `voico-
 ```
 
 Outputs:
-- `dist/Voico.app`
-- `dist/Voico.dmg`
+- `dist/Voxa.app`
+- `dist/Voxa.dmg`
 
-The app bundle embeds `voico-daemon` at `Voico.app/Contents/Resources/bin/voico-daemon`.
+The app bundle embeds `voxa-daemon` at `Voxa.app/Contents/Resources/bin/voxa-daemon`.
 
-## `voicoctl` Quick Usage
+## `voxactl` Quick Usage
 
 Examples from repo root:
 
 ```bash
-cargo run -p voicoctl -- health
-cargo run -p voicoctl -- status
-cargo run -p voicoctl -- start manual
-cargo run -p voicoctl -- stop manual
-cargo run -p voicoctl -- config get
-cargo run -p voicoctl -- config set model gpt-4o-transcribe
-cargo run -p voicoctl -- api-key status
-cargo run -p voicoctl -- events
+cargo run -p voxactl -- health
+cargo run -p voxactl -- status
+cargo run -p voxactl -- start manual
+cargo run -p voxactl -- stop manual
+cargo run -p voxactl -- config get
+cargo run -p voxactl -- config set model gpt-4o-transcribe
+cargo run -p voxactl -- api-key status
+cargo run -p voxactl -- events
 ```
 
-If installed via `./scripts/install.sh`, you can run `voicoctl ...` directly.
+If installed via `./scripts/install.sh`, you can run `voxactl ...` directly.
 
 ## Runtime Paths
 
-- IPC socket: `~/Library/Application Support/voico/run/daemon.sock`
-- Config file: `~/Library/Application Support/voico/config.toml`
-- LaunchAgent plist: `~/Library/LaunchAgents/com.voico.daemon.plist`
-- Daemon logs: `~/Library/Logs/voico/daemon.out.log` and `~/Library/Logs/voico/daemon.err.log`
+- IPC socket: `~/Library/Application Support/voxa/run/daemon.sock`
+- Config file: `~/Library/Application Support/voxa/config.toml`
+- LaunchAgent plist: `~/Library/LaunchAgents/com.voxa.daemon.plist`
+- Daemon logs: `~/Library/Logs/voxa/daemon.out.log` and `~/Library/Logs/voxa/daemon.err.log`
 
 ## Config Defaults
 
@@ -105,10 +105,10 @@ Accepted values:
 
 ## Environment Overrides
 
-- `VOICO_SOCKET`: override daemon socket path (daemon + `voicoctl`)
-- `VOICO_CONFIG_PATH`: override daemon config file path
-- `VOICO_DAEMON_BIN`: override daemon executable path used by menu bar LaunchAgent install
-- `VOICO_OPENAI_TRANSCRIPTIONS_URL`: override OpenAI transcriptions endpoint (useful for tests/mocks)
+- `VOXA_SOCKET`: override daemon socket path (daemon + `voxactl`)
+- `VOXA_CONFIG_PATH`: override daemon config file path
+- `VOXA_DAEMON_BIN`: override daemon executable path used by menu bar LaunchAgent install
+- `VOXA_OPENAI_TRANSCRIPTIONS_URL`: override OpenAI transcriptions endpoint (useful for tests/mocks)
 - `OPENAI_API_KEY`: fallback key source (and source when `api_key_source = "env"`)
 
 ## Development Checks
@@ -123,11 +123,11 @@ Optional fuller checks:
 
 ```bash
 cargo test --workspace
-swift test --package-path apps/voico-menubar
+swift test --package-path apps/voxa-menubar
 ```
 
 ## Documentation
 
 - `docs/architecture.md`
 - `docs/ipc.md`
-- `docs/voicoctl.md`
+- `docs/voxactl.md`

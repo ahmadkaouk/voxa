@@ -1,7 +1,7 @@
-# Voico IPC Protocol (v1)
+# Voxa IPC Protocol (v1)
 
 ## Scope
-This document defines local IPC between `voico-daemon` and clients (`voico-menubar`, optional `voicoctl`).
+This document defines local IPC between `voxa-daemon` and clients (`voxa-menubar`, optional `voxactl`).
 
 Goals:
 - One protocol for all clients.
@@ -10,7 +10,7 @@ Goals:
 
 ## Transport
 - Unix domain socket.
-- Default path: `~/Library/Application Support/voico/run/daemon.sock`.
+- Default path: `~/Library/Application Support/voxa/run/daemon.sock`.
 - Socket permissions: user-only.
 
 ## Framing
@@ -28,7 +28,7 @@ A single connection may use both modes.
 Client should send this first:
 
 ```json
-{"type":"hello","api_version":"1.0","client":"voico-menubar","client_version":"0.1.0"}
+{"type":"hello","api_version":"1.0","client":"voxa-menubar","client_version":"0.1.0"}
 ```
 
 Daemon replies:

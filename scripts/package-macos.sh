@@ -2,32 +2,32 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_PACKAGE_DIR="$ROOT_DIR/apps/voico-menubar"
+APP_PACKAGE_DIR="$ROOT_DIR/apps/voxa-menubar"
 DIST_DIR="$ROOT_DIR/dist"
 BUILD_DIR="$DIST_DIR/build"
 STAGE_DIR="$DIST_DIR/dmg"
-APP_NAME="Voico"
+APP_NAME="Voxa"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 APP_EXECUTABLE="$APP_DIR/Contents/MacOS/$APP_NAME"
 APP_RESOURCES_DIR="$APP_DIR/Contents/Resources"
-DAEMON_BUNDLE_PATH="$APP_RESOURCES_DIR/bin/voico-daemon"
-ICON_SOURCE="$ROOT_DIR/apps/voico-menubar/Resources/VoicoIcon.svg"
-ICONSET_DIR="$BUILD_DIR/Voico.iconset"
-ICON_PATH="$APP_RESOURCES_DIR/Voico.icns"
+DAEMON_BUNDLE_PATH="$APP_RESOURCES_DIR/bin/voxa-daemon"
+ICON_SOURCE="$ROOT_DIR/apps/voxa-menubar/Resources/VoxaIcon.svg"
+ICONSET_DIR="$BUILD_DIR/Voxa.iconset"
+ICON_PATH="$APP_RESOURCES_DIR/Voxa.icns"
 INFO_PLIST_PATH="$APP_DIR/Contents/Info.plist"
 DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
-DAEMON_BIN="$ROOT_DIR/target/release/voico-daemon"
+DAEMON_BIN="$ROOT_DIR/target/release/voxa-daemon"
 
 rm -rf "$BUILD_DIR" "$STAGE_DIR" "$APP_DIR"
 mkdir -p "$BUILD_DIR" "$STAGE_DIR"
 
 echo "Building release daemon..."
-cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p voico-daemon --release
+cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p voxa-daemon --release
 
 echo "Building release menu bar app..."
-swift build --package-path "$APP_PACKAGE_DIR" --configuration release --product voico-menubar
+swift build --package-path "$APP_PACKAGE_DIR" --configuration release --product voxa-menubar
 MENU_BAR_BIN_DIR="$(swift build --package-path "$APP_PACKAGE_DIR" --configuration release --show-bin-path)"
-MENU_BAR_BIN="$MENU_BAR_BIN_DIR/voico-menubar"
+MENU_BAR_BIN="$MENU_BAR_BIN_DIR/voxa-menubar"
 
 if [ ! -x "$MENU_BAR_BIN" ]; then
   echo "Missing built app executable: $MENU_BAR_BIN" >&2
@@ -69,15 +69,15 @@ cat > "$INFO_PLIST_PATH" <<'EOF'
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>Voico</string>
+  <string>Voxa</string>
   <key>CFBundleIdentifier</key>
-  <string>com.voico.menubar</string>
+  <string>com.voxa.menubar</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleIconFile</key>
-  <string>Voico</string>
+  <string>Voxa</string>
   <key>CFBundleName</key>
-  <string>Voico</string>
+  <string>Voxa</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -89,7 +89,7 @@ cat > "$INFO_PLIST_PATH" <<'EOF'
   <key>LSUIElement</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Voico records audio for transcription.</string>
+  <string>Voxa records audio for transcription.</string>
 </dict>
 </plist>
 EOF

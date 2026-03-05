@@ -1,4 +1,4 @@
-# Voico Architecture
+# Voxa Architecture
 
 ## Goals
 - Keep the product simple: one reliable dictation app for macOS.
@@ -7,37 +7,37 @@
 - Avoid duplicate logic across UI surfaces.
 
 ## Product Surfaces
-- `voico-menubar` (primary): user-facing control and status UI.
-- `voico-daemon` (core): always-on runtime for hotkeys, recording, transcription, output.
-- `voicoctl` (optional/internal): thin troubleshooting client for support/dev/CI.
+- `voxa-menubar` (primary): user-facing control and status UI.
+- `voxa-daemon` (core): always-on runtime for hotkeys, recording, transcription, output.
+- `voxactl` (optional/internal): thin troubleshooting client for support/dev/CI.
 
-`voicoctl` is intentionally minimal and not the main user experience.
+`voxactl` is intentionally minimal and not the main user experience.
 
 ## Current System Architecture
 Daemon-first, API-first architecture:
 
 1. One daemon process owns runtime state and executes all recording/transcription work.
-2. Clients (menu bar app, optional `voicoctl`) communicate with daemon over local IPC.
+2. Clients (menu bar app, optional `voxactl`) communicate with daemon over local IPC.
 3. Logs are observability only, never an app control channel.
 4. Shared domain logic lives in backend core, not in clients.
 
 ## Packaging Strategy
 Use module boundaries first, crate boundaries second.
 
-- Start with one backend library crate (`voico-core`) that contains domain, app, infra, and IPC modules.
-- Add small binary crates for process entrypoints (`voico-daemon`, optional `voicoctl`).
-- Split `voico-core` into multiple crates only when there is a concrete need:
+- Start with one backend library crate (`voxa-core`) that contains domain, app, infra, and IPC modules.
+- Add small binary crates for process entrypoints (`voxa-daemon`, optional `voxactl`).
+- Split `voxa-core` into multiple crates only when there is a concrete need:
   - dependency isolation
   - reuse outside this repo
   - separate ownership/release cadence
 
 ## Component Model
 ### 1) Clients
-- `voico-menubar`
+- `voxa-menubar`
   - UI only.
   - Sends commands over IPC.
   - Subscribes to daemon events for live state.
-- `voicoctl` (optional)
+- `voxactl` (optional)
   - Small commands like `status`, `config get/set`, `health`, `logs`.
   - Uses the same IPC API as menu bar.
 
@@ -93,7 +93,7 @@ Required invariants:
 
 ## IPC Contract (Local Only)
 Transport:
-- Unix domain socket at app-support runtime path (for example `~/Library/Application Support/voico/run/daemon.sock`).
+- Unix domain socket at app-support runtime path (for example `~/Library/Application Support/voxa/run/daemon.sock`).
 
 Protocol:
 - JSON messages.
@@ -111,7 +111,7 @@ Versioning:
 
 ## Data and Storage
 Config:
-- Path: `~/Library/Application Support/voico/config.toml`.
+- Path: `~/Library/Application Support/voxa/config.toml`.
 - Includes hotkeys, model, output behavior, limits.
 
 Secrets:
@@ -160,16 +160,16 @@ Logs:
 ## Repository Shape (Target)
 ```text
 apps/
-  voico-menubar/
+  voxa-menubar/
 crates/
-  voico-core/                # library crate
+  voxa-core/                # library crate
     src/
       domain/                # state machine + domain types
       app/                   # use-cases/orchestration
       infra/                 # audio, stt, output, hotkey, storage, launchd
       ipc/                   # protocol and server/client primitives
-  voico-daemon/              # daemon binary crate
-  voicoctl/                  # optional thin client binary crate
+  voxa-daemon/              # daemon binary crate
+  voxactl/                  # optional thin client binary crate
 ```
 
 Keep this flat and simple; prefer internal modules over many crates.
@@ -179,7 +179,7 @@ Keep this flat and simple; prefer internal modules over many crates.
 2. Add `get_state` + event subscription endpoints.
 3. Move menu bar app from CLI subprocess calls to IPC client calls.
 4. Replace log-based UI status with event-driven status.
-5. Shrink CLI into optional `voicoctl` thin client using IPC.
+5. Shrink CLI into optional `voxactl` thin client using IPC.
 6. Move API key storage from env-first to Keychain-first.
 7. Remove legacy code paths that rely on parsing stdout/logs for state.
 8. Re-evaluate crate splits only after real pressure appears.

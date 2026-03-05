@@ -1,22 +1,22 @@
-# Voico Implementation Plan
+# Voxa Implementation Plan
 
 ## Ground Rules
 - [ ] Keep all current code in the main workspace.
 - [ ] Keep legacy code as behavior reference only; do not import runtime modules from legacy.
 - [ ] Use isolated runtime identifiers from day one:
-  - [ ] New LaunchAgent label (`com.voico.daemon` or equivalent).
-  - [ ] New socket path (`~/Library/Application Support/voico/run/daemon.sock`).
-  - [ ] New config path (`~/Library/Application Support/voico/config.toml`).
-  - [ ] New logs path (`~/Library/Logs/voico/`).
+  - [ ] New LaunchAgent label (`com.voxa.daemon` or equivalent).
+  - [ ] New socket path (`~/Library/Application Support/voxa/run/daemon.sock`).
+  - [ ] New config path (`~/Library/Application Support/voxa/config.toml`).
+  - [ ] New logs path (`~/Library/Logs/voxa/`).
 - [ ] Reserve separate hotkeys during development.
 
 ## Phase 0: Workspace Bootstrap
 ### Tasks
 - [x] Create workspace layout:
-  - [x] `crates/voico-core`
-  - [x] `crates/voico-daemon`
-  - [x] `crates/voicoctl` (optional)
-  - [x] `apps/voico-menubar`
+  - [x] `crates/voxa-core`
+  - [x] `crates/voxa-daemon`
+  - [x] `crates/voxactl` (optional)
+  - [x] `apps/voxa-menubar`
   - [x] `docs`
 - [x] Add top-level workspace `Cargo.toml`.
 - [x] Add minimal CI/build scripts for current targets.
@@ -42,7 +42,7 @@
 - [ ] Team signoff on `ipc.md` before server/client coding.
 - [ ] No ambiguous command or event fields.
 
-## Phase 2: Domain Core (`voico-core`)
+## Phase 2: Domain Core (`voxa-core`)
 ### Tasks
 - [x] Implement runtime state machine (`idle`, `recording`, `transcribing`, `outputting`, `error`).
 - [x] Implement transition inputs (toggle/hold, stop, max-duration, failures).
@@ -59,7 +59,7 @@
 
 ## Phase 3: Daemon Runtime + IPC Server
 ### Tasks
-- [x] Add daemon process entrypoint (`voico-daemon`).
+- [x] Add daemon process entrypoint (`voxa-daemon`).
 - [ ] Integrate adapters: hotkey, audio capture, STT, output.
 - [x] Expose IPC endpoints:
   - [x] `health`
@@ -85,7 +85,7 @@
 - [x] Wire listening animation to daemon events only.
 
 ### Deliverables
-- [ ] Fully functional `voico-menubar` driven by daemon API.
+- [ ] Fully functional `voxa-menubar` driven by daemon API.
 
 ### Acceptance Criteria
 - [ ] UI state remains correct across daemon restart/reconnect.
@@ -107,10 +107,10 @@
 - [x] API key retrieval works after app/daemon restart.
 - [x] Invalid config changes return stable contract errors.
 
-## Phase 6: Thin `voicoctl` (Optional but Recommended)
+## Phase 6: Thin `voxactl` (Optional but Recommended)
 ### Tasks
 - [x] Implement minimal commands: `status`, `health`, `config get/set`, `start`, `stop`.
-- [x] Ensure `voicoctl` uses IPC only (no direct business logic).
+- [x] Ensure `voxactl` uses IPC only (no direct business logic).
 - [x] Add short troubleshooting docs for this tool.
 
 ### Deliverables
@@ -118,7 +118,7 @@
 
 ### Acceptance Criteria
 - [x] Every command maps to an IPC call.
-- [x] No duplicate runtime logic in `voicoctl`.
+- [x] No duplicate runtime logic in `voxactl`.
 
 ## Phase 7: Parity + Hardening
 ### Tasks

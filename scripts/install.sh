@@ -4,17 +4,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-cargo install --path crates/voico-daemon --force
-cargo install --path crates/voicoctl --force
+cargo install --path crates/voxa-daemon --force
+cargo install --path crates/voxactl --force
 
-DAEMON_BIN="$(command -v voico-daemon || true)"
-if [ -z "$DAEMON_BIN" ] && [ -x "$HOME/.cargo/bin/voico-daemon" ]; then
-  DAEMON_BIN="$HOME/.cargo/bin/voico-daemon"
+DAEMON_BIN="$(command -v voxa-daemon || true)"
+if [ -z "$DAEMON_BIN" ] && [ -x "$HOME/.cargo/bin/voxa-daemon" ]; then
+  DAEMON_BIN="$HOME/.cargo/bin/voxa-daemon"
 fi
 
-CTL_BIN="$(command -v voicoctl || true)"
-if [ -z "$CTL_BIN" ] && [ -x "$HOME/.cargo/bin/voicoctl" ]; then
-  CTL_BIN="$HOME/.cargo/bin/voicoctl"
+CTL_BIN="$(command -v voxactl || true)"
+if [ -z "$CTL_BIN" ] && [ -x "$HOME/.cargo/bin/voxactl" ]; then
+  CTL_BIN="$HOME/.cargo/bin/voxactl"
 fi
 
 if [ -n "$DAEMON_BIN" ]; then
@@ -27,7 +27,7 @@ if [ -n "$CTL_BIN" ]; then
 fi
 
 echo "Run the menu bar app with:"
-echo "  cd apps/voico-menubar && swift run voico-menubar"
+echo "  cd apps/voxa-menubar && swift run voxa-menubar"
 echo
 echo "Build a distributable app bundle with:"
 echo "  ./scripts/package-macos.sh"
