@@ -122,7 +122,7 @@
 
 ## Phase 7: Parity + Hardening
 ### Tasks
-- [x] Create parity checklist against legacy behavior.
+- [x] Create parity validation coverage against legacy behavior.
 - [ ] Add integration tests:
   - [ ] hotkey hold/toggle flow
   - [ ] recording cap behavior
@@ -137,7 +137,7 @@
 - [ ] Verified parity report and stabilization fixes.
 
 ### Acceptance Criteria
-- [ ] All parity checklist items pass.
+- [ ] All parity validation items pass.
 - [ ] No P0/P1 issues open.
 - [ ] Stable daily dogfooding period completed.
 

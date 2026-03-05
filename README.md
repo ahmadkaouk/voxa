@@ -1,68 +1,133 @@
-# voico
+# Voico
 
-Local macOS dictation app with a Swift menu bar client and a Rust daemon.
+Voico is a local macOS dictation app with:
+- a Swift menu bar client (`voico-menubar`)
+- a Rust daemon runtime (`voico-daemon`)
+- an optional IPC troubleshooting CLI (`voicoctl`)
 
-## Workspace
+## Current Status
 
-- `apps/voico-menubar`: Swift menu bar app
-- `crates/voico-daemon`: daemon runtime
-- `crates/voicoctl`: optional IPC troubleshooting client
-- `crates/voico-core`: shared backend/domain logic
+Implemented today:
+- Daemon-first runtime over local IPC (no log parsing for state)
+- Core start/stop/transcribe flow with idempotent control semantics
+- Config read/update with validation and persisted revisions
+- API key status/set endpoints with Keychain-first storage
+- Menu bar app with global hotkeys, transcript output, and daemon lifecycle controls
+- Packaging script that produces a macOS app bundle and DMG
 
-## Prerequisites
+## Repository Layout
 
-- macOS
-- Rust toolchain
-- Swift 5.9+ / Xcode command line tools
+- `apps/voico-menubar`: SwiftUI menu bar app (primary UX)
+- `crates/voico-daemon`: daemon process (recording/transcription state authority)
+- `crates/voicoctl`: thin IPC client for support/dev workflows
+- `crates/voico-core`: shared domain/app/infra/IPC primitives
+- `docs/`: architecture, IPC contract, and supporting notes
 
-## Install
+## Requirements
 
-Build a distributable macOS app bundle and disk image:
+- macOS 13+
+- Rust toolchain (stable)
+- Xcode Command Line Tools / Swift 5.9+
 
-```bash
-./scripts/package-macos.sh
-```
+For DMG packaging, macOS tools `sips`, `iconutil`, and `hdiutil` are also required.
 
-This produces:
+## Quick Start (Dev)
 
-- `dist/Voico.app`
-- `dist/Voico.dmg`
-
-The app bundle embeds `voico-daemon`, and the menu bar app will install or update a per-user LaunchAgent that points at the bundled daemon.
-
-## Developer Install
-
-Install the daemon and control CLI:
+1. Install Rust binaries:
 
 ```bash
 ./scripts/install.sh
 ```
 
-This installs:
-
-- `voico-daemon`
-- `voicoctl`
-
-## Run
-
-Run the menu bar app:
+2. Run the menu bar app:
 
 ```bash
 cd apps/voico-menubar
 swift run voico-menubar
 ```
 
-The menu bar app will install or update a per-user LaunchAgent for `voico-daemon` and connect over local IPC.
+3. On first run:
+- Add your OpenAI API key from the menu bar UI.
+- Grant Accessibility + Input Monitoring if you want global hotkeys/autopaste.
 
-## Quick Checks
+The menu bar app auto-installs/updates a per-user LaunchAgent and starts `voico-daemon`.
+
+## Build Distributable App
+
+```bash
+./scripts/package-macos.sh
+```
+
+Outputs:
+- `dist/Voico.app`
+- `dist/Voico.dmg`
+
+The app bundle embeds `voico-daemon` at `Voico.app/Contents/Resources/bin/voico-daemon`.
+
+## `voicoctl` Quick Usage
+
+Examples from repo root:
+
+```bash
+cargo run -p voicoctl -- health
+cargo run -p voicoctl -- status
+cargo run -p voicoctl -- start manual
+cargo run -p voicoctl -- stop manual
+cargo run -p voicoctl -- config get
+cargo run -p voicoctl -- config set model gpt-4o-transcribe
+cargo run -p voicoctl -- api-key status
+cargo run -p voicoctl -- events
+```
+
+If installed via `./scripts/install.sh`, you can run `voicoctl ...` directly.
+
+## Runtime Paths
+
+- IPC socket: `~/Library/Application Support/voico/run/daemon.sock`
+- Config file: `~/Library/Application Support/voico/config.toml`
+- LaunchAgent plist: `~/Library/LaunchAgents/com.voico.daemon.plist`
+- Daemon logs: `~/Library/Logs/voico/daemon.out.log` and `~/Library/Logs/voico/daemon.err.log`
+
+## Config Defaults
+
+Default daemon config values:
+- `toggle_hotkey = "right_option"`
+- `hold_hotkey = "fn"`
+- `model = "gpt-4o-mini-transcribe"`
+- `output_mode = "clipboard_autopaste"`
+- `max_recording_seconds = 300`
+- `api_key_source = "keychain"`
+
+Accepted values:
+- hotkeys: `right_option`, `fn`, `fn_space`, `cmd_space`
+- model: `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`
+- output mode: `clipboard_autopaste`, `clipboard_only`, `none`
+
+## Environment Overrides
+
+- `VOICO_SOCKET`: override daemon socket path (daemon + `voicoctl`)
+- `VOICO_CONFIG_PATH`: override daemon config file path
+- `VOICO_DAEMON_BIN`: override daemon executable path used by menu bar LaunchAgent install
+- `VOICO_OPENAI_TRANSCRIPTIONS_URL`: override OpenAI transcriptions endpoint (useful for tests/mocks)
+- `OPENAI_API_KEY`: fallback key source (and source when `api_key_source = "env"`)
+
+## Development Checks
+
+Minimal workspace check:
 
 ```bash
 ./scripts/check.sh
 ```
 
-## Notes
+Optional fuller checks:
 
-- IPC socket: `~/Library/Application Support/voico/run/daemon.sock`
-- Config path: `~/Library/Application Support/voico/config.toml`
-- The menu bar app manages the daemon lifecycle through `launchd`
-- Autopaste may require macOS Accessibility permission for the menu bar app process
+```bash
+cargo test --workspace
+swift test --package-path apps/voico-menubar
+```
+
+## Documentation
+
+- `docs/architecture.md`
+- `docs/ipc.md`
+- `docs/voicoctl.md`
