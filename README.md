@@ -1,39 +1,36 @@
 # Voxa
 
-Voxa is a local macOS dictation app with:
-- a Swift menu bar client (`voxa-menubar`)
-- a Rust daemon runtime (`voxa-daemon`)
-- an optional IPC troubleshooting CLI (`voxactl`)
+Voxa is a macOS dictation app built around a menu bar client and a local daemon. You speak into the mic, Voxa sends the audio to OpenAI for transcription, and the result can go to the clipboard or directly into the active app.
 
-## Current Status
+The menu bar app is the main UX. `voxa-daemon` owns recording, transcription, config, and runtime state. `voxactl` is a small CLI for troubleshooting and development.
 
-Implemented today:
-- Daemon-first runtime over local IPC (no log parsing for state)
-- Core start/stop/transcribe flow with idempotent control semantics
-- Config read/update with validation and persisted revisions
-- API key status/set endpoints with Keychain-first storage
-- Menu bar app with global hotkeys, transcript output, and daemon lifecycle controls
-- Packaging script that produces a macOS app bundle and DMG
+## Current Scope
+
+- SwiftUI menu bar app with global hotkeys, transcript output, and daemon lifecycle controls
+- Rust daemon with local IPC, event-driven state, persisted config, and idempotent start/stop behavior
+- Keychain-first API key storage with `OPENAI_API_KEY` fallback
+- Packaging script that builds a macOS app bundle and DMG
 
 ## Repository Layout
 
-- `apps/voxa-menubar`: SwiftUI menu bar app (primary UX)
-- `crates/voxa-daemon`: daemon process (recording/transcription state authority)
-- `crates/voxactl`: thin IPC client for support/dev workflows
-- `crates/voxa-core`: shared domain/app/infra/IPC primitives
-- `docs/`: architecture, IPC contract, and supporting notes
+- `apps/voxa-menubar`: SwiftUI menu bar app
+- `crates/voxa-daemon`: daemon process and runtime state authority
+- `crates/voxactl`: optional CLI for health, config, and support workflows
+- `crates/voxa-core`: shared domain, IPC, and infrastructure primitives
+- `docs/`: architecture, IPC contract, and CLI notes
 
 ## Requirements
 
 - macOS 13+
 - Rust toolchain (stable)
 - Xcode Command Line Tools / Swift 5.9+
+- OpenAI API key
 
-For DMG packaging, macOS tools `sips`, `iconutil`, and `hdiutil` are also required.
+For DMG packaging, macOS tools `sips`, `iconutil`, and `hdiutil` must also be available.
 
-## Quick Start (Dev)
+## Quick Start
 
-1. Install Rust binaries:
+1. Install the Rust binaries:
 
 ```bash
 ./scripts/install.sh
@@ -46,13 +43,34 @@ cd apps/voxa-menubar
 swift run voxa-menubar
 ```
 
-3. On first run:
-- Add your OpenAI API key from the menu bar UI.
-- Grant Accessibility + Input Monitoring if you want global hotkeys/autopaste.
+3. On first launch:
+- add your OpenAI API key from the menu bar UI
+- allow microphone access when prompted
+- grant Accessibility and Input Monitoring if you want global hotkeys or autopaste
 
-The menu bar app auto-installs/updates a per-user LaunchAgent and starts `voxa-daemon`.
+The menu bar app installs or updates a per-user LaunchAgent for `voxa-daemon` and starts it automatically.
 
-## Build Distributable App
+## Common Tasks
+
+Check the workspace:
+
+```bash
+./scripts/check.sh
+```
+
+Run the Rust tests:
+
+```bash
+cargo test --workspace
+```
+
+Run the Swift tests:
+
+```bash
+swift test --package-path apps/voxa-menubar
+```
+
+Build a distributable app:
 
 ```bash
 ./scripts/package-macos.sh
@@ -64,9 +82,9 @@ Outputs:
 
 The app bundle embeds `voxa-daemon` at `Voxa.app/Contents/Resources/bin/voxa-daemon`.
 
-## `voxactl` Quick Usage
+## `voxactl`
 
-Examples from repo root:
+`voxactl` uses the same local IPC API as the menu bar app. Useful examples:
 
 ```bash
 cargo run -p voxactl -- health
@@ -76,10 +94,11 @@ cargo run -p voxactl -- stop manual
 cargo run -p voxactl -- config get
 cargo run -p voxactl -- config set model gpt-4o-transcribe
 cargo run -p voxactl -- api-key status
+cargo run -p voxactl -- api-key set sk-your-key
 cargo run -p voxactl -- events
 ```
 
-If installed via `./scripts/install.sh`, you can run `voxactl ...` directly.
+If you installed with `./scripts/install.sh`, you can run `voxactl ...` directly.
 
 ## Runtime Paths
 
@@ -90,7 +109,7 @@ If installed via `./scripts/install.sh`, you can run `voxactl ...` directly.
 
 ## Config Defaults
 
-Default daemon config values:
+Default values:
 - `toggle_hotkey = "right_option"`
 - `hold_hotkey = "fn"`
 - `model = "gpt-4o-mini-transcribe"`
@@ -105,26 +124,11 @@ Accepted values:
 
 ## Environment Overrides
 
-- `VOXA_SOCKET`: override daemon socket path (daemon + `voxactl`)
-- `VOXA_CONFIG_PATH`: override daemon config file path
-- `VOXA_DAEMON_BIN`: override daemon executable path used by menu bar LaunchAgent install
-- `VOXA_OPENAI_TRANSCRIPTIONS_URL`: override OpenAI transcriptions endpoint (useful for tests/mocks)
-- `OPENAI_API_KEY`: fallback key source (and source when `api_key_source = "env"`)
-
-## Development Checks
-
-Minimal workspace check:
-
-```bash
-./scripts/check.sh
-```
-
-Optional fuller checks:
-
-```bash
-cargo test --workspace
-swift test --package-path apps/voxa-menubar
-```
+- `VOXA_SOCKET`: override the daemon socket path for `voxa-daemon` and `voxactl`
+- `VOXA_CONFIG_PATH`: override the daemon config path
+- `VOXA_DAEMON_BIN`: override the daemon executable path used by the menu bar LaunchAgent install
+- `VOXA_OPENAI_TRANSCRIPTIONS_URL`: override the OpenAI transcriptions endpoint for tests or mocks
+- `OPENAI_API_KEY`: fallback key source and the source used when `api_key_source = "env"`
 
 ## Documentation
 
