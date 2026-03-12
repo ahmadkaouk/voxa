@@ -1,21 +1,17 @@
 # voxa-menubar
 
-Greenfield Swift menu bar client for Voxa.
+`voxa-menubar` is the main SwiftUI client for Voxa.
 
-## What it does
+It provides the day-to-day user experience: it lives in the macOS menu bar, captures hotkeys, talks to `voxa-daemon` over local IPC, and handles transcript output.
 
-- Connects to `voxa-daemon` over IPC (`~/Library/Application Support/voxa/run/daemon.sock`).
-- Performs protocol handshake (`api_version = 1.0`).
-- Resyncs state via `get_state` on connect/reconnect.
-- Resyncs config via `get_config` and updates config via `set_config`.
-- Reads API key status via `get_api_key_status` and saves key via `set_api_key`.
-- Subscribes to daemon events via `subscribe` and updates UI from events.
-- Drives listening/transcribing animation from daemon runtime state (`recording`, `transcribing`).
-- Captures global hotkeys in the menubar process and forwards start/stop commands via IPC.
-- Handles transcript output in the menubar process (clipboard / clipboard+autopaste / none).
-- Auto-installs/updates a per-user LaunchAgent for `voxa-daemon` and starts it on app launch.
-- Uses LaunchAgent lifecycle control (`bootstrap`, `kickstart`, `bootout`) for daemon management.
-- Exposes daemon lifecycle actions (`start`/`stop`) from the menu.
+## Responsibilities
+
+- Connect to `voxa-daemon` over IPC
+- Keep UI state in sync with daemon state and config
+- Capture global hotkeys and forward start/stop commands
+- Save API keys and expose daemon lifecycle controls
+- Output transcripts to the clipboard, clipboard plus autopaste, or nowhere
+- Install or update the per-user LaunchAgent for `voxa-daemon`
 
 ## Run
 
@@ -24,17 +20,25 @@ cd apps/voxa-menubar
 swift run voxa-menubar
 ```
 
-## Package
+## Permissions
+
+Depending on the features you use, macOS may ask for:
+
+- Microphone access
+- Accessibility permission for autopaste
+- Input Monitoring for global hotkeys
+
+## Packaging
 
 ```bash
 ./scripts/package-macos.sh
 ```
 
-The packaged `Voxa.app` embeds `voxa-daemon` at `Contents/Resources/bin/voxa-daemon`, and the menu bar app will prefer that bundled daemon when installing the LaunchAgent.
+The packaged `Voxa.app` embeds `voxa-daemon` at `Contents/Resources/bin/voxa-daemon`, and the menu bar app prefers that bundled daemon when installing the LaunchAgent.
 
 ## Notes
 
-- This app does not parse daemon logs.
-- This app does not shell out to CLI for runtime state.
+- The app resyncs state and config after reconnecting to the daemon.
 - Automatic reconnect backoff: `200ms`, `500ms`, `1s`, `2s`, `5s`.
-- Autopaste (`Cmd+V`) may require macOS Accessibility permission for the menubar app process.
+- The app does not shell out to `voxactl` for runtime state.
+- The app does not parse daemon logs.

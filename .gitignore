@@ -2,4 +2,5 @@
 /dist
 /apps/voxa-menubar/.build
 /apps/voxa-menubar/.swiftpm
+/.codex/environments/environment.toml
 .DS_Store
