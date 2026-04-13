@@ -958,14 +958,14 @@ struct ActivityOverlayView: View {
 
     private func barHeight(index: Int, time: TimeInterval) -> CGFloat {
         let normalizedLevel = max(0, min(level, 1))
-        let speechLevel = max(0, min((normalizedLevel - 0.08) / 0.42, 1))
-        if speechLevel <= 0.01 {
+        if normalizedLevel <= 0.01 {
             return 2.5
         }
 
         let primary = sin((time * 10) + Double(index) * 0.72)
         let secondary = sin((time * 5.1) + Double(index) * 1.05)
         let motion = abs((primary * 0.7) + (secondary * 0.3))
-        return 2.5 + CGFloat((0.8 + (motion * 4.8)) * speechLevel)
+        let envelope = pow(normalizedLevel, 0.85)
+        return 2.5 + CGFloat((1.0 + (motion * 4.6)) * envelope)
     }
 }

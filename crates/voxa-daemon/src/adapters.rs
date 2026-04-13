@@ -221,13 +221,10 @@ fn push_samples<T, F>(
     F: Fn(T) -> f32,
 {
     let normalized: Vec<f32> = data.iter().copied().map(normalize).collect();
-    let rms = normalized.iter().map(|sample| sample * sample).sum::<f32>()
-        / normalized.len().max(1) as f32;
-    let rms = rms.sqrt().clamp(0.0, 1.0);
+    let target_level = meter_level_for_normalized_samples(&normalized);
 
     if let Ok(mut current_level) = level.lock() {
-        let smoothed = (*current_level * 0.65) + (rms * 0.35);
-        *current_level = smoothed.clamp(0.0, 1.0);
+        *current_level = blend_meter_level(*current_level, target_level);
     }
 
     let Ok(mut output) = samples.lock() else {
@@ -236,6 +233,31 @@ fn push_samples<T, F>(
     };
 
     output.extend(normalized);
+}
+
+fn meter_level_for_normalized_samples(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+
+    let rms = (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32)
+        .sqrt()
+        .clamp(0.0, 1.0);
+    let peak = samples
+        .iter()
+        .map(|sample| sample.abs())
+        .fold(0.0_f32, f32::max)
+        .clamp(0.0, 1.0);
+
+    let rms_level = ((rms - 0.003).max(0.0) * 20.0).sqrt();
+    let peak_level = ((peak - 0.015).max(0.0) * 6.0).sqrt() * 0.8;
+
+    rms_level.max(peak_level).clamp(0.0, 1.0)
+}
+
+fn blend_meter_level(current: f32, target: f32) -> f32 {
+    let smoothing = if target > current { 0.55 } else { 0.18 };
+    (current + ((target - current) * smoothing)).clamp(0.0, 1.0)
 }
 
 fn normalize_to_wav(
@@ -554,6 +576,23 @@ mod tests {
         assert!(samples.len() >= 2);
         assert_eq!(samples[0], 0);
         assert!(samples[1] > 16_000);
+    }
+
+    #[test]
+    fn meter_level_gates_low_noise() {
+        let level = meter_level_for_normalized_samples(&[0.001, -0.0015, 0.002, -0.002]);
+        assert!(level <= 0.01, "background noise should stay near zero");
+    }
+
+    #[test]
+    fn meter_level_boosts_normal_speech_range() {
+        let level = meter_level_for_normalized_samples(&[
+            0.0, 0.018, -0.016, 0.022, -0.021, 0.014, -0.012, 0.02,
+        ]);
+        assert!(
+            level >= 0.2,
+            "normal speech should produce visible meter movement"
+        );
     }
 
     #[test]

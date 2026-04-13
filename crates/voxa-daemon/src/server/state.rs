@@ -530,7 +530,7 @@ impl SharedState {
             .current_recording_level()
             .unwrap_or(0.0)
             .clamp(0.0, 1.0);
-        let bucket = (level * 20.0).round() as u8;
+        let bucket = (level * 40.0).round() as u8;
         if self.last_audio_level_bucket == Some(bucket) {
             return;
         }
