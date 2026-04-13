@@ -21,8 +21,9 @@ struct VoxaPopoverView: View {
     @ObservedObject var controller: AppController
     @State private var expandedMenu: ExpandedMenu?
     @State private var showsAPIKeyEditor = false
+    @StateObject private var hotkeyRecorder = HotkeyRecorder()
 
-    private enum ExpandedMenu: Hashable {
+    enum ExpandedMenu: Hashable {
         case model
         case output
         case maxRecording
@@ -61,6 +62,17 @@ struct VoxaPopoverView: View {
         .animation(.easeInOut(duration: 0.14), value: expandedMenu)
         .onChange(of: controller.apiKeySaveCount) { _ in
             showsAPIKeyEditor = false
+        }
+        .onChange(of: expandedMenu) { newValue in
+            if hotkeyRecorder.target?.menu != newValue {
+                hotkeyRecorder.stop()
+            }
+        }
+        .onAppear {
+            configureHotkeyRecorder()
+        }
+        .onDisappear {
+            hotkeyRecorder.stop()
         }
     }
 
@@ -142,26 +154,24 @@ struct VoxaPopoverView: View {
 
     private var hotkeysSection: some View {
         sectionGroup("Hotkeys") {
-            expandableRow(.toggle, title: "Toggle", systemImage: "switch.2") {
-                ForEach(HotkeyOption.allCases) { hotkey in
-                    optionButton(
-                        title: hotkey.label,
-                        isSelected: controller.toggleHotkey == hotkey
-                    ) {
-                        controller.setToggleHotkey(hotkey)
-                    }
-                }
+            hotkeyEditor(
+                .toggle,
+                title: "Toggle",
+                systemImage: "switch.2",
+                current: controller.toggleHotkey,
+                target: .toggle
+            ) { hotkey in
+                controller.setToggleHotkey(hotkey)
             }
 
-            expandableRow(.hold, title: "Hold", systemImage: "hand.raised") {
-                ForEach(HotkeyOption.allCases) { hotkey in
-                    optionButton(
-                        title: hotkey.label,
-                        isSelected: controller.holdHotkey == hotkey
-                    ) {
-                        controller.setHoldHotkey(hotkey)
-                    }
-                }
+            hotkeyEditor(
+                .hold,
+                title: "Hold",
+                systemImage: "hand.raised",
+                current: controller.holdHotkey,
+                target: .hold
+            ) { hotkey in
+                controller.setHoldHotkey(hotkey)
             }
         }
         .disabled(controller.isBusy)
@@ -407,6 +417,20 @@ struct VoxaPopoverView: View {
         expandedMenu = expandedMenu == menu ? nil : menu
     }
 
+    private func configureHotkeyRecorder() {
+        hotkeyRecorder.onCommit = { target, hotkey in
+            switch target {
+            case .toggle:
+                controller.setToggleHotkey(hotkey)
+            case .hold:
+                controller.setHoldHotkey(hotkey)
+            }
+        }
+        hotkeyRecorder.onCaptureStateChanged = { isRecording in
+            controller.setHotkeyCaptureEnabled(isRecording)
+        }
+    }
+
     private func sectionGroup<Content: View>(_ title: String? = nil, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if let title {
@@ -431,6 +455,7 @@ struct VoxaPopoverView: View {
         _ menu: ExpandedMenu,
         title: String,
         systemImage: String? = nil,
+        value: String? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -451,6 +476,14 @@ struct VoxaPopoverView: View {
 
                         Spacer(minLength: 8)
 
+                        if let value {
+                            Text(value)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
@@ -467,6 +500,43 @@ struct VoxaPopoverView: View {
                 .padding(.leading, 16)
                 .padding(.trailing, 5)
                 .padding(.bottom, 3)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func hotkeyEditor(
+        _ menu: ExpandedMenu,
+        title: String,
+        systemImage: String,
+        current: HotkeyOption,
+        target: HotkeyRecordingTarget,
+        apply: @escaping (HotkeyOption) -> Void
+    ) -> some View {
+        expandableRow(menu, title: title, systemImage: systemImage, value: current.label) {
+            menuValueRow("Current", value: current.label, systemImage: "keyboard")
+
+            if hotkeyRecorder.target == target {
+                menuInfoRow(hotkeyRecorder.preview?.label ?? "Press a shortcut")
+                menuInfoRow("Press Esc to cancel. Release modifiers to save a modifier-only shortcut.")
+
+                menuActionRow("Cancel Recording", systemImage: "xmark") {
+                    hotkeyRecorder.stop()
+                }
+            } else {
+                menuActionRow("Record Shortcut…", systemImage: "keyboard") {
+                    hotkeyRecorder.start(target: target, current: current)
+                }
+            }
+
+            ForEach(HotkeyOption.presets) { hotkey in
+                optionButton(
+                    title: hotkey.label,
+                    isSelected: current == hotkey
+                ) {
+                    hotkeyRecorder.stop()
+                    apply(hotkey)
+                }
             }
         }
     }
@@ -637,6 +707,107 @@ struct VoxaPopoverView: View {
         .font(.system(size: 11))
         .padding(.horizontal, 11)
         .padding(.vertical, 6)
+    }
+}
+
+private enum HotkeyRecordingTarget: Equatable {
+    case toggle
+    case hold
+
+    var menu: VoxaPopoverView.ExpandedMenu {
+        switch self {
+        case .toggle:
+            return .toggle
+        case .hold:
+            return .hold
+        }
+    }
+}
+
+private final class HotkeyRecorder: ObservableObject {
+    @Published private(set) var target: HotkeyRecordingTarget?
+    @Published private(set) var preview: HotkeyOption?
+
+    var onCommit: ((HotkeyRecordingTarget, HotkeyOption) -> Void)?
+    var onCaptureStateChanged: ((Bool) -> Void)?
+
+    private var localMonitor: Any?
+    private var pendingModifierOnlyHotkey: HotkeyOption?
+
+    func start(target: HotkeyRecordingTarget, current: HotkeyOption) {
+        stop()
+
+        self.target = target
+        preview = current
+        onCaptureStateChanged?(true)
+
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            self?.handle(event) ?? event
+        }
+    }
+
+    func stop() {
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+            self.localMonitor = nil
+        }
+
+        let wasRecording = target != nil
+        target = nil
+        preview = nil
+        pendingModifierOnlyHotkey = nil
+
+        if wasRecording {
+            onCaptureStateChanged?(false)
+        }
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard target != nil else {
+            return event
+        }
+
+        switch event.type {
+        case .keyDown:
+            if event.keyCode == KeyCode.escape {
+                stop()
+                return nil
+            }
+
+            guard !event.isARepeat, !HotkeyOption.isModifierKeyCode(event.keyCode) else {
+                return nil
+            }
+
+            let hotkey = HotkeyOption.recorded(
+                keyCode: event.keyCode,
+                modifiers: HotkeyModifiers(eventFlags: event.modifierFlags),
+                characters: event.charactersIgnoringModifiers
+            )
+            commit(hotkey)
+            return nil
+
+        case .flagsChanged:
+            let modifiers = HotkeyModifiers(eventFlags: event.modifierFlags)
+            if let modifierOnly = HotkeyOption.modifierOnly(modifiers) {
+                preview = modifierOnly
+                pendingModifierOnlyHotkey = modifierOnly
+            } else if let pendingModifierOnlyHotkey {
+                commit(pendingModifierOnlyHotkey)
+            }
+            return nil
+
+        default:
+            return event
+        }
+    }
+
+    private func commit(_ hotkey: HotkeyOption) {
+        guard let target else {
+            return
+        }
+
+        stop()
+        onCommit?(target, hotkey)
     }
 }
 

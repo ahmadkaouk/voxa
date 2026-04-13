@@ -198,7 +198,7 @@ final class AppController: ObservableObject {
         }
 
         updateConfig(
-            params: ["toggle_hotkey": value.rawValue],
+            params: ["toggle_hotkey": value.persistedValue],
             pendingMessage: "Updating toggle hotkey...",
             successMessage: "Toggle hotkey updated"
         )
@@ -210,10 +210,14 @@ final class AppController: ObservableObject {
         }
 
         updateConfig(
-            params: ["hold_hotkey": value.rawValue],
+            params: ["hold_hotkey": value.persistedValue],
             pendingMessage: "Updating hold hotkey...",
             successMessage: "Hold hotkey updated"
         )
+    }
+
+    func setHotkeyCaptureEnabled(_ enabled: Bool) {
+        hotkeyBridge.setEnabled(!enabled)
     }
 
     func setModel(_ value: ModelOption) {
