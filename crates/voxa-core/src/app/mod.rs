@@ -31,6 +31,10 @@ impl SessionRuntime {
         self.recorder.stop().map_err(map_infra_error)
     }
 
+    pub fn current_recording_level(&self) -> Option<f32> {
+        self.recorder.current_level()
+    }
+
     pub fn transcribe(&mut self, audio: Vec<u8>) -> Result<String, RuntimeErrorCode> {
         self.transcriber.transcribe(audio).map_err(map_infra_error)
     }

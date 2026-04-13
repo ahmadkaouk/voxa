@@ -37,6 +37,7 @@ struct ActiveRecording {
     stop_tx: mpsc::Sender<()>,
     result_rx: mpsc::Receiver<Result<Vec<u8>, InfraError>>,
     worker: thread::JoinHandle<()>,
+    level: Arc<Mutex<f32>>,
 }
 
 impl Recorder for MicRecorder {
@@ -47,8 +48,10 @@ impl Recorder for MicRecorder {
 
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let (result_tx, result_rx) = mpsc::channel::<Result<Vec<u8>, InfraError>>();
+        let level = Arc::new(Mutex::new(0.0_f32));
+        let level_for_worker = Arc::clone(&level);
         let worker = thread::spawn(move || {
-            let result = record_until_stop(stop_rx);
+            let result = record_until_stop(stop_rx, level_for_worker);
             let _ = result_tx.send(result);
         });
 
@@ -56,6 +59,7 @@ impl Recorder for MicRecorder {
             stop_tx,
             result_rx,
             worker,
+            level,
         });
         Ok(())
     }
@@ -70,9 +74,17 @@ impl Recorder for MicRecorder {
         let _ = active.worker.join();
         result
     }
+
+    fn current_level(&self) -> Option<f32> {
+        let active = self.active.as_ref()?;
+        active.level.lock().ok().map(|level| *level)
+    }
 }
 
-fn record_until_stop(stop_rx: mpsc::Receiver<()>) -> Result<Vec<u8>, InfraError> {
+fn record_until_stop(
+    stop_rx: mpsc::Receiver<()>,
+    level: Arc<Mutex<f32>>,
+) -> Result<Vec<u8>, InfraError> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -93,6 +105,7 @@ fn record_until_stop(stop_rx: mpsc::Receiver<()>) -> Result<Vec<u8>, InfraError>
         &config,
         sample_format,
         Arc::clone(&samples),
+        Arc::clone(&level),
         Arc::clone(&callback_error),
     )?;
 
@@ -128,24 +141,34 @@ fn build_stream(
     config: &cpal::StreamConfig,
     sample_format: cpal::SampleFormat,
     samples: Arc<Mutex<Vec<f32>>>,
+    level: Arc<Mutex<f32>>,
     callback_error: Arc<Mutex<Option<InfraError>>>,
 ) -> Result<cpal::Stream, InfraError> {
     match sample_format {
-        cpal::SampleFormat::F32 => {
-            build_typed_stream(device, config, samples, callback_error, |sample: f32| {
-                sample.clamp(-1.0, 1.0)
-            })
-        }
-        cpal::SampleFormat::I16 => {
-            build_typed_stream(device, config, samples, callback_error, |sample: i16| {
-                (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
-            })
-        }
-        cpal::SampleFormat::U16 => {
-            build_typed_stream(device, config, samples, callback_error, |sample: u16| {
-                ((sample as f32 / u16::MAX as f32) * 2.0 - 1.0).clamp(-1.0, 1.0)
-            })
-        }
+        cpal::SampleFormat::F32 => build_typed_stream(
+            device,
+            config,
+            samples,
+            level,
+            callback_error,
+            |sample: f32| sample.clamp(-1.0, 1.0),
+        ),
+        cpal::SampleFormat::I16 => build_typed_stream(
+            device,
+            config,
+            samples,
+            level,
+            callback_error,
+            |sample: i16| (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0),
+        ),
+        cpal::SampleFormat::U16 => build_typed_stream(
+            device,
+            config,
+            samples,
+            level,
+            callback_error,
+            |sample: u16| ((sample as f32 / u16::MAX as f32) * 2.0 - 1.0).clamp(-1.0, 1.0),
+        ),
         _ => Err(InfraError::AudioCaptureFailed),
     }
 }
@@ -154,6 +177,7 @@ fn build_typed_stream<T, F>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     samples: Arc<Mutex<Vec<f32>>>,
+    level: Arc<Mutex<f32>>,
     callback_error: Arc<Mutex<Option<InfraError>>>,
     normalize: F,
 ) -> Result<cpal::Stream, InfraError>
@@ -162,6 +186,7 @@ where
     F: Fn(T) -> f32 + Send + 'static,
 {
     let samples_for_data = Arc::clone(&samples);
+    let level_for_data = Arc::clone(&level);
     let callback_error_for_data = Arc::clone(&callback_error);
     let callback_error_for_err = Arc::clone(&callback_error);
 
@@ -172,6 +197,7 @@ where
                 push_samples(
                     data,
                     &samples_for_data,
+                    &level_for_data,
                     &callback_error_for_data,
                     &normalize,
                 )
@@ -187,18 +213,51 @@ where
 fn push_samples<T, F>(
     data: &[T],
     samples: &Arc<Mutex<Vec<f32>>>,
+    level: &Arc<Mutex<f32>>,
     callback_error: &Arc<Mutex<Option<InfraError>>>,
     normalize: &F,
 ) where
     T: Copy,
     F: Fn(T) -> f32,
 {
+    let normalized: Vec<f32> = data.iter().copied().map(normalize).collect();
+    let target_level = meter_level_for_normalized_samples(&normalized);
+
+    if let Ok(mut current_level) = level.lock() {
+        *current_level = blend_meter_level(*current_level, target_level);
+    }
+
     let Ok(mut output) = samples.lock() else {
         store_callback_error(callback_error, InfraError::AudioCaptureFailed);
         return;
     };
 
-    output.extend(data.iter().copied().map(normalize));
+    output.extend(normalized);
+}
+
+fn meter_level_for_normalized_samples(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+
+    let rms = (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32)
+        .sqrt()
+        .clamp(0.0, 1.0);
+    let peak = samples
+        .iter()
+        .map(|sample| sample.abs())
+        .fold(0.0_f32, f32::max)
+        .clamp(0.0, 1.0);
+
+    let rms_level = ((rms - 0.003).max(0.0) * 20.0).sqrt();
+    let peak_level = ((peak - 0.015).max(0.0) * 6.0).sqrt() * 0.8;
+
+    rms_level.max(peak_level).clamp(0.0, 1.0)
+}
+
+fn blend_meter_level(current: f32, target: f32) -> f32 {
+    let smoothing = if target > current { 0.55 } else { 0.18 };
+    (current + ((target - current) * smoothing)).clamp(0.0, 1.0)
 }
 
 fn normalize_to_wav(
@@ -517,6 +576,23 @@ mod tests {
         assert!(samples.len() >= 2);
         assert_eq!(samples[0], 0);
         assert!(samples[1] > 16_000);
+    }
+
+    #[test]
+    fn meter_level_gates_low_noise() {
+        let level = meter_level_for_normalized_samples(&[0.001, -0.0015, 0.002, -0.002]);
+        assert!(level <= 0.01, "background noise should stay near zero");
+    }
+
+    #[test]
+    fn meter_level_boosts_normal_speech_range() {
+        let level = meter_level_for_normalized_samples(&[
+            0.0, 0.018, -0.016, 0.022, -0.021, 0.014, -0.012, 0.02,
+        ]);
+        assert!(
+            level >= 0.2,
+            "normal speech should produce visible meter movement"
+        );
     }
 
     #[test]

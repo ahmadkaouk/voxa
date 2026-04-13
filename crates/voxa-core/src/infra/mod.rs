@@ -26,6 +26,9 @@ pub struct OutputResult {
 pub trait Recorder: Send {
     fn start(&mut self) -> Result<(), InfraError>;
     fn stop(&mut self) -> Result<Vec<u8>, InfraError>;
+    fn current_level(&self) -> Option<f32> {
+        None
+    }
 }
 
 pub trait Transcriber: Send {

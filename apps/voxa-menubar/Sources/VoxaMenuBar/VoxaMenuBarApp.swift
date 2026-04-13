@@ -886,6 +886,7 @@ enum ActivityOverlayPhase: Equatable {
 
 struct ActivityOverlayView: View {
     let phase: ActivityOverlayPhase
+    let level: Double
     let onDismiss: () -> Void
     let onStop: () -> Void
 
@@ -956,8 +957,15 @@ struct ActivityOverlayView: View {
     }
 
     private func barHeight(index: Int, time: TimeInterval) -> CGFloat {
+        let normalizedLevel = max(0, min(level, 1))
+        if normalizedLevel <= 0.01 {
+            return 2.5
+        }
+
         let primary = sin((time * 10) + Double(index) * 0.72)
         let secondary = sin((time * 5.1) + Double(index) * 1.05)
-        return 2.5 + (abs((primary * 0.7) + (secondary * 0.3)) * 4.2)
+        let motion = abs((primary * 0.7) + (secondary * 0.3))
+        let envelope = pow(normalizedLevel, 0.85)
+        return 2.5 + CGFloat((1.0 + (motion * 4.6)) * envelope)
     }
 }

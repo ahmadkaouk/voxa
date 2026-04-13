@@ -458,6 +458,7 @@ fn run_max_duration_watchdog(
             Err(_) => return,
         };
         state.enforce_max_duration_if_needed();
+        state.emit_audio_level_if_needed();
         if dispatch_outbox(&mut state, &event_tx).is_err() {
             return;
         }

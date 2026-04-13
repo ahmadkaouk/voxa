@@ -14,6 +14,7 @@ final class AppController: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var eventSequence: UInt64 = 0
     @Published private(set) var socketPath: String
+    @Published private(set) var recordingLevel: Double = 0
 
     @Published private(set) var configRevision: UInt64 = 0
     @Published private(set) var toggleHotkey: HotkeyOption = .rightOption
@@ -141,13 +142,17 @@ final class AppController: ObservableObject {
     }
 
     func dismissActivityOverlay() {
+        if runtimeState == .recording {
+            stopRecordingFromOverlay()
+            return
+        }
+
         overlayDismissedForCurrentRecording = true
         activityOverlay.hide()
     }
 
     func stopRecordingFromOverlay() {
         overlayDismissedForCurrentRecording = false
-        activityOverlay.hide()
         stopRecording()
     }
 
@@ -445,6 +450,16 @@ final class AppController: ObservableObject {
             {
                 self.runtimeState = state
                 self.lastErrorCode = event.data["last_error"] as? String
+                if state != .recording {
+                    self.recordingLevel = 0
+                    self.overlayDismissedForCurrentRecording = false
+                }
+                self.syncActivityOverlay()
+            } else if event.name == "audio_level",
+                      let level = event.data["level"] as? NSNumber
+            {
+                self.recordingLevel = max(0, min(level.doubleValue, 1))
+                self.syncActivityOverlay()
             } else if event.name == "transcription_ready",
                       let text = event.data["text"] as? String
             {
@@ -528,7 +543,7 @@ final class AppController: ObservableObject {
                 self.activityOverlay.hide()
             } else {
                 self.overlayDismissedForCurrentRecording = false
-                self.activityOverlay.show(.recording, onDismiss: { [weak self] in
+                self.activityOverlay.show(.recording, level: self.recordingLevel, onDismiss: { [weak self] in
                     self?.dismissActivityOverlay()
                 }, onStop: { [weak self] in
                     self?.stopRecordingFromOverlay()
@@ -568,7 +583,7 @@ final class AppController: ObservableObject {
     private func handleHoldHotkeyActivated() {
         DispatchQueue.main.async {
             self.overlayDismissedForCurrentRecording = false
-            self.activityOverlay.show(.recording, onDismiss: { [weak self] in
+            self.activityOverlay.show(.recording, level: self.recordingLevel, onDismiss: { [weak self] in
                 self?.dismissActivityOverlay()
             }, onStop: { [weak self] in
                 self?.stopRecordingFromOverlay()
@@ -716,6 +731,7 @@ final class AppController: ObservableObject {
             self.eventSequence = max(self.eventSequence, snapshot.eventSeq)
             self.updateLastSeenSeq(snapshot.eventSeq)
             if snapshot.state != .recording {
+                self.recordingLevel = 0
                 self.overlayDismissedForCurrentRecording = false
             }
             self.syncActivityOverlay()
@@ -745,6 +761,9 @@ final class AppController: ObservableObject {
     private func publishConnectionStatus(_ status: ConnectionStatus, message: String) {
         DispatchQueue.main.async {
             self.connectionStatus = status
+            if !status.isConnected {
+                self.recordingLevel = 0
+            }
             self.statusMessage = message
             self.syncActivityOverlay()
         }
@@ -754,7 +773,7 @@ final class AppController: ObservableObject {
         switch connectionStatus {
         case .connected:
             if runtimeState == .recording && !overlayDismissedForCurrentRecording {
-                activityOverlay.show(.recording, onDismiss: { [weak self] in
+                activityOverlay.show(.recording, level: recordingLevel, onDismiss: { [weak self] in
                     self?.dismissActivityOverlay()
                 }, onStop: { [weak self] in
                     self?.stopRecordingFromOverlay()
@@ -1086,6 +1105,7 @@ private final class ActivityOverlayController {
 
     func show(
         _ phase: ActivityOverlayPhase,
+        level: Double,
         onDismiss: @escaping () -> Void,
         onStop: @escaping () -> Void
     ) {
@@ -1093,6 +1113,7 @@ private final class ActivityOverlayController {
         if let hostingView {
             hostingView.rootView = ActivityOverlayView(
                 phase: phase,
+                level: level,
                 onDismiss: onDismiss,
                 onStop: onStop
             )
@@ -1131,6 +1152,7 @@ private final class ActivityOverlayController {
         let hostingView = NSHostingView(
             rootView: ActivityOverlayView(
                 phase: .recording,
+                level: 0,
                 onDismiss: {},
                 onStop: {}
             )

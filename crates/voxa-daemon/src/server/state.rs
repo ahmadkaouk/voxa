@@ -85,6 +85,7 @@ pub(super) struct SharedState {
     outbox: Vec<EventEnvelope>,
     started_at: Instant,
     recording_deadline: Option<Instant>,
+    last_audio_level_bucket: Option<u8>,
     subscribers: Vec<ConnectionHandle>,
     config: DaemonConfig,
     runtime: SessionRuntime,
@@ -157,6 +158,7 @@ impl SharedState {
             outbox: Vec::new(),
             started_at: Instant::now(),
             recording_deadline: None,
+            last_audio_level_bucket: None,
             subscribers: Vec::new(),
             config,
             runtime,
@@ -299,14 +301,11 @@ impl SharedState {
     }
 
     pub(super) fn api_key_status(&self) -> Result<ApiKeyStatusResult, ErrorPayload> {
-        let api_key = self
-            .api_keys
-            .get_api_key()
-            .map_err(|_| ErrorPayload {
-                code: "INTERNAL_ERROR".to_owned(),
-                message: "Failed to read API key".to_owned(),
-                details: None,
-            })?;
+        let api_key = self.api_keys.get_api_key().map_err(|_| ErrorPayload {
+            code: "INTERNAL_ERROR".to_owned(),
+            message: "Failed to read API key".to_owned(),
+            details: None,
+        })?;
         let hint = api_key.as_deref().map(mask_api_key_hint);
         let is_set = api_key.is_some();
 
@@ -346,6 +345,7 @@ impl SharedState {
             let _ = self.machine.apply(DomainEvent::Reset);
             self.session_id = None;
             self.recording_deadline = None;
+            self.last_audio_level_bucket = None;
             self.emit_state_changed();
         }
 
@@ -370,12 +370,14 @@ impl SharedState {
                     self.machine.set_last_error(code);
                     self.session_id = None;
                     self.recording_deadline = None;
+                    self.last_audio_level_bucket = None;
                     self.emit_state_changed();
                     return Err(runtime_error_payload(code, "Failed to start recording"));
                 }
 
                 self.recording_deadline =
                     Some(Instant::now() + Duration::from_secs(self.config.max_recording_seconds));
+                self.last_audio_level_bucket = None;
                 self.emit_state_changed();
                 self.emit_event(
                     "recording_started",
@@ -397,6 +399,7 @@ impl SharedState {
 
     pub(super) fn stop_recording(&mut self, reason: StopReason) -> Result<Value, ErrorPayload> {
         if !matches!(self.machine.state(), SessionState::Recording(_)) {
+            self.last_audio_level_bucket = None;
             return Ok(json!({ "accepted": true }));
         }
         self.recording_deadline = None;
@@ -419,6 +422,7 @@ impl SharedState {
                 let _ = self.machine.apply(DomainEvent::RecordingFailed);
                 self.machine.set_last_error(code);
                 self.session_id = None;
+                self.last_audio_level_bucket = None;
                 self.emit_state_changed();
                 return Err(runtime_error_payload(code, "Failed to stop audio capture"));
             }
@@ -489,6 +493,7 @@ impl SharedState {
                 details: None,
             })?;
         self.session_id = None;
+        self.last_audio_level_bucket = None;
         self.emit_state_changed();
 
         Ok(json!({
@@ -500,6 +505,7 @@ impl SharedState {
     pub(super) fn enforce_max_duration_if_needed(&mut self) {
         if !matches!(self.machine.state(), SessionState::Recording(_)) {
             self.recording_deadline = None;
+            self.last_audio_level_bucket = None;
             return;
         }
 
@@ -511,6 +517,32 @@ impl SharedState {
         }
 
         let _ = self.stop_recording(StopReason::MaxDuration);
+    }
+
+    pub(super) fn emit_audio_level_if_needed(&mut self) {
+        if !matches!(self.machine.state(), SessionState::Recording(_)) {
+            self.last_audio_level_bucket = None;
+            return;
+        }
+
+        let level = self
+            .runtime
+            .current_recording_level()
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let bucket = (level * 40.0).round() as u8;
+        if self.last_audio_level_bucket == Some(bucket) {
+            return;
+        }
+
+        self.last_audio_level_bucket = Some(bucket);
+        self.emit_event(
+            "audio_level",
+            json!({
+                "session_id": self.session_id,
+                "level": level
+            }),
+        );
     }
 
     fn emit_state_changed(&mut self) {
