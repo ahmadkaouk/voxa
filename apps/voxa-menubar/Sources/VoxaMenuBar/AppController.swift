@@ -141,13 +141,17 @@ final class AppController: ObservableObject {
     }
 
     func dismissActivityOverlay() {
+        if runtimeState == .recording {
+            stopRecordingFromOverlay()
+            return
+        }
+
         overlayDismissedForCurrentRecording = true
         activityOverlay.hide()
     }
 
     func stopRecordingFromOverlay() {
         overlayDismissedForCurrentRecording = false
-        activityOverlay.hide()
         stopRecording()
     }
 
@@ -441,6 +445,10 @@ final class AppController: ObservableObject {
             {
                 self.runtimeState = state
                 self.lastErrorCode = event.data["last_error"] as? String
+                if state != .recording {
+                    self.overlayDismissedForCurrentRecording = false
+                }
+                self.syncActivityOverlay()
             } else if event.name == "transcription_ready",
                       let text = event.data["text"] as? String
             {
