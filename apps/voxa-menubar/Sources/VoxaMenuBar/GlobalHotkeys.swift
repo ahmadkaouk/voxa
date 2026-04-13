@@ -148,7 +148,8 @@ final class GlobalHotkeyBridge {
         }
 
         let shouldConsume = queue.sync {
-            let shouldConsume = self.shouldConsume(mapped)
+            let prospectiveState = self.state(after: mapped)
+            let shouldConsume = self.shouldConsume(mapped, prospectiveState: prospectiveState)
             self.handle(mapped)
             return shouldConsume
         }
@@ -330,35 +331,31 @@ final class GlobalHotkeyBridge {
         }
     }
 
-    private func shouldConsume(_ event: HotkeyInputEvent) -> Bool {
+    private func shouldConsume(_ event: HotkeyInputEvent, prospectiveState: HotkeyState) -> Bool {
         guard isEnabled,
               let keyCode = event.keyCode,
-              !event.isModifierEvent
+              !event.isModifierEvent,
+              event.kind == .press
         else {
             return false
         }
 
-        return toggleHotkey.shouldConsume(keyCode: keyCode, modifiers: event.modifiers)
-            || holdHotkey.shouldConsume(keyCode: keyCode, modifiers: event.modifiers)
+        return toggleHotkey.shouldConsume(
+            keyCode: keyCode,
+            modifiers: prospectiveState.modifiers,
+            pressedKeys: prospectiveState.pressedKeys
+        )
+            || holdHotkey.shouldConsume(
+                keyCode: keyCode,
+                modifiers: prospectiveState.modifiers,
+                pressedKeys: prospectiveState.pressedKeys
+            )
     }
 
     private func apply(_ event: HotkeyInputEvent) {
-        activeModifiers = event.modifiers
-
-        guard let keyCode = event.keyCode else {
-            return
-        }
-
-        if event.isModifierEvent {
-            return
-        }
-
-        switch event.kind {
-        case .press:
-            pressedKeys.insert(keyCode)
-        case .release:
-            pressedKeys.remove(keyCode)
-        }
+        let nextState = state(after: event)
+        activeModifiers = nextState.modifiers
+        pressedKeys = nextState.pressedKeys
     }
 
     private func otherBinding(for action: HotkeyAction) -> HotkeyOption {
@@ -377,6 +374,21 @@ final class GlobalHotkeyBridge {
         toggleMatcher.reset()
         holdMatcher.reset()
         holdDispatchActive = false
+    }
+
+    private func state(after event: HotkeyInputEvent) -> HotkeyState {
+        var nextPressedKeys = pressedKeys
+
+        if let keyCode = event.keyCode, !event.isModifierEvent {
+            switch event.kind {
+            case .press:
+                nextPressedKeys.insert(keyCode)
+            case .release:
+                nextPressedKeys.remove(keyCode)
+            }
+        }
+
+        return HotkeyState(modifiers: event.modifiers, pressedKeys: nextPressedKeys)
     }
 }
 

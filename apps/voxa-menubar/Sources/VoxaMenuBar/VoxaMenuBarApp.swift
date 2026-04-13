@@ -160,9 +160,7 @@ struct VoxaPopoverView: View {
                 systemImage: "switch.2",
                 current: controller.toggleHotkey,
                 target: .toggle
-            ) { hotkey in
-                controller.setToggleHotkey(hotkey)
-            }
+            )
 
             hotkeyEditor(
                 .hold,
@@ -170,9 +168,7 @@ struct VoxaPopoverView: View {
                 systemImage: "hand.raised",
                 current: controller.holdHotkey,
                 target: .hold
-            ) { hotkey in
-                controller.setHoldHotkey(hotkey)
-            }
+            )
         }
         .disabled(controller.isBusy)
     }
@@ -510,15 +506,14 @@ struct VoxaPopoverView: View {
         title: String,
         systemImage: String,
         current: HotkeyOption,
-        target: HotkeyRecordingTarget,
-        apply: @escaping (HotkeyOption) -> Void
+        target: HotkeyRecordingTarget
     ) -> some View {
         expandableRow(menu, title: title, systemImage: systemImage, value: current.label) {
             menuValueRow("Current", value: current.label, systemImage: "keyboard")
 
             if hotkeyRecorder.target == target {
                 menuInfoRow(hotkeyRecorder.preview?.label ?? "Press a shortcut")
-                menuInfoRow("Press Esc to cancel. Release modifiers to save a modifier-only shortcut.")
+                menuInfoRow("Hold the full combination, then release it to save. Press Esc to cancel.")
 
                 menuActionRow("Cancel Recording", systemImage: "xmark") {
                     hotkeyRecorder.stop()
@@ -526,16 +521,6 @@ struct VoxaPopoverView: View {
             } else {
                 menuActionRow("Record Shortcut…", systemImage: "keyboard") {
                     hotkeyRecorder.start(target: target, current: current)
-                }
-            }
-
-            ForEach(HotkeyOption.presets) { hotkey in
-                optionButton(
-                    title: hotkey.label,
-                    isSelected: current == hotkey
-                ) {
-                    hotkeyRecorder.stop()
-                    apply(hotkey)
                 }
             }
         }
@@ -732,7 +717,10 @@ private final class HotkeyRecorder: ObservableObject {
     var onCaptureStateChanged: ((Bool) -> Void)?
 
     private var localMonitor: Any?
-    private var pendingModifierOnlyHotkey: HotkeyOption?
+    private var recordedModifiers: HotkeyModifiers = []
+    private var recordedKeyCodes: Set<UInt16> = []
+    private var keyDisplayOverrides: [UInt16: String] = [:]
+    private var pendingHotkey: HotkeyOption?
 
     func start(target: HotkeyRecordingTarget, current: HotkeyOption) {
         stop()
@@ -741,7 +729,7 @@ private final class HotkeyRecorder: ObservableObject {
         preview = current
         onCaptureStateChanged?(true)
 
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
             self?.handle(event) ?? event
         }
     }
@@ -755,7 +743,10 @@ private final class HotkeyRecorder: ObservableObject {
         let wasRecording = target != nil
         target = nil
         preview = nil
-        pendingModifierOnlyHotkey = nil
+        recordedModifiers = []
+        recordedKeyCodes.removeAll()
+        keyDisplayOverrides.removeAll()
+        pendingHotkey = nil
 
         if wasRecording {
             onCaptureStateChanged?(false)
@@ -778,27 +769,71 @@ private final class HotkeyRecorder: ObservableObject {
                 return nil
             }
 
-            let hotkey = HotkeyOption.recorded(
-                keyCode: event.keyCode,
-                modifiers: HotkeyModifiers(eventFlags: event.modifierFlags),
+            recordedModifiers = HotkeyModifiers(eventFlags: event.modifierFlags)
+            recordedKeyCodes.insert(event.keyCode)
+            keyDisplayOverrides[event.keyCode] = HotkeyOption.displayName(
+                forKeyCode: event.keyCode,
                 characters: event.charactersIgnoringModifiers
             )
-            commit(hotkey)
+            updatePendingHotkey()
+            return nil
+
+        case .keyUp:
+            guard !HotkeyOption.isModifierKeyCode(event.keyCode) else {
+                return nil
+            }
+
+            recordedModifiers = HotkeyModifiers(eventFlags: event.modifierFlags)
+            recordedKeyCodes.remove(event.keyCode)
+            if recordedKeyCodes.isEmpty && recordedModifiers.isEmpty {
+                commitPendingHotkey()
+            }
             return nil
 
         case .flagsChanged:
-            let modifiers = HotkeyModifiers(eventFlags: event.modifierFlags)
-            if let modifierOnly = HotkeyOption.modifierOnly(modifiers) {
-                preview = modifierOnly
-                pendingModifierOnlyHotkey = modifierOnly
-            } else if let pendingModifierOnlyHotkey {
-                commit(pendingModifierOnlyHotkey)
+            recordedModifiers = HotkeyModifiers(eventFlags: event.modifierFlags)
+            if recordedKeyCodes.isEmpty && recordedModifiers.isEmpty {
+                commitPendingHotkey()
+            } else {
+                updatePendingHotkey()
             }
             return nil
 
         default:
             return event
         }
+    }
+
+    private func updatePendingHotkey() {
+        let sortedKeyCodes = recordedKeyCodes.sorted()
+        if sortedKeyCodes.isEmpty {
+            if let modifierOnly = HotkeyOption.modifierOnly(recordedModifiers) {
+                preview = modifierOnly
+                pendingHotkey = modifierOnly
+            }
+            return
+        }
+
+        let keyDisplays = sortedKeyCodes.map { keyCode in
+            keyDisplayOverrides[keyCode] ?? HotkeyOption.displayName(forKeyCode: keyCode, characters: nil)
+        }
+
+        let hotkey = HotkeyOption.recorded(
+            keyCodes: sortedKeyCodes,
+            modifiers: recordedModifiers,
+            keyDisplays: keyDisplays
+        )
+        preview = hotkey
+        pendingHotkey = hotkey
+    }
+
+    private func commitPendingHotkey() {
+        guard let pendingHotkey else {
+            stop()
+            return
+        }
+
+        commit(pendingHotkey)
     }
 
     private func commit(_ hotkey: HotkeyOption) {

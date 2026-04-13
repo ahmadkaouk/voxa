@@ -17,15 +17,28 @@ final class HotkeyOptionTests: XCTestCase {
 
     func testCustomHotkeyRoundTripPreservesBinding() {
         let custom = HotkeyOption(
-            keyCode: KeyCode.f18,
+            keyCodes: [KeyCode.f18],
             modifiers: [.control, .shift],
-            keyDisplay: "F18"
+            keyDisplays: ["F18"]
         )
 
         let roundTrip = HotkeyOption.fromRaw(custom.persistedValue)
 
         XCTAssertEqual(roundTrip, custom)
         XCTAssertEqual(roundTrip?.label, "Ctrl+Shift+F18")
+    }
+
+    func testMultiKeyHotkeyRoundTripPreservesBinding() {
+        let custom = HotkeyOption(
+            keyCodes: [KeyCode.j, KeyCode.k],
+            modifiers: [.control],
+            keyDisplays: ["J", "K"]
+        )
+
+        let roundTrip = HotkeyOption.fromRaw(custom.persistedValue)
+
+        XCTAssertEqual(roundTrip, custom)
+        XCTAssertEqual(roundTrip?.label, "Ctrl+J+K")
     }
 
     func testSubsetDetectionSupportsOverlapResolution() {

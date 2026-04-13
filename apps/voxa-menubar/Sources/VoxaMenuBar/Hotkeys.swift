@@ -124,32 +124,44 @@ struct HotkeyModifiers: OptionSet, Hashable {
 }
 
 struct HotkeyOption: Identifiable, Equatable {
-    let keyCode: UInt16?
+    let keyCodes: [UInt16]
     let modifiers: HotkeyModifiers
-    let keyDisplay: String?
+    let keyDisplays: [String]
 
-    static let rightOption = HotkeyOption(keyCode: nil, modifiers: [.option], keyDisplay: nil)
-    static let functionKey = HotkeyOption(keyCode: nil, modifiers: [.function], keyDisplay: nil)
+    init(keyCodes: [UInt16] = [], modifiers: HotkeyModifiers, keyDisplays: [String] = []) {
+        let normalizedKeyCodes = Array(Set(keyCodes)).sorted()
+        self.keyCodes = normalizedKeyCodes
+        self.modifiers = modifiers
+        if keyDisplays.count == normalizedKeyCodes.count {
+            self.keyDisplays = keyDisplays
+        } else {
+            self.keyDisplays = normalizedKeyCodes.map { Self.displayName(forKeyCode: $0, characters: nil) }
+        }
+    }
+
+    init(keyCode: UInt16?, modifiers: HotkeyModifiers, keyDisplay: String?) {
+        self.init(
+            keyCodes: keyCode.map { [$0] } ?? [],
+            modifiers: modifiers,
+            keyDisplays: keyDisplay.map { [$0] } ?? []
+        )
+    }
+
+    static let rightOption = HotkeyOption(modifiers: [.option])
+    static let functionKey = HotkeyOption(modifiers: [.function])
     static let functionSpace = HotkeyOption(
-        keyCode: KeyCode.space,
+        keyCodes: [KeyCode.space],
         modifiers: [.function],
-        keyDisplay: "Space"
+        keyDisplays: ["Space"]
     )
     static let commandSpace = HotkeyOption(
-        keyCode: KeyCode.space,
+        keyCodes: [KeyCode.space],
         modifiers: [.command],
-        keyDisplay: "Space"
+        keyDisplays: ["Space"]
     )
 
-    static let presets: [HotkeyOption] = [
-        .rightOption,
-        .functionKey,
-        .functionSpace,
-        .commandSpace,
-    ]
-
     static func == (lhs: HotkeyOption, rhs: HotkeyOption) -> Bool {
-        lhs.keyCode == rhs.keyCode && lhs.modifiers == rhs.modifiers
+        lhs.keyCodes == rhs.keyCodes && lhs.modifiers == rhs.modifiers
     }
 
     var id: String {
@@ -170,7 +182,7 @@ struct HotkeyOption: Identifiable, Equatable {
             break
         }
 
-        let parts = modifiers.displayParts + [resolvedKeyDisplay].compactMap { $0 }
+        let parts = modifiers.displayParts + resolvedKeyDisplays
         if parts.isEmpty {
             return "Unassigned"
         }
@@ -193,9 +205,11 @@ struct HotkeyOption: Identifiable, Equatable {
         }
 
         let payload = PersistedHotkey(
-            keyCode: keyCode,
+            keyCodes: keyCodes.isEmpty ? nil : keyCodes,
             modifiers: modifiers.persistedParts,
-            keyDisplay: keyDisplay
+            keyDisplays: keyCodes.isEmpty ? nil : keyDisplays,
+            keyCode: nil,
+            keyDisplay: nil
         )
 
         let encoder = JSONEncoder()
@@ -211,7 +225,7 @@ struct HotkeyOption: Identifiable, Equatable {
     }
 
     var isModifierOnly: Bool {
-        keyCode == nil
+        keyCodes.isEmpty
     }
 
     fileprivate var inputTokens: Set<HotkeyInputToken> {
@@ -231,22 +245,18 @@ struct HotkeyOption: Identifiable, Equatable {
         if modifiers.contains(.function) {
             tokens.insert(.function)
         }
-        if let keyCode {
+        for keyCode in keyCodes {
             tokens.insert(.keyCode(keyCode))
         }
         return tokens
     }
 
-    var resolvedKeyDisplay: String? {
-        if let keyDisplay, !keyDisplay.isEmpty {
-            return keyDisplay
+    var resolvedKeyDisplays: [String] {
+        if keyDisplays.count == keyCodes.count {
+            return keyDisplays
         }
 
-        guard let keyCode else {
-            return nil
-        }
-
-        return Self.displayName(forKeyCode: keyCode, characters: nil)
+        return keyCodes.map { Self.displayName(forKeyCode: $0, characters: nil) }
     }
 
     func matches(modifiers activeModifiers: HotkeyModifiers, pressedKeys: Set<UInt16>) -> Bool {
@@ -254,19 +264,26 @@ struct HotkeyOption: Identifiable, Equatable {
             return false
         }
 
-        if let keyCode {
-            return pressedKeys.contains(keyCode)
+        if keyCodes.isEmpty {
+            return pressedKeys.isEmpty && !modifiers.isEmpty
         }
 
-        return !modifiers.isEmpty
+        return pressedKeys == Set(keyCodes)
     }
 
-    func shouldConsume(keyCode eventKeyCode: UInt16, modifiers eventModifiers: HotkeyModifiers) -> Bool {
-        guard let keyCode else {
+    func shouldConsume(
+        keyCode eventKeyCode: UInt16,
+        modifiers eventModifiers: HotkeyModifiers,
+        pressedKeys prospectivePressedKeys: Set<UInt16>
+    ) -> Bool {
+        guard !keyCodes.isEmpty else {
             return false
         }
 
-        return keyCode == eventKeyCode && modifiers == eventModifiers && !Self.isModifierKeyCode(keyCode)
+        return keyCodes.contains(eventKeyCode)
+            && modifiers == eventModifiers
+            && prospectivePressedKeys == Set(keyCodes)
+            && !Self.isModifierKeyCode(eventKeyCode)
     }
 
     func isStrictSubset(of other: HotkeyOption) -> Bool {
@@ -300,26 +317,29 @@ struct HotkeyOption: Identifiable, Equatable {
             return nil
         }
 
-        if payload.keyCode == nil && modifiers.isEmpty {
+        let keyCodes = payload.keyCodes ?? payload.keyCode.map { [$0] } ?? []
+        let keyDisplays = payload.keyDisplays ?? payload.keyDisplay.map { [$0] } ?? []
+
+        if keyCodes.isEmpty && modifiers.isEmpty {
             return nil
         }
 
         return HotkeyOption(
-            keyCode: payload.keyCode,
+            keyCodes: keyCodes,
             modifiers: modifiers,
-            keyDisplay: payload.keyDisplay
+            keyDisplays: keyDisplays
         )
     }
 
     static func recorded(
-        keyCode: UInt16,
+        keyCodes: [UInt16],
         modifiers: HotkeyModifiers,
-        characters: String?
+        keyDisplays: [String]
     ) -> HotkeyOption {
         HotkeyOption(
-            keyCode: keyCode,
+            keyCodes: keyCodes,
             modifiers: modifiers,
-            keyDisplay: displayName(forKeyCode: keyCode, characters: characters)
+            keyDisplays: keyDisplays
         )
     }
 
@@ -328,7 +348,7 @@ struct HotkeyOption: Identifiable, Equatable {
             return nil
         }
 
-        return HotkeyOption(keyCode: nil, modifiers: modifiers, keyDisplay: nil)
+        return HotkeyOption(modifiers: modifiers)
     }
 
     static func isModifierKeyCode(_ keyCode: UInt16) -> Bool {
@@ -475,12 +495,61 @@ private enum HotkeyInputToken: Hashable {
 }
 
 private struct PersistedHotkey: Codable {
-    let keyCode: UInt16?
+    let keyCodes: [UInt16]?
     let modifiers: [String]
+    let keyDisplays: [String]?
+    let keyCode: UInt16?
     let keyDisplay: String?
 }
 
 private let namedKeyDisplays: [UInt16: String] = [
+    KeyCode.a: "A",
+    KeyCode.b: "B",
+    KeyCode.c: "C",
+    KeyCode.d: "D",
+    KeyCode.e: "E",
+    KeyCode.f: "F",
+    KeyCode.g: "G",
+    KeyCode.h: "H",
+    KeyCode.i: "I",
+    KeyCode.j: "J",
+    KeyCode.k: "K",
+    KeyCode.l: "L",
+    KeyCode.m: "M",
+    KeyCode.n: "N",
+    KeyCode.o: "O",
+    KeyCode.p: "P",
+    KeyCode.q: "Q",
+    KeyCode.r: "R",
+    KeyCode.s: "S",
+    KeyCode.t: "T",
+    KeyCode.u: "U",
+    KeyCode.v: "V",
+    KeyCode.w: "W",
+    KeyCode.x: "X",
+    KeyCode.y: "Y",
+    KeyCode.z: "Z",
+    KeyCode.one: "1",
+    KeyCode.two: "2",
+    KeyCode.three: "3",
+    KeyCode.four: "4",
+    KeyCode.five: "5",
+    KeyCode.six: "6",
+    KeyCode.seven: "7",
+    KeyCode.eight: "8",
+    KeyCode.nine: "9",
+    KeyCode.zero: "0",
+    KeyCode.minus: "-",
+    KeyCode.equal: "=",
+    KeyCode.leftBracket: "[",
+    KeyCode.rightBracket: "]",
+    KeyCode.backslash: "\\",
+    KeyCode.semicolon: ";",
+    KeyCode.quote: "'",
+    KeyCode.comma: ",",
+    KeyCode.period: ".",
+    KeyCode.slash: "/",
+    KeyCode.grave: "`",
     KeyCode.space: "Space",
     KeyCode.tab: "Tab",
     KeyCode.returnKey: "Return",
