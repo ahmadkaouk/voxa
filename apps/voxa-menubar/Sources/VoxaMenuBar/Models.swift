@@ -67,32 +67,6 @@ enum ConnectionStatus {
     }
 }
 
-enum HotkeyOption: String, CaseIterable, Identifiable {
-    case rightOption = "right_option"
-    case functionKey = "fn"
-    case functionSpace = "fn_space"
-    case commandSpace = "cmd_space"
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .rightOption:
-            return "Right Option"
-        case .functionKey:
-            return "Fn"
-        case .functionSpace:
-            return "Fn+Space"
-        case .commandSpace:
-            return "Cmd+Space"
-        }
-    }
-
-    static func fromRawOrDefault(_ raw: String) -> HotkeyOption {
-        HotkeyOption(rawValue: raw) ?? .rightOption
-    }
-}
-
 enum ModelOption: String, CaseIterable, Identifiable {
     case gpt4oMiniTranscribe = "gpt-4o-mini-transcribe"
     case gpt4oTranscribe = "gpt-4o-transcribe"
