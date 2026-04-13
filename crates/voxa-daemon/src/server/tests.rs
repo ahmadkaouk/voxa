@@ -580,6 +580,27 @@ impl Recorder for TestRecorder {
     }
 }
 
+#[derive(Default)]
+struct LevelRecorder {
+    is_recording: bool,
+}
+
+impl Recorder for LevelRecorder {
+    fn start(&mut self) -> Result<(), InfraError> {
+        self.is_recording = true;
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<Vec<u8>, InfraError> {
+        self.is_recording = false;
+        Ok(vec![1, 2, 3])
+    }
+
+    fn current_level(&self) -> Option<f32> {
+        Some(if self.is_recording { 0.75 } else { 0.0 })
+    }
+}
+
 struct FailingTranscriber;
 
 impl Transcriber for FailingTranscriber {
@@ -641,6 +662,65 @@ fn runtime_with_empty_transcript() -> SessionRuntime {
         Box::new(EmptyTranscriber),
         Box::new(TestOutput),
     )
+}
+
+fn runtime_with_fixed_audio_level() -> SessionRuntime {
+    SessionRuntime::new(
+        Box::new(LevelRecorder::default()),
+        Box::new(FixedTranscriber {
+            text: "hello".to_owned(),
+        }),
+        Box::new(TestOutput),
+    )
+}
+
+#[test]
+fn subscriber_receives_audio_level_events_while_recording() {
+    let path = temp_socket_path("audio-level");
+    let runtime = runtime_with_fixed_audio_level();
+    let (running, handle) = start_server_with_runtime(path.clone(), runtime);
+    wait_for_socket(&path);
+
+    let (mut subscriber_stream, mut subscriber_reader) = connect_and_handshake(&path);
+    let _ = send_request(
+        &mut subscriber_stream,
+        &mut subscriber_reader,
+        "1",
+        "subscribe",
+        json!({}),
+    );
+
+    let (mut control_stream, mut control_reader) = connect_and_handshake(&path);
+    let _ = send_request(
+        &mut control_stream,
+        &mut control_reader,
+        "2",
+        "start_recording",
+        json!({"origin":"manual"}),
+    );
+
+    let mut saw_audio_level = false;
+
+    for _ in 0..20 {
+        let envelope = read_server_envelope(&mut subscriber_reader);
+        if let ServerEnvelope::Event(event) = envelope {
+            if event.name == "audio_level" {
+                let level = event.data["level"]
+                    .as_f64()
+                    .expect("audio level should be numeric");
+                assert!(level > 0.7, "audio level should reflect recorder activity");
+                saw_audio_level = true;
+                break;
+            }
+        }
+    }
+
+    assert!(
+        saw_audio_level,
+        "subscriber should receive audio level events"
+    );
+
+    stop_server(&path, running, handle);
 }
 
 #[test]

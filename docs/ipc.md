@@ -295,12 +295,22 @@ All events include `seq` and are emitted in strict increasing order per daemon p
 }
 ```
 
+### `audio_level`
+```json
+{
+  "type":"event",
+  "name":"audio_level",
+  "seq":45,
+  "data":{"session_id":"s-abc","level":0.42}
+}
+```
+
 ### `recording_stopped`
 ```json
 {
   "type":"event",
   "name":"recording_stopped",
-  "seq":45,
+  "seq":46,
   "data":{"session_id":"s-abc","reason":"hotkey_hold_release"}
 }
 ```
@@ -310,7 +320,7 @@ All events include `seq` and are emitted in strict increasing order per daemon p
 {
   "type":"event",
   "name":"transcribing_started",
-  "seq":46,
+  "seq":47,
   "data":{"session_id":"s-abc"}
 }
 ```
@@ -320,7 +330,7 @@ All events include `seq` and are emitted in strict increasing order per daemon p
 {
   "type":"event",
   "name":"transcription_ready",
-  "seq":47,
+  "seq":48,
   "data":{"session_id":"s-abc","text":"hello world","text_length":11}
 }
 ```

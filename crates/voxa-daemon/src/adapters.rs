@@ -37,6 +37,7 @@ struct ActiveRecording {
     stop_tx: mpsc::Sender<()>,
     result_rx: mpsc::Receiver<Result<Vec<u8>, InfraError>>,
     worker: thread::JoinHandle<()>,
+    level: Arc<Mutex<f32>>,
 }
 
 impl Recorder for MicRecorder {
@@ -47,8 +48,10 @@ impl Recorder for MicRecorder {
 
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let (result_tx, result_rx) = mpsc::channel::<Result<Vec<u8>, InfraError>>();
+        let level = Arc::new(Mutex::new(0.0_f32));
+        let level_for_worker = Arc::clone(&level);
         let worker = thread::spawn(move || {
-            let result = record_until_stop(stop_rx);
+            let result = record_until_stop(stop_rx, level_for_worker);
             let _ = result_tx.send(result);
         });
 
@@ -56,6 +59,7 @@ impl Recorder for MicRecorder {
             stop_tx,
             result_rx,
             worker,
+            level,
         });
         Ok(())
     }
@@ -70,9 +74,17 @@ impl Recorder for MicRecorder {
         let _ = active.worker.join();
         result
     }
+
+    fn current_level(&self) -> Option<f32> {
+        let active = self.active.as_ref()?;
+        active.level.lock().ok().map(|level| *level)
+    }
 }
 
-fn record_until_stop(stop_rx: mpsc::Receiver<()>) -> Result<Vec<u8>, InfraError> {
+fn record_until_stop(
+    stop_rx: mpsc::Receiver<()>,
+    level: Arc<Mutex<f32>>,
+) -> Result<Vec<u8>, InfraError> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -93,6 +105,7 @@ fn record_until_stop(stop_rx: mpsc::Receiver<()>) -> Result<Vec<u8>, InfraError>
         &config,
         sample_format,
         Arc::clone(&samples),
+        Arc::clone(&level),
         Arc::clone(&callback_error),
     )?;
 
@@ -128,24 +141,34 @@ fn build_stream(
     config: &cpal::StreamConfig,
     sample_format: cpal::SampleFormat,
     samples: Arc<Mutex<Vec<f32>>>,
+    level: Arc<Mutex<f32>>,
     callback_error: Arc<Mutex<Option<InfraError>>>,
 ) -> Result<cpal::Stream, InfraError> {
     match sample_format {
-        cpal::SampleFormat::F32 => {
-            build_typed_stream(device, config, samples, callback_error, |sample: f32| {
-                sample.clamp(-1.0, 1.0)
-            })
-        }
-        cpal::SampleFormat::I16 => {
-            build_typed_stream(device, config, samples, callback_error, |sample: i16| {
-                (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
-            })
-        }
-        cpal::SampleFormat::U16 => {
-            build_typed_stream(device, config, samples, callback_error, |sample: u16| {
-                ((sample as f32 / u16::MAX as f32) * 2.0 - 1.0).clamp(-1.0, 1.0)
-            })
-        }
+        cpal::SampleFormat::F32 => build_typed_stream(
+            device,
+            config,
+            samples,
+            level,
+            callback_error,
+            |sample: f32| sample.clamp(-1.0, 1.0),
+        ),
+        cpal::SampleFormat::I16 => build_typed_stream(
+            device,
+            config,
+            samples,
+            level,
+            callback_error,
+            |sample: i16| (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0),
+        ),
+        cpal::SampleFormat::U16 => build_typed_stream(
+            device,
+            config,
+            samples,
+            level,
+            callback_error,
+            |sample: u16| ((sample as f32 / u16::MAX as f32) * 2.0 - 1.0).clamp(-1.0, 1.0),
+        ),
         _ => Err(InfraError::AudioCaptureFailed),
     }
 }
@@ -154,6 +177,7 @@ fn build_typed_stream<T, F>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     samples: Arc<Mutex<Vec<f32>>>,
+    level: Arc<Mutex<f32>>,
     callback_error: Arc<Mutex<Option<InfraError>>>,
     normalize: F,
 ) -> Result<cpal::Stream, InfraError>
@@ -162,6 +186,7 @@ where
     F: Fn(T) -> f32 + Send + 'static,
 {
     let samples_for_data = Arc::clone(&samples);
+    let level_for_data = Arc::clone(&level);
     let callback_error_for_data = Arc::clone(&callback_error);
     let callback_error_for_err = Arc::clone(&callback_error);
 
@@ -172,6 +197,7 @@ where
                 push_samples(
                     data,
                     &samples_for_data,
+                    &level_for_data,
                     &callback_error_for_data,
                     &normalize,
                 )
@@ -187,18 +213,29 @@ where
 fn push_samples<T, F>(
     data: &[T],
     samples: &Arc<Mutex<Vec<f32>>>,
+    level: &Arc<Mutex<f32>>,
     callback_error: &Arc<Mutex<Option<InfraError>>>,
     normalize: &F,
 ) where
     T: Copy,
     F: Fn(T) -> f32,
 {
+    let normalized: Vec<f32> = data.iter().copied().map(normalize).collect();
+    let rms = normalized.iter().map(|sample| sample * sample).sum::<f32>()
+        / normalized.len().max(1) as f32;
+    let rms = rms.sqrt().clamp(0.0, 1.0);
+
+    if let Ok(mut current_level) = level.lock() {
+        let smoothed = (*current_level * 0.65) + (rms * 0.35);
+        *current_level = smoothed.clamp(0.0, 1.0);
+    }
+
     let Ok(mut output) = samples.lock() else {
         store_callback_error(callback_error, InfraError::AudioCaptureFailed);
         return;
     };
 
-    output.extend(data.iter().copied().map(normalize));
+    output.extend(normalized);
 }
 
 fn normalize_to_wav(
