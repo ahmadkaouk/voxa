@@ -66,6 +66,17 @@ final class GlobalHotkeyBridge {
         }
     }
 
+    func restart() {
+        stop()
+        start()
+    }
+
+    func resetForSystemInterruption() {
+        queue.async { [weak self] in
+            self?.resetState()
+        }
+    }
+
     func updateBindings(toggle: HotkeyOption, hold: HotkeyOption) {
         queue.async { [weak self] in
             guard let self else { return }
