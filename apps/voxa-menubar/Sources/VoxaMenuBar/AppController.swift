@@ -41,6 +41,7 @@ final class AppController: ObservableObject {
     private var eventConnection: IPCConnection?
     private var terminationObserver: NSObjectProtocol?
     private var becameActiveObserver: NSObjectProtocol?
+    private var workspaceObservers: [NSObjectProtocol] = []
     private var shutdownHandled = false
     private var overlayDismissedForCurrentRecording = false
     private var hasPromptedForInputPermissions = false
@@ -82,8 +83,9 @@ final class AppController: ObservableObject {
             object: nil,
             queue: nil
         ) { [weak self] _ in
-            _ = self?.refreshAccessibilityPermission(prompt: false)
+            self?.recoverHotkeyBridgeAfterSystemResume()
         }
+        registerWorkspaceObservers()
         startEventLoop()
     }
 
@@ -94,6 +96,11 @@ final class AppController: ObservableObject {
         if let becameActiveObserver {
             NotificationCenter.default.removeObserver(becameActiveObserver)
         }
+        let workspaceNotificationCenter = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers {
+            workspaceNotificationCenter.removeObserver(observer)
+        }
+        workspaceObservers.removeAll()
         handleAppTermination()
     }
 
@@ -121,6 +128,49 @@ final class AppController: ObservableObject {
         stopEventLoop()
         activityOverlay.hide()
         _ = stopLaunchAgentIfNeeded()
+    }
+
+    private func registerWorkspaceObservers() {
+        let workspaceNotificationCenter = NSWorkspace.shared.notificationCenter
+        let activeNotifications: [Notification.Name] = [
+            NSWorkspace.sessionDidBecomeActiveNotification,
+            NSWorkspace.didWakeNotification,
+            NSWorkspace.screensDidWakeNotification,
+        ]
+        let inactiveNotifications: [Notification.Name] = [
+            NSWorkspace.sessionDidResignActiveNotification,
+            NSWorkspace.willSleepNotification,
+            NSWorkspace.screensDidSleepNotification,
+        ]
+
+        workspaceObservers.append(
+            contentsOf: activeNotifications.map { name in
+                workspaceNotificationCenter.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.recoverHotkeyBridgeAfterSystemResume()
+                }
+            }
+        )
+
+        workspaceObservers.append(
+            contentsOf: inactiveNotifications.map { name in
+                workspaceNotificationCenter.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.hotkeyBridge.resetForSystemInterruption()
+                }
+            }
+        )
+    }
+
+    private func recoverHotkeyBridgeAfterSystemResume() {
+        _ = refreshAccessibilityPermission(prompt: false)
+        hotkeyBridge.restart()
     }
 
     func startRecording() {
