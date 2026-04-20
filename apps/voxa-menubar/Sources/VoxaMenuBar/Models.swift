@@ -42,6 +42,20 @@ enum RuntimeStateKind: String {
     }
 }
 
+enum RecordingOrigin: String {
+    case manual = "manual"
+    case hotkeyToggle = "hotkey_toggle"
+    case hotkeyHold = "hotkey_hold"
+
+    static func fromRaw(_ raw: String?) -> RecordingOrigin? {
+        guard let raw else {
+            return nil
+        }
+
+        return RecordingOrigin(rawValue: raw)
+    }
+}
+
 enum ConnectionStatus {
     case connecting
     case connected

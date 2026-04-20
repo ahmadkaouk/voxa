@@ -15,6 +15,7 @@ final class AppController: ObservableObject {
     @Published private(set) var eventSequence: UInt64 = 0
     @Published private(set) var socketPath: String
     @Published private(set) var recordingLevel: Double = 0
+    @Published private(set) var recordingOrigin: RecordingOrigin?
 
     @Published private(set) var configRevision: UInt64 = 0
     @Published private(set) var toggleHotkey: HotkeyOption = .rightOption
@@ -26,6 +27,7 @@ final class AppController: ObservableObject {
     @Published private(set) var isAPIKeySet = false
     @Published private(set) var apiKeyHint: String?
     @Published private(set) var apiKeySaveCount: UInt64 = 0
+    @Published private(set) var apiKeyError: String?
     @Published private(set) var hasAccessibilityPermission = true
     @Published var apiKeyInput = ""
 
@@ -44,6 +46,8 @@ final class AppController: ObservableObject {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var shutdownHandled = false
     private var overlayDismissedForCurrentRecording = false
+    private var activityOverlayPhaseOverride: ActivityOverlayPhase?
+    private var activityOverlayPhaseResetWorkItem: DispatchWorkItem?
     private var hasPromptedForInputPermissions = false
 
     init() {
@@ -174,6 +178,7 @@ final class AppController: ObservableObject {
     }
 
     func startRecording() {
+        clearActivityOverlayPhaseOverride()
         sendCommand(
             method: "start_recording",
             params: ["origin": "manual"],
@@ -183,6 +188,9 @@ final class AppController: ObservableObject {
     }
 
     func stopRecording() {
+        if runtimeState == .recording {
+            transitionOverlayToProcessing()
+        }
         sendCommand(
             method: "stop_recording",
             params: ["reason": "manual"],
@@ -315,11 +323,13 @@ final class AppController: ObservableObject {
     func saveAPIKey() {
         let trimmed = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
+            apiKeyError = "API key cannot be empty"
             statusMessage = "API key cannot be empty"
             return
         }
 
         DispatchQueue.main.async {
+            self.apiKeyError = nil
             self.isBusy = true
             self.statusMessage = "Saving API key..."
         }
@@ -332,6 +342,7 @@ final class AppController: ObservableObject {
                 let status = try self.transport.getAPIKeyStatus()
                 DispatchQueue.main.async {
                     self.publishAPIKeyStatus(status)
+                    self.apiKeyError = nil
                     self.statusMessage = "API key saved"
                     self.apiKeySaveCount += 1
                     self.apiKeyInput = ""
@@ -339,6 +350,7 @@ final class AppController: ObservableObject {
                 }
             } catch {
                 DispatchQueue.main.async {
+                    self.apiKeyError = error.localizedDescription
                     self.statusMessage = error.localizedDescription
                     self.isBusy = false
                 }
@@ -499,10 +511,22 @@ final class AppController: ObservableObject {
                let state = RuntimeStateKind(rawValue: stateRaw)
             {
                 self.runtimeState = state
+                self.recordingOrigin = state == .recording
+                    ? (RecordingOrigin.fromRaw(event.data["recording_origin"] as? String)
+                        ?? self.recordingOrigin
+                        ?? .manual)
+                    : nil
                 self.lastErrorCode = event.data["last_error"] as? String
                 if state != .recording {
                     self.recordingLevel = 0
+                }
+                if state == .idle {
                     self.overlayDismissedForCurrentRecording = false
+                    if self.activityOverlayPhaseOverride != .outputting {
+                        self.clearActivityOverlayPhaseOverride()
+                    }
+                } else if state == .error {
+                    self.clearActivityOverlayPhaseOverride()
                 }
                 self.syncActivityOverlay()
             } else if event.name == "audio_level",
@@ -590,14 +614,12 @@ final class AppController: ObservableObject {
         DispatchQueue.main.async {
             if self.runtimeState == .recording {
                 self.overlayDismissedForCurrentRecording = false
-                self.activityOverlay.hide()
+                self.transitionOverlayToProcessing()
             } else {
+                self.recordingOrigin = .hotkeyToggle
                 self.overlayDismissedForCurrentRecording = false
-                self.activityOverlay.show(.recording, level: self.recordingLevel, onDismiss: { [weak self] in
-                    self?.dismissActivityOverlay()
-                }, onStop: { [weak self] in
-                    self?.stopRecordingFromOverlay()
-                })
+                self.clearActivityOverlayPhaseOverride()
+                self.syncActivityOverlay()
             }
         }
 
@@ -632,12 +654,10 @@ final class AppController: ObservableObject {
 
     private func handleHoldHotkeyActivated() {
         DispatchQueue.main.async {
+            self.recordingOrigin = .hotkeyHold
             self.overlayDismissedForCurrentRecording = false
-            self.activityOverlay.show(.recording, level: self.recordingLevel, onDismiss: { [weak self] in
-                self?.dismissActivityOverlay()
-            }, onStop: { [weak self] in
-                self?.stopRecordingFromOverlay()
-            })
+            self.clearActivityOverlayPhaseOverride()
+            self.syncActivityOverlay()
         }
 
         sendHotkeyCommand(
@@ -648,7 +668,8 @@ final class AppController: ObservableObject {
 
     private func handleHoldHotkeyDeactivated() {
         DispatchQueue.main.async {
-            self.activityOverlay.hide()
+            self.overlayDismissedForCurrentRecording = false
+            self.transitionOverlayToProcessing()
         }
 
         sendHotkeyCommand(
@@ -677,6 +698,8 @@ final class AppController: ObservableObject {
     }
 
     private func handleTranscriptionReady(_ text: String) {
+        setActivityOverlayPhaseOverride(.outputting, autoClearAfter: 0.45)
+        syncActivityOverlay()
         statusMessage = processTranscriptOutput(
             text: text,
             mode: outputMode,
@@ -777,12 +800,22 @@ final class AppController: ObservableObject {
     private func publishState(_ snapshot: DaemonStateSnapshot) {
         DispatchQueue.main.async {
             self.runtimeState = snapshot.state
+            self.recordingOrigin = snapshot.state == .recording
+                ? (RecordingOrigin.fromRaw(snapshot.recordingOrigin) ?? .manual)
+                : nil
             self.lastErrorCode = snapshot.lastError
             self.eventSequence = max(self.eventSequence, snapshot.eventSeq)
             self.updateLastSeenSeq(snapshot.eventSeq)
             if snapshot.state != .recording {
                 self.recordingLevel = 0
+            }
+            if snapshot.state == .idle {
                 self.overlayDismissedForCurrentRecording = false
+                if self.activityOverlayPhaseOverride != .outputting {
+                    self.clearActivityOverlayPhaseOverride()
+                }
+            } else if snapshot.state == .error {
+                self.clearActivityOverlayPhaseOverride()
             }
             self.syncActivityOverlay()
         }
@@ -813,6 +846,8 @@ final class AppController: ObservableObject {
             self.connectionStatus = status
             if !status.isConnected {
                 self.recordingLevel = 0
+                self.recordingOrigin = nil
+                self.clearActivityOverlayPhaseOverride()
             }
             self.statusMessage = message
             self.syncActivityOverlay()
@@ -822,12 +857,8 @@ final class AppController: ObservableObject {
     private func syncActivityOverlay() {
         switch connectionStatus {
         case .connected:
-            if runtimeState == .recording && !overlayDismissedForCurrentRecording {
-                activityOverlay.show(.recording, level: recordingLevel, onDismiss: { [weak self] in
-                    self?.dismissActivityOverlay()
-                }, onStop: { [weak self] in
-                    self?.stopRecordingFromOverlay()
-                })
+            if let phase = currentActivityOverlayPhase(), !overlayDismissedForCurrentRecording {
+                showActivityOverlay(phase)
             } else {
                 activityOverlay.hide()
             }
@@ -843,9 +874,92 @@ final class AppController: ObservableObject {
             if let state {
                 self.publishState(state)
             } else {
+                self.recordingOrigin = nil
+                self.clearActivityOverlayPhaseOverride()
                 self.activityOverlay.hide()
             }
         }
+    }
+
+    private func transitionOverlayToProcessing() {
+        setActivityOverlayPhaseOverride(.transcribing)
+        syncActivityOverlay()
+    }
+
+    private func showActivityOverlay(_ phase: ActivityOverlayPhase) {
+        activityOverlay.show(
+            phase,
+            content: currentActivityOverlayContent(for: phase),
+            level: recordingLevel,
+            onDismiss: { [weak self] in
+                self?.dismissActivityOverlay()
+            },
+            onStop: { [weak self] in
+                self?.stopRecordingFromOverlay()
+            }
+        )
+    }
+
+    private func currentActivityOverlayPhase() -> ActivityOverlayPhase? {
+        if let activityOverlayPhaseOverride {
+            return activityOverlayPhaseOverride
+        }
+
+        switch runtimeState {
+        case .recording:
+            return .listening
+        case .transcribing:
+            return .transcribing
+        case .outputting:
+            return .outputting
+        case .idle, .error:
+            return nil
+        }
+    }
+
+    private func currentActivityOverlayContent(for phase: ActivityOverlayPhase) -> ActivityOverlayContent {
+        switch phase {
+        case .listening:
+            return ActivityOverlayContent(title: "Listening", subtitle: nil)
+        case .transcribing:
+            return ActivityOverlayContent(title: "Transcribing", subtitle: nil)
+        case .outputting:
+            let title: String
+            switch outputMode {
+            case .clipboardAutopaste:
+                title = "Sending Text"
+            case .clipboardOnly:
+                title = "Copying Text"
+            case .none:
+                title = "Transcript Ready"
+            }
+            return ActivityOverlayContent(title: title, subtitle: nil)
+        }
+    }
+
+    private func setActivityOverlayPhaseOverride(
+        _ phase: ActivityOverlayPhase?,
+        autoClearAfter delay: TimeInterval? = nil
+    ) {
+        activityOverlayPhaseResetWorkItem?.cancel()
+        activityOverlayPhaseResetWorkItem = nil
+        activityOverlayPhaseOverride = phase
+
+        guard let delay, phase != nil else {
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.activityOverlayPhaseOverride = nil
+            self.syncActivityOverlay()
+        }
+        activityOverlayPhaseResetWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func clearActivityOverlayPhaseOverride() {
+        setActivityOverlayPhaseOverride(nil)
     }
 
     private func isStopping() -> Bool {
@@ -1149,12 +1263,13 @@ private func runProcess(executable: String, arguments: [String]) throws -> Strin
 }
 
 private final class ActivityOverlayController {
-    private let panelSize = NSSize(width: 96, height: 28)
+    private let panelSize = NSSize(width: 236, height: 68)
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<ActivityOverlayView>?
+    private var hostingView: TransparentHostingView<ActivityOverlayView>?
 
     func show(
         _ phase: ActivityOverlayPhase,
+        content: ActivityOverlayContent,
         level: Double,
         onDismiss: @escaping () -> Void,
         onStop: @escaping () -> Void
@@ -1163,6 +1278,7 @@ private final class ActivityOverlayController {
         if let hostingView {
             hostingView.rootView = ActivityOverlayView(
                 phase: phase,
+                content: content,
                 level: level,
                 onDismiss: onDismiss,
                 onStop: onStop
@@ -1199,15 +1315,21 @@ private final class ActivityOverlayController {
         panel.isMovable = false
         panel.isReleasedWhenClosed = false
 
-        let hostingView = NSHostingView(
+        let hostingView = TransparentHostingView(
             rootView: ActivityOverlayView(
-                phase: .recording,
+                phase: .listening,
+                content: ActivityOverlayContent(
+                    title: "Listening",
+                    subtitle: nil
+                ),
                 level: 0,
                 onDismiss: {},
                 onStop: {}
             )
         )
         hostingView.frame = NSRect(origin: .zero, size: panelSize)
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         panel.contentView = hostingView
 
         self.hostingView = hostingView
@@ -1222,7 +1344,7 @@ private final class ActivityOverlayController {
         let visibleFrame = screen.visibleFrame
         let origin = CGPoint(
             x: round(visibleFrame.midX - (panelSize.width / 2)),
-            y: visibleFrame.minY + 56
+            y: visibleFrame.minY + 20
         )
         panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
     }
@@ -1230,5 +1352,22 @@ private final class ActivityOverlayController {
     private func currentScreen() -> NSScreen? {
         let mouseLocation = NSEvent.mouseLocation
         return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
+    }
+}
+
+private final class TransparentHostingView<Content: View>: NSHostingView<Content> {
+    override var isOpaque: Bool {
+        false
+    }
+
+    required init(rootView: Content) {
+        super.init(rootView: rootView)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 }

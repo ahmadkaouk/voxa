@@ -36,6 +36,14 @@ Depending on the features you use, macOS may ask for:
 
 The packaged `Voxa.app` embeds `voxa-daemon` at `Contents/Resources/bin/voxa-daemon`, and the menu bar app prefers that bundled daemon when installing the LaunchAgent.
 
+Packaging now code-signs the app bundle so macOS permissions can persist across in-place updates.
+
+- If `VOXA_CODESIGN_IDENTITY` is set, the package script signs with that identity.
+- Otherwise it prefers an installed `Apple Development` or `Developer ID Application` identity.
+- If neither is available, it creates and reuses a stable local identity named `Voxa Local Development` in `~/Library/Application Support/Voxa/codesign/`.
+
+After switching from older ad-hoc builds to a stable signed build, macOS may ask for Accessibility and Input Monitoring one more time. Updates signed with the same identity should then keep those permissions when you replace `/Applications/Voxa.app` in place.
+
 ## Notes
 
 - The app resyncs state and config after reconnecting to the daemon.
