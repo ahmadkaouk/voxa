@@ -10,6 +10,9 @@ use voxa_core::ipc::{
     StopReason,
 };
 
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 3;
+const STOP_RECORDING_REQUEST_TIMEOUT_SECS: u64 = 75;
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("ERROR: {err}");
@@ -157,6 +160,13 @@ fn socket_path() -> io::Result<PathBuf> {
     Ok(home.join("Library/Application Support/voxa/run/daemon.sock"))
 }
 
+fn request_timeout_for_method(method: &str) -> Duration {
+    match method {
+        "stop_recording" => Duration::from_secs(STOP_RECORDING_REQUEST_TIMEOUT_SECS),
+        _ => Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
+    }
+}
+
 fn parse_start_origin(value: Option<&str>) -> Result<StartOrigin, String> {
     match value.unwrap_or("manual") {
         "manual" => Ok(StartOrigin::Manual),
@@ -217,7 +227,7 @@ struct IpcClient {
 impl IpcClient {
     fn connect(socket_path: &PathBuf) -> io::Result<Self> {
         let mut stream = UnixStream::connect(socket_path)?;
-        stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+        stream.set_read_timeout(Some(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)))?;
 
         let mut reader = BufReader::new(stream.try_clone()?);
 
@@ -246,6 +256,15 @@ impl IpcClient {
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let timeout = Some(request_timeout_for_method(method));
+        self.stream
+            .set_read_timeout(timeout)
+            .map_err(|err| err.to_string())?;
+        self.reader
+            .get_mut()
+            .set_read_timeout(timeout)
+            .map_err(|err| err.to_string())?;
+
         let request = ClientEnvelope::Request(RequestEnvelope {
             id: self.next_id.to_string(),
             method: method.to_owned(),
@@ -299,9 +318,13 @@ fn read_server_envelope(reader: &mut BufReader<UnixStream>) -> io::Result<Server
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use serde_json::json;
 
-    use super::{parse_config_set_params, parse_start_origin, parse_stop_reason};
+    use super::{
+        parse_config_set_params, parse_start_origin, parse_stop_reason, request_timeout_for_method,
+    };
     use voxa_core::ipc::{StartOrigin, StopReason};
 
     #[test]
@@ -363,6 +386,26 @@ mod tests {
             Ok(json!({
                 "max_recording_seconds": 120
             }))
+        );
+    }
+
+    #[test]
+    fn stop_recording_uses_extended_timeout() {
+        assert_eq!(
+            request_timeout_for_method("stop_recording"),
+            Duration::from_secs(75)
+        );
+    }
+
+    #[test]
+    fn fast_requests_keep_default_timeout() {
+        assert_eq!(
+            request_timeout_for_method("get_state"),
+            Duration::from_secs(3)
+        );
+        assert_eq!(
+            request_timeout_for_method("start_recording"),
+            Duration::from_secs(3)
         );
     }
 }

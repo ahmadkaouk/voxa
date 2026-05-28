@@ -389,7 +389,10 @@ Domain/runtime errors:
   4. `subscribe` (with last seen `seq` when supported)
 
 ## Timeouts and Retries
-- Request timeout recommendation: 5 seconds for control methods.
+- Request timeout recommendation: 5 seconds for fast control methods such as `health`,
+  `get_state`, `get_config`, and `start_recording`.
+- `stop_recording` should use a longer client timeout because the response includes the
+  transcription result and may remain in flight until transcription completes.
 - Client reconnect backoff: 200ms, 500ms, 1s, 2s, max 5s.
 - `start_recording` and `stop_recording` are idempotent from client perspective.
 

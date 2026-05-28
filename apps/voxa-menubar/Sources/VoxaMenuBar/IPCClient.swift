@@ -66,7 +66,8 @@ enum ServerEnvelope {
 
 final class IPCTransport {
     static let apiVersion = "1.0"
-    private static let requestResponseTimeoutSeconds: TimeInterval = 5.0
+    private static let defaultRequestResponseTimeoutSeconds: TimeInterval = 5.0
+    private static let stopRecordingRequestTimeoutSeconds: TimeInterval = 75.0
     private static let subscribeResponseTimeoutSeconds: TimeInterval = 2.0
     private static let reachabilityTimeoutSeconds: TimeInterval = 0.15
 
@@ -89,7 +90,7 @@ final class IPCTransport {
         let connection = try IPCConnection.connect(socketPath: socketPath)
         defer { connection.close() }
 
-        try connection.setReadTimeout(seconds: Self.requestResponseTimeoutSeconds)
+        try connection.setReadTimeout(seconds: Self.requestTimeoutSeconds(for: method))
         try connection.performHandshake(client: "voxa-menubar", clientVersion: "0.1.0")
         let requestId = UUID().uuidString
         try connection.sendRequest(id: requestId, method: method, params: params)
@@ -263,6 +264,15 @@ final class IPCTransport {
         }
 
         return number.uint64Value
+    }
+
+    static func requestTimeoutSeconds(for method: String) -> TimeInterval {
+        switch method {
+        case "stop_recording":
+            return stopRecordingRequestTimeoutSeconds
+        default:
+            return defaultRequestResponseTimeoutSeconds
+        }
     }
 }
 
