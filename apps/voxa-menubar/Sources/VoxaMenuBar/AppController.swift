@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import AVFoundation
 import CoreGraphics
 import Foundation
 import SwiftUI
@@ -1285,37 +1286,138 @@ private func runProcess(executable: String, arguments: [String]) throws -> Strin
 }
 
 private final class SoundCueController {
-    private let listeningStartedSoundName = NSSound.Name("Tink")
-    private let recordingEndedSoundName = NSSound.Name("Pop")
-    private var sounds: [NSSound.Name: NSSound] = [:]
+    private enum Cue {
+        case listeningStarted
+        case recordingEnded
+
+        var duration: TimeInterval {
+            switch self {
+            case .listeningStarted:
+                return 0.19
+            case .recordingEnded:
+                return 0.17
+            }
+        }
+
+        var gain: Double {
+            switch self {
+            case .listeningStarted:
+                return 0.18
+            case .recordingEnded:
+                return 0.16
+            }
+        }
+    }
+
+    private let sampleRate: Double = 44_100
+    private let engine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
+    private let format: AVAudioFormat
+
+    init() {
+        format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+        try? engine.start()
+    }
 
     func playListeningStarted() {
-        playSound(named: listeningStartedSoundName, volume: 0.35)
+        play(.listeningStarted)
     }
 
     func playRecordingEnded() {
-        playSound(named: recordingEndedSoundName, volume: 0.35)
+        play(.recordingEnded)
     }
 
-    private func playSound(named name: NSSound.Name, volume: Float) {
-        let sound: NSSound
-        if let cached = sounds[name] {
-            sound = cached
-        } else if let loaded = NSSound(named: name) {
-            loaded.volume = volume
-            sounds[name] = loaded
-            sound = loaded
-        } else {
+    private func play(_ cue: Cue) {
+        if !engine.isRunning {
+            do {
+                try engine.start()
+            } catch {
+                NSSound.beep()
+                return
+            }
+        }
+
+        guard let buffer = makeBuffer(for: cue) else {
             NSSound.beep()
             return
         }
 
-        if sound.isPlaying {
-            sound.stop()
+        player.stop()
+        player.scheduleBuffer(buffer, at: nil, options: .interrupts)
+        player.play()
+    }
+
+    private func makeBuffer(for cue: Cue) -> AVAudioPCMBuffer? {
+        let frameCount = AVAudioFrameCount(sampleRate * cue.duration)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
+              let channelData = buffer.floatChannelData
+        else {
+            return nil
         }
-        sound.currentTime = 0
-        sound.volume = volume
-        sound.play()
+
+        buffer.frameLength = frameCount
+        for frame in 0..<Int(frameCount) {
+            let time = Double(frame) / sampleRate
+            let value = Float(clamp(sample(for: cue, at: time) * cue.gain, min: -1, max: 1))
+            for channel in 0..<Int(format.channelCount) {
+                channelData[channel][frame] = value
+            }
+        }
+
+        return buffer
+    }
+
+    private func sample(for cue: Cue, at time: TimeInterval) -> Double {
+        switch cue {
+        case .listeningStarted:
+            return bellTone(time: time, start: 0.00, duration: 0.12, frequency: 659.25, amplitude: 0.72)
+                + bellTone(time: time, start: 0.055, duration: 0.13, frequency: 987.77, amplitude: 0.55)
+        case .recordingEnded:
+            return bellTone(time: time, start: 0.00, duration: 0.10, frequency: 987.77, amplitude: 0.50)
+                + bellTone(time: time, start: 0.045, duration: 0.12, frequency: 587.33, amplitude: 0.58)
+        }
+    }
+
+    private func bellTone(
+        time: TimeInterval,
+        start: TimeInterval,
+        duration: TimeInterval,
+        frequency: Double,
+        amplitude: Double
+    ) -> Double {
+        let localTime = time - start
+        guard localTime >= 0, localTime <= duration else {
+            return 0
+        }
+
+        let envelope = noteEnvelope(time: localTime, duration: duration)
+        let fundamental = sin(2 * .pi * frequency * localTime)
+        let shimmer = sin(2 * .pi * frequency * 2.01 * localTime) * 0.22
+        return (fundamental + shimmer) * envelope * amplitude
+    }
+
+    private func noteEnvelope(time: TimeInterval, duration: TimeInterval) -> Double {
+        let attack = min(0.012, duration * 0.25)
+        let release = min(0.075, duration * 0.55)
+        let releaseStart = max(attack, duration - release)
+
+        let attackLevel = time < attack ? smoothstep(time / attack) : 1
+        let releaseLevel = time > releaseStart
+            ? 1 - smoothstep((time - releaseStart) / release)
+            : 1
+
+        return attackLevel * releaseLevel
+    }
+
+    private func smoothstep(_ value: Double) -> Double {
+        let x = clamp(value, min: 0, max: 1)
+        return x * x * (3 - 2 * x)
+    }
+
+    private func clamp(_ value: Double, min minimum: Double, max maximum: Double) -> Double {
+        Swift.max(minimum, Swift.min(maximum, value))
     }
 }
 
