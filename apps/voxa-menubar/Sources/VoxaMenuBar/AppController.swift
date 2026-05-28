@@ -34,6 +34,7 @@ final class AppController: ObservableObject {
     private let transport: IPCTransport
     private let hotkeyBridge = GlobalHotkeyBridge()
     private let activityOverlay = ActivityOverlayController()
+    private let soundCues = SoundCueController()
     private let eventQueue = DispatchQueue(label: "voxa.menubar.events", qos: .userInitiated)
     private let requestQueue = DispatchQueue(label: "voxa.menubar.requests", qos: .userInitiated)
 
@@ -46,6 +47,7 @@ final class AppController: ObservableObject {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var shutdownHandled = false
     private var overlayDismissedForCurrentRecording = false
+    private var hasObservedRuntimeState = false
     private var activityOverlayPhaseOverride: ActivityOverlayPhase?
     private var activityOverlayPhaseResetWorkItem: DispatchWorkItem?
     private var hasPromptedForInputPermissions = false
@@ -510,7 +512,7 @@ final class AppController: ObservableObject {
                let stateRaw = event.data["state"] as? String,
                let state = RuntimeStateKind(rawValue: stateRaw)
             {
-                self.runtimeState = state
+                self.applyRuntimeState(state)
                 self.recordingOrigin = state == .recording
                     ? (RecordingOrigin.fromRaw(event.data["recording_origin"] as? String)
                         ?? self.recordingOrigin
@@ -799,7 +801,7 @@ final class AppController: ObservableObject {
 
     private func publishState(_ snapshot: DaemonStateSnapshot) {
         DispatchQueue.main.async {
-            self.runtimeState = snapshot.state
+            self.applyRuntimeState(snapshot.state)
             self.recordingOrigin = snapshot.state == .recording
                 ? (RecordingOrigin.fromRaw(snapshot.recordingOrigin) ?? .manual)
                 : nil
@@ -818,6 +820,26 @@ final class AppController: ObservableObject {
                 self.clearActivityOverlayPhaseOverride()
             }
             self.syncActivityOverlay()
+        }
+    }
+
+    private func applyRuntimeState(_ state: RuntimeStateKind) {
+        let previousState = runtimeState
+        runtimeState = state
+
+        guard hasObservedRuntimeState else {
+            hasObservedRuntimeState = true
+            return
+        }
+
+        guard previousState != state else {
+            return
+        }
+
+        if state == .recording {
+            soundCues.playListeningStarted()
+        } else if previousState == .recording {
+            soundCues.playRecordingEnded()
         }
     }
 
@@ -1260,6 +1282,41 @@ private func runProcess(executable: String, arguments: [String]) throws -> Strin
     }
 
     return stdoutText
+}
+
+private final class SoundCueController {
+    private let listeningStartedSoundName = NSSound.Name("Tink")
+    private let recordingEndedSoundName = NSSound.Name("Pop")
+    private var sounds: [NSSound.Name: NSSound] = [:]
+
+    func playListeningStarted() {
+        playSound(named: listeningStartedSoundName, volume: 0.35)
+    }
+
+    func playRecordingEnded() {
+        playSound(named: recordingEndedSoundName, volume: 0.35)
+    }
+
+    private func playSound(named name: NSSound.Name, volume: Float) {
+        let sound: NSSound
+        if let cached = sounds[name] {
+            sound = cached
+        } else if let loaded = NSSound(named: name) {
+            loaded.volume = volume
+            sounds[name] = loaded
+            sound = loaded
+        } else {
+            NSSound.beep()
+            return
+        }
+
+        if sound.isPlaying {
+            sound.stop()
+        }
+        sound.currentTime = 0
+        sound.volume = volume
+        sound.play()
+    }
 }
 
 private final class ActivityOverlayController {
