@@ -11,7 +11,7 @@ APP_DIR="$DIST_DIR/$APP_NAME.app"
 APP_EXECUTABLE="$APP_DIR/Contents/MacOS/$APP_NAME"
 APP_RESOURCES_DIR="$APP_DIR/Contents/Resources"
 DAEMON_BUNDLE_PATH="$APP_RESOURCES_DIR/bin/voxa-daemon"
-ICON_SOURCE="$ROOT_DIR/apps/voxa-menubar/Resources/VoxaIcon.svg"
+ICON_SOURCE="$ROOT_DIR/apps/voxa-menubar/Resources/VoxaIcon.png"
 ICONSET_DIR="$BUILD_DIR/Voxa.iconset"
 ICON_PATH="$APP_RESOURCES_DIR/Voxa.icns"
 INFO_PLIST_PATH="$APP_DIR/Contents/Info.plist"
@@ -245,7 +245,7 @@ fi
 
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_RESOURCES_DIR/bin" "$ICONSET_DIR"
 
-sips -s format png "$ICON_SOURCE" --out "$BUILD_DIR/icon_1024x1024.png" >/dev/null
+sips -z 1024 1024 "$ICON_SOURCE" --out "$BUILD_DIR/icon_1024x1024.png" >/dev/null
 for size in 16 32 64 128 256 512; do
   sips -z "$size" "$size" "$BUILD_DIR/icon_1024x1024.png" --out "$ICONSET_DIR/icon_${size}x${size}.png" >/dev/null
 done
