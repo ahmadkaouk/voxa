@@ -25,14 +25,17 @@ struct KeychainApiKeyStore;
 impl ApiKeyStore for KeychainApiKeyStore {
     fn get_api_key(&self) -> io::Result<Option<String>> {
         let keychain_path = default_user_keychain_path();
-        let output = security_command([
-            "find-generic-password",
-            "-a",
-            KEYCHAIN_ACCOUNT,
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-w",
-        ], keychain_path.as_deref())
+        let output = security_command(
+            [
+                "find-generic-password",
+                "-a",
+                KEYCHAIN_ACCOUNT,
+                "-s",
+                KEYCHAIN_SERVICE,
+                "-w",
+            ],
+            keychain_path.as_deref(),
+        )
         .output();
 
         let output = match output {
@@ -65,16 +68,19 @@ impl ApiKeyStore for KeychainApiKeyStore {
 
     fn set_api_key(&self, api_key: &str) -> io::Result<()> {
         let keychain_path = default_user_keychain_path();
-        let output = security_command([
-            "add-generic-password",
-            "-U",
-            "-a",
-            KEYCHAIN_ACCOUNT,
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-w",
-            api_key,
-        ], keychain_path.as_deref())
+        let output = security_command(
+            [
+                "add-generic-password",
+                "-U",
+                "-a",
+                KEYCHAIN_ACCOUNT,
+                "-s",
+                KEYCHAIN_SERVICE,
+                "-w",
+                api_key,
+            ],
+            keychain_path.as_deref(),
+        )
         .output();
 
         let output = match output {
@@ -115,10 +121,7 @@ fn env_api_key() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn security_command<const N: usize>(
-    args: [&str; N],
-    keychain_path: Option<&str>,
-) -> Command {
+fn security_command<const N: usize>(args: [&str; N], keychain_path: Option<&str>) -> Command {
     let mut command = Command::new(SECURITY_BIN);
     command.args(args);
     if let Some(keychain_path) = keychain_path {
