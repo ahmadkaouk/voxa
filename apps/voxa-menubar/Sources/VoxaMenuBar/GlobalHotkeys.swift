@@ -11,10 +11,10 @@ final class GlobalHotkeyBridge {
     private let overlapDelay: DispatchTimeInterval = .milliseconds(160)
 
     private var isEnabled = true
-    private var toggleHotkey = HotkeyOption.rightOption
-    private var holdHotkey = HotkeyOption.functionKey
-    private var toggleMatcher = HotkeyMatcher(hotkey: .rightOption)
-    private var holdMatcher = HotkeyMatcher(hotkey: .functionKey)
+    private var toggleHotkey = HotkeyOption.defaultToggle
+    private var holdHotkey = HotkeyOption.defaultHold
+    private var toggleMatcher = HotkeyMatcher(hotkey: .defaultToggle)
+    private var holdMatcher = HotkeyMatcher(hotkey: .defaultHold)
     private var activeModifiers: HotkeyModifiers = []
     private var pressedKeys: Set<UInt16> = []
     private var pendingActivation: PendingActivation?

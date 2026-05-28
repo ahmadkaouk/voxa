@@ -3,6 +3,19 @@ import XCTest
 @testable import VoxaMenuBar
 
 final class HotkeyOptionTests: XCTestCase {
+    func testDefaultHotkeysRoundTrip() {
+        XCTAssertEqual(HotkeyOption.defaultToggle, .optionF)
+        XCTAssertEqual(HotkeyOption.defaultHold, .optionG)
+        XCTAssertEqual(HotkeyOption.fromRawOrDefault("option_f"), .optionF)
+        XCTAssertEqual(HotkeyOption.fromRawOrDefault("option_g"), .optionG)
+        XCTAssertEqual(HotkeyOption.fromRawOrDefault("invalid"), .optionF)
+        XCTAssertEqual(HotkeyOption.fromRawOrDefault("invalid", fallback: .optionG), .optionG)
+        XCTAssertEqual(HotkeyOption.optionF.persistedValue, "option_f")
+        XCTAssertEqual(HotkeyOption.optionG.persistedValue, "option_g")
+        XCTAssertEqual(HotkeyOption.optionF.label, "Opt+F")
+        XCTAssertEqual(HotkeyOption.optionG.label, "Opt+G")
+    }
+
     func testLegacyHotkeysRoundTrip() {
         XCTAssertEqual(HotkeyOption.fromRawOrDefault("right_option"), .rightOption)
         XCTAssertEqual(HotkeyOption.fromRawOrDefault("fn"), .functionKey)

@@ -19,8 +19,8 @@ final class AppController: ObservableObject {
     @Published private(set) var recordingOrigin: RecordingOrigin?
 
     @Published private(set) var configRevision: UInt64 = 0
-    @Published private(set) var toggleHotkey: HotkeyOption = .rightOption
-    @Published private(set) var holdHotkey: HotkeyOption = .functionKey
+    @Published private(set) var toggleHotkey: HotkeyOption = .defaultToggle
+    @Published private(set) var holdHotkey: HotkeyOption = .defaultHold
     @Published private(set) var model: ModelOption = .gpt4oMiniTranscribe
     @Published private(set) var outputMode: OutputModeOption = .clipboardAutopaste
     @Published private(set) var maxRecordingSeconds: UInt64 = 300
@@ -846,8 +846,14 @@ final class AppController: ObservableObject {
 
     private func publishConfig(_ snapshot: DaemonConfigSnapshot) {
         DispatchQueue.main.async {
-            self.toggleHotkey = HotkeyOption.fromRawOrDefault(snapshot.toggleHotkey)
-            self.holdHotkey = HotkeyOption.fromRawOrDefault(snapshot.holdHotkey)
+            self.toggleHotkey = HotkeyOption.fromRawOrDefault(
+                snapshot.toggleHotkey,
+                fallback: .defaultToggle
+            )
+            self.holdHotkey = HotkeyOption.fromRawOrDefault(
+                snapshot.holdHotkey,
+                fallback: .defaultHold
+            )
             self.model = ModelOption.fromRawOrDefault(snapshot.model)
             self.outputMode = OutputModeOption.fromRawOrDefault(snapshot.outputMode)
             self.maxRecordingSeconds = snapshot.maxRecordingSeconds

@@ -317,8 +317,8 @@ fn set_config_failure_does_not_mutate_existing_config() {
     let (mut stream, mut reader) = connect_and_handshake(&path);
 
     let initial = send_request(&mut stream, &mut reader, "1", "get_config", json!({}));
-    assert_eq!(initial["toggle_hotkey"], "right_option");
-    assert_eq!(initial["hold_hotkey"], "fn");
+    assert_eq!(initial["toggle_hotkey"], "option_f");
+    assert_eq!(initial["hold_hotkey"], "option_g");
     let initial_revision = initial["revision"].as_u64().unwrap_or(0);
 
     let error_code = send_request_expect_error(
@@ -327,14 +327,14 @@ fn set_config_failure_does_not_mutate_existing_config() {
         "2",
         "set_config",
         json!({
-            "hold_hotkey": "right_option"
+            "hold_hotkey": "option_f"
         }),
     );
     assert_eq!(error_code, "CONFIG_HOTKEY_CONFLICT");
 
     let after = send_request(&mut stream, &mut reader, "3", "get_config", json!({}));
-    assert_eq!(after["toggle_hotkey"], "right_option");
-    assert_eq!(after["hold_hotkey"], "fn");
+    assert_eq!(after["toggle_hotkey"], "option_f");
+    assert_eq!(after["hold_hotkey"], "option_g");
     assert_eq!(after["revision"].as_u64().unwrap_or(0), initial_revision);
 
     stop_server(&path, running, handle);

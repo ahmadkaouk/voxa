@@ -20,6 +20,9 @@ use crate::secrets::{ApiKeyStore, build_api_key_store};
 #[cfg(test)]
 use crate::secrets::{in_memory_api_key_store, in_memory_api_key_store_with_shared};
 
+const DEFAULT_TOGGLE_HOTKEY: &str = "option_f";
+const DEFAULT_HOLD_HOTKEY: &str = "option_g";
+
 #[derive(Debug, Clone, Serialize)]
 struct DaemonConfig {
     toggle_hotkey: String,
@@ -34,8 +37,8 @@ struct DaemonConfig {
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
-            toggle_hotkey: "right_option".to_owned(),
-            hold_hotkey: "fn".to_owned(),
+            toggle_hotkey: DEFAULT_TOGGLE_HOTKEY.to_owned(),
+            hold_hotkey: DEFAULT_HOLD_HOTKEY.to_owned(),
             model: "gpt-4o-mini-transcribe".to_owned(),
             output_mode: "clipboard_autopaste".to_owned(),
             max_recording_seconds: 300,

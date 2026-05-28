@@ -185,8 +185,8 @@ Request:
 Response result:
 ```json
 {
-  "toggle_hotkey": "right_option",
-  "hold_hotkey": "fn",
+  "toggle_hotkey": "option_f",
+  "hold_hotkey": "option_g",
   "model": "gpt-4o-mini-transcribe",
   "output_mode": "clipboard_autopaste",
   "max_recording_seconds": 300,
@@ -203,8 +203,8 @@ Request:
   "id":"6",
   "method":"set_config",
   "params":{
-    "toggle_hotkey":"right_option",
-    "hold_hotkey":"fn",
+    "toggle_hotkey":"option_f",
+    "hold_hotkey":"option_g",
     "model":"gpt-4o-mini-transcribe",
     "output_mode":"clipboard_autopaste",
     "max_recording_seconds":300

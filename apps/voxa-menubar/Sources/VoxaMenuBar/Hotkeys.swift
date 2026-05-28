@@ -149,6 +149,18 @@ struct HotkeyOption: Identifiable, Equatable {
 
     static let rightOption = HotkeyOption(modifiers: [.option])
     static let functionKey = HotkeyOption(modifiers: [.function])
+    static let optionF = HotkeyOption(
+        keyCodes: [KeyCode.f],
+        modifiers: [.option],
+        keyDisplays: ["F"]
+    )
+    static let optionG = HotkeyOption(
+        keyCodes: [KeyCode.g],
+        modifiers: [.option],
+        keyDisplays: ["G"]
+    )
+    static let defaultToggle = optionF
+    static let defaultHold = optionG
     static let functionSpace = HotkeyOption(
         keyCodes: [KeyCode.space],
         modifiers: [.function],
@@ -191,6 +203,12 @@ struct HotkeyOption: Identifiable, Equatable {
     }
 
     var persistedValue: String {
+        if self == .optionF {
+            return "option_f"
+        }
+        if self == .optionG {
+            return "option_g"
+        }
         if self == .rightOption {
             return "right_option"
         }
@@ -218,7 +236,7 @@ struct HotkeyOption: Identifiable, Equatable {
         guard let data = try? encoder.encode(payload),
               let encoded = String(data: data, encoding: .utf8)
         else {
-            return "right_option"
+            return "option_f"
         }
 
         return encoded
@@ -292,12 +310,19 @@ struct HotkeyOption: Identifiable, Equatable {
         return tokens.count < otherTokens.count && tokens.isSubset(of: otherTokens)
     }
 
-    static func fromRawOrDefault(_ raw: String) -> HotkeyOption {
-        fromRaw(raw) ?? .rightOption
+    static func fromRawOrDefault(
+        _ raw: String,
+        fallback: HotkeyOption = .defaultToggle
+    ) -> HotkeyOption {
+        fromRaw(raw) ?? fallback
     }
 
     static func fromRaw(_ raw: String) -> HotkeyOption? {
         switch raw {
+        case "option_f":
+            return .optionF
+        case "option_g":
+            return .optionG
         case "right_option":
             return .rightOption
         case "fn":
