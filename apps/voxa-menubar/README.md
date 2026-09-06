@@ -60,7 +60,12 @@ After switching from older ad-hoc builds to a stable signed build, macOS may ask
 - The app does not shell out to `voxactl` for runtime state.
 - The app does not parse daemon logs.
 
-Clipboard integration checks can run with just Command Line Tools (no XCTest runner):
+Run all Swift checks, including the application build, with `./scripts/test-swift.sh`
+from the repository root. It uses XCTest when available and otherwise runs the same
+existing assertions through standalone unit, clipboard, and sound harnesses. A new
+test file without standalone coverage fails the fallback path instead of being skipped.
+
+Clipboard integration checks can also run with just Command Line Tools (no XCTest runner):
 
 ```bash
 ./scripts/test-transcript-output.sh

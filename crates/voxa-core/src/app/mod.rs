@@ -1,38 +1,29 @@
 use crate::domain::RuntimeErrorCode;
-use crate::infra::{
-    InfraError, NullOutputSink, NullRecorder, NullTranscriber, OutputResult, OutputSink, Recorder,
-    Transcriber,
-};
+use crate::infra::{InfraError, NullRecorder, NullTranscriber, Recorder, Transcriber};
 
 pub struct SessionRuntime {
     recorder: Box<dyn Recorder>,
     transcriber: Box<dyn Transcriber>,
-    output: Box<dyn OutputSink>,
 }
 
 impl SessionRuntime {
-    pub fn new(
-        recorder: Box<dyn Recorder>,
-        transcriber: Box<dyn Transcriber>,
-        output: Box<dyn OutputSink>,
-    ) -> Self {
+    pub fn new(recorder: Box<dyn Recorder>, transcriber: Box<dyn Transcriber>) -> Self {
         Self {
             recorder,
             transcriber,
-            output,
         }
     }
 
     pub fn start_recording(&mut self) -> Result<(), RuntimeErrorCode> {
-        self.recorder.start().map_err(map_infra_error)
+        self.recorder.start().map_err(RuntimeErrorCode::from)
     }
 
     pub fn stop_recording(&mut self) -> Result<Vec<u8>, RuntimeErrorCode> {
-        self.recorder.stop().map_err(map_infra_error)
+        self.recorder.stop().map_err(RuntimeErrorCode::from)
     }
 
     pub fn cancel_recording(&mut self) -> Result<(), RuntimeErrorCode> {
-        self.recorder.cancel().map_err(map_infra_error)
+        self.recorder.cancel().map_err(RuntimeErrorCode::from)
     }
 
     pub fn current_recording_level(&self) -> Option<f32> {
@@ -40,34 +31,33 @@ impl SessionRuntime {
     }
 
     pub fn transcribe(&mut self, audio: Vec<u8>) -> Result<String, RuntimeErrorCode> {
-        self.transcriber.transcribe(audio).map_err(map_infra_error)
+        self.transcriber
+            .transcribe(audio)
+            .map_err(RuntimeErrorCode::from)
     }
 
-    pub fn output_text(&mut self, text: &str) -> Result<OutputResult, RuntimeErrorCode> {
-        self.output.output(text).map_err(map_infra_error)
+    pub fn poll_recording_error(&mut self) -> Option<RuntimeErrorCode> {
+        self.recorder.poll_error().map(RuntimeErrorCode::from)
     }
 }
 
 impl Default for SessionRuntime {
     fn default() -> Self {
-        Self::new(
-            Box::new(NullRecorder::default()),
-            Box::new(NullTranscriber),
-            Box::new(NullOutputSink),
-        )
+        Self::new(Box::new(NullRecorder), Box::new(NullTranscriber))
     }
 }
 
-fn map_infra_error(error: InfraError) -> RuntimeErrorCode {
-    match error {
-        InfraError::AudioCaptureFailed => RuntimeErrorCode::AudioCaptureFailed,
-        InfraError::ApiAuthFailed => RuntimeErrorCode::ApiAuthFailed,
-        InfraError::ApiRateLimited => RuntimeErrorCode::ApiRateLimited,
-        InfraError::ApiRequestFailed => RuntimeErrorCode::ApiRequestFailed,
-        InfraError::ApiNetworkFailed => RuntimeErrorCode::ApiNetworkFailed,
-        InfraError::ApiResponseInvalid => RuntimeErrorCode::ApiResponseInvalid,
-        InfraError::ApiEmptyTranscript => RuntimeErrorCode::ApiEmptyTranscript,
-        InfraError::OutputFailed => RuntimeErrorCode::OutputFailed,
+impl From<InfraError> for RuntimeErrorCode {
+    fn from(error: InfraError) -> Self {
+        match error {
+            InfraError::AudioCaptureFailed => RuntimeErrorCode::AudioCaptureFailed,
+            InfraError::ApiAuthFailed => RuntimeErrorCode::ApiAuthFailed,
+            InfraError::ApiRateLimited => RuntimeErrorCode::ApiRateLimited,
+            InfraError::ApiRequestFailed => RuntimeErrorCode::ApiRequestFailed,
+            InfraError::ApiNetworkFailed => RuntimeErrorCode::ApiNetworkFailed,
+            InfraError::ApiResponseInvalid => RuntimeErrorCode::ApiResponseInvalid,
+            InfraError::ApiEmptyTranscript => RuntimeErrorCode::ApiEmptyTranscript,
+        }
     }
 }
 
@@ -75,7 +65,7 @@ fn map_infra_error(error: InfraError) -> RuntimeErrorCode {
 mod tests {
     use super::SessionRuntime;
     use crate::domain::RuntimeErrorCode;
-    use crate::infra::{InfraError, OutputResult, OutputSink, Recorder, Transcriber};
+    use crate::infra::{InfraError, Recorder, Transcriber};
 
     struct FailingRecorder;
 
@@ -94,14 +84,6 @@ mod tests {
     impl Transcriber for FailingTranscriber {
         fn transcribe(&mut self, _audio: Vec<u8>) -> Result<String, InfraError> {
             Err(InfraError::ApiRequestFailed)
-        }
-    }
-
-    struct FailingOutput;
-
-    impl OutputSink for FailingOutput {
-        fn output(&mut self, _text: &str) -> Result<OutputResult, InfraError> {
-            Err(InfraError::OutputFailed)
         }
     }
 
@@ -125,24 +107,9 @@ mod tests {
         }
     }
 
-    struct OutputOk;
-
-    impl OutputSink for OutputOk {
-        fn output(&mut self, text: &str) -> Result<OutputResult, InfraError> {
-            Ok(OutputResult {
-                clipboard: !text.is_empty(),
-                autopaste: false,
-            })
-        }
-    }
-
     #[test]
     fn maps_recorder_failures() {
-        let mut runtime = SessionRuntime::new(
-            Box::new(FailingRecorder),
-            Box::new(TranscriberOk),
-            Box::new(OutputOk),
-        );
+        let mut runtime = SessionRuntime::new(Box::new(FailingRecorder), Box::new(TranscriberOk));
 
         let result = runtime.start_recording();
         assert_eq!(result, Err(RuntimeErrorCode::AudioCaptureFailed));
@@ -150,27 +117,11 @@ mod tests {
 
     #[test]
     fn maps_transcriber_failures() {
-        let mut runtime = SessionRuntime::new(
-            Box::new(RecorderOk),
-            Box::new(FailingTranscriber),
-            Box::new(OutputOk),
-        );
+        let mut runtime = SessionRuntime::new(Box::new(RecorderOk), Box::new(FailingTranscriber));
 
         let audio = runtime.stop_recording().expect("stop should succeed");
         let result = runtime.transcribe(audio);
         assert_eq!(result, Err(RuntimeErrorCode::ApiRequestFailed));
-    }
-
-    #[test]
-    fn maps_output_failures() {
-        let mut runtime = SessionRuntime::new(
-            Box::new(RecorderOk),
-            Box::new(TranscriberOk),
-            Box::new(FailingOutput),
-        );
-
-        let result = runtime.output_text("hello");
-        assert_eq!(result, Err(RuntimeErrorCode::OutputFailed));
     }
 
     #[test]
@@ -186,11 +137,6 @@ mod tests {
         let text = runtime
             .transcribe(audio)
             .expect("default transcriber should succeed");
-        let output = runtime
-            .output_text(&text)
-            .expect("default output should succeed");
-
-        assert!(!output.clipboard);
-        assert!(!output.autopaste);
+        assert!(text.is_empty());
     }
 }

@@ -46,7 +46,7 @@ pub enum ApplyResult {
 pub enum DomainError {
     InvalidTransition {
         state: SessionStateTag,
-        event: DomainEventTag,
+        event: DomainEvent,
     },
 }
 
@@ -57,22 +57,6 @@ pub enum SessionStateTag {
     Transcribing,
     Outputting,
     Error,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum DomainEventTag {
-    TogglePressed,
-    HoldPressed,
-    ManualPressed,
-    HoldReleased,
-    MaxDurationReached,
-    RecordingStopped,
-    RecordingFailed,
-    TranscriptionSucceeded,
-    TranscriptionFailed,
-    OutputCompleted,
-    OutputFailed,
-    Reset,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -209,7 +193,7 @@ impl SessionMachine {
 
             (state, event) => Err(DomainError::InvalidTransition {
                 state: state.tag(),
-                event: event.tag(),
+                event,
             }),
         }
     }
@@ -242,25 +226,6 @@ impl SessionState {
             Self::Transcribing => SessionStateTag::Transcribing,
             Self::Outputting => SessionStateTag::Outputting,
             Self::Error => SessionStateTag::Error,
-        }
-    }
-}
-
-impl DomainEvent {
-    fn tag(self) -> DomainEventTag {
-        match self {
-            Self::TogglePressed => DomainEventTag::TogglePressed,
-            Self::HoldPressed => DomainEventTag::HoldPressed,
-            Self::ManualPressed => DomainEventTag::ManualPressed,
-            Self::HoldReleased => DomainEventTag::HoldReleased,
-            Self::MaxDurationReached => DomainEventTag::MaxDurationReached,
-            Self::RecordingStopped => DomainEventTag::RecordingStopped,
-            Self::RecordingFailed => DomainEventTag::RecordingFailed,
-            Self::TranscriptionSucceeded => DomainEventTag::TranscriptionSucceeded,
-            Self::TranscriptionFailed => DomainEventTag::TranscriptionFailed,
-            Self::OutputCompleted => DomainEventTag::OutputCompleted,
-            Self::OutputFailed => DomainEventTag::OutputFailed,
-            Self::Reset => DomainEventTag::Reset,
         }
     }
 }
@@ -429,7 +394,7 @@ mod tests {
             result,
             Err(DomainError::InvalidTransition {
                 state: SessionStateTag::Idle,
-                event: super::DomainEventTag::TranscriptionSucceeded,
+                event: DomainEvent::TranscriptionSucceeded,
             })
         );
     }

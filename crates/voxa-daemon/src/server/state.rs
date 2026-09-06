@@ -1,5 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{collections::VecDeque, env, fs};
 
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use voxa_core::app::SessionRuntime;
 use voxa_core::domain::{
-    ApplyResult, DomainEvent, RecordingOrigin, RuntimeErrorCode, SessionMachine, SessionState,
+    DomainEvent, RecordingOrigin, RuntimeErrorCode, SessionMachine, SessionState,
 };
 use voxa_core::ipc::{
     ApiKeyStatusResult, ConfigResult, ErrorPayload, EventEnvelope, IpcRuntimeState,
@@ -15,7 +16,7 @@ use voxa_core::ipc::{
 };
 
 use super::connection::{ConnectionHandle, OUTBOUND_QUEUE_CAPACITY};
-use crate::adapters::build_runtime_for_output_mode;
+use crate::adapters::build_runtime;
 use crate::secrets::{ApiKeyStore, build_api_key_store};
 #[cfg(test)]
 use crate::secrets::{in_memory_api_key_store, in_memory_api_key_store_with_shared};
@@ -101,7 +102,7 @@ pub(super) struct SharedState {
     config: DaemonConfig,
     runtime: Option<SessionRuntime>,
     config_path: Option<PathBuf>,
-    api_keys: Box<dyn ApiKeyStore>,
+    api_keys: Arc<dyn ApiKeyStore>,
 }
 
 struct Subscriber {
@@ -109,7 +110,90 @@ struct Subscriber {
     min_live_seq: u64,
 }
 
-pub(super) enum StopRecordingAction {
+#[derive(Clone, Copy)]
+pub(super) enum CaptureCommand {
+    Start(StartOrigin),
+    Stop(StopReason),
+    Cancel,
+}
+
+pub(super) enum CaptureAction {
+    Accepted(Value),
+    Pending(PendingCapture),
+}
+
+pub(super) struct PendingCapture {
+    runtime: SessionRuntime,
+    command: CaptureCommand,
+}
+
+pub(super) struct CompletedCapture {
+    runtime: SessionRuntime,
+    command: CaptureCommand,
+    result: Result<Vec<u8>, RuntimeErrorCode>,
+}
+
+impl PendingCapture {
+    pub(super) fn run(self) -> CompletedCapture {
+        let Self {
+            mut runtime,
+            command,
+        } = self;
+        let result = match command {
+            CaptureCommand::Start(_) => runtime.start_recording().map(|()| Vec::new()),
+            CaptureCommand::Stop(_) => runtime.stop_recording(),
+            CaptureCommand::Cancel => runtime.cancel_recording().map(|()| Vec::new()),
+        };
+        CompletedCapture {
+            runtime,
+            command,
+            result,
+        }
+    }
+}
+
+pub(super) struct ApiKeyAccess {
+    store: Arc<dyn ApiKeyStore>,
+    source: String,
+}
+
+impl ApiKeyAccess {
+    pub(super) fn api_key_status(&self) -> Result<ApiKeyStatusResult, ErrorPayload> {
+        let api_key = self
+            .store
+            .get_api_key()
+            .map_err(|_| ErrorPayload::new("INTERNAL_ERROR", "Failed to read API key"))?;
+        let hint = api_key.as_deref().map(mask_api_key_hint);
+        let is_set = api_key.is_some();
+
+        Ok(ApiKeyStatusResult {
+            source: self.source.clone(),
+            is_set,
+            hint,
+        })
+    }
+
+    pub(super) fn set_api_key(&self, params: SetApiKeyParams) -> Result<Value, ErrorPayload> {
+        let api_key = params.api_key.trim();
+        if api_key.is_empty() {
+            return Err(ErrorPayload::new(
+                "INVALID_PARAMS",
+                "api_key cannot be empty",
+            ));
+        }
+
+        self.store
+            .set_api_key(api_key)
+            .map_err(|_| ErrorPayload::new("INTERNAL_ERROR", "Failed to store API key"))?;
+
+        Ok(json!({
+            "stored": true,
+            "source": self.source
+        }))
+    }
+}
+
+pub(super) enum SessionAction {
     Accepted(Value),
     Transcribe(PendingTranscription),
 }
@@ -136,11 +220,7 @@ impl SharedState {
     pub(super) fn from_disk() -> io::Result<Self> {
         let config_path = default_config_path()?;
         let config = load_config_from_disk(&config_path);
-        let runtime = build_runtime_for_output_mode(
-            &config.output_mode,
-            &config.model,
-            &config.api_key_source,
-        );
+        let runtime = build_runtime(&config.model, &config.api_key_source);
         let api_keys = build_api_key_store(&config.api_key_source);
         Ok(Self::with_config_and_runtime(
             config,
@@ -152,12 +232,15 @@ impl SharedState {
 
     #[cfg(test)]
     pub(super) fn with_runtime(runtime: SessionRuntime) -> Self {
-        Self::with_config_and_runtime(
-            DaemonConfig::default(),
-            runtime,
-            None,
-            in_memory_api_key_store(),
-        )
+        Self::with_runtime_and_api_keys(runtime, in_memory_api_key_store())
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_runtime_and_api_keys(
+        runtime: SessionRuntime,
+        api_keys: Arc<dyn ApiKeyStore>,
+    ) -> Self {
+        Self::with_config_and_runtime(DaemonConfig::default(), runtime, None, api_keys)
     }
 
     #[cfg(test)]
@@ -189,7 +272,7 @@ impl SharedState {
         config: DaemonConfig,
         runtime: SessionRuntime,
         config_path: Option<PathBuf>,
-        api_keys: Box<dyn ApiKeyStore>,
+        api_keys: Arc<dyn ApiKeyStore>,
     ) -> Self {
         Self {
             machine: SessionMachine::new(),
@@ -262,6 +345,7 @@ impl SharedState {
         request_id: &str,
         from_seq: Option<u64>,
     ) -> io::Result<()> {
+        self.unsubscribe(&connection);
         let response = ServerEnvelope::Response(ResponseEnvelope::ok(
             request_id,
             json!({
@@ -299,6 +383,11 @@ impl SharedState {
         Ok(())
     }
 
+    pub(super) fn unsubscribe(&mut self, connection: &ConnectionHandle) {
+        self.subscribers
+            .retain(|subscriber| !subscriber.connection.same_connection(connection));
+    }
+
     pub(super) fn publish_event(&mut self, event: EventEnvelope) {
         if self.event_replay.len() == EVENT_REPLAY_CAPACITY {
             self.event_replay.pop_front();
@@ -326,11 +415,10 @@ impl SharedState {
 
     pub(super) fn set_config(&mut self, params: SetConfigParams) -> Result<Value, ErrorPayload> {
         if !matches!(self.machine.state(), SessionState::Idle) {
-            return Err(ErrorPayload {
-                code: "CONFIG_BUSY".to_owned(),
-                message: "Config cannot be changed while the daemon is busy".to_owned(),
-                details: None,
-            });
+            return Err(ErrorPayload::new(
+                "CONFIG_BUSY",
+                "Config cannot be changed while the daemon is busy",
+            ));
         }
 
         let mut next_config = self.config.clone();
@@ -361,44 +449,36 @@ impl SharedState {
         }
 
         if next_config.toggle_hotkey == next_config.hold_hotkey {
-            return Err(ErrorPayload {
-                code: "CONFIG_HOTKEY_CONFLICT".to_owned(),
-                message: "toggle_hotkey and hold_hotkey cannot be the same".to_owned(),
-                details: None,
-            });
+            return Err(ErrorPayload::new(
+                "CONFIG_HOTKEY_CONFLICT",
+                "toggle_hotkey and hold_hotkey cannot be the same",
+            ));
         }
 
         if !is_valid_model(&next_config.model) {
-            return Err(ErrorPayload {
-                code: "CONFIG_INVALID".to_owned(),
-                message: "model is not supported".to_owned(),
-                details: None,
-            });
+            return Err(ErrorPayload::new(
+                "CONFIG_INVALID",
+                "model is not supported",
+            ));
         }
 
         if !is_valid_output_mode(&next_config.output_mode) {
-            return Err(ErrorPayload {
-                code: "CONFIG_INVALID".to_owned(),
-                message: "output_mode is not supported".to_owned(),
-                details: None,
-            });
+            return Err(ErrorPayload::new(
+                "CONFIG_INVALID",
+                "output_mode is not supported",
+            ));
         }
 
         let runtime_changed = next_config.model != self.config.model
-            || next_config.output_mode != self.config.output_mode
             || next_config.api_key_source != self.config.api_key_source;
 
         next_config.revision = self.config.revision + 1;
         if let Some(path) = self.config_path.as_deref() {
-            persist_config_to_disk(path, &next_config).map_err(|_| ErrorPayload {
-                code: "INTERNAL_ERROR".to_owned(),
-                message: "Failed to persist config".to_owned(),
-                details: None,
-            })?;
+            persist_config_to_disk(path, &next_config)
+                .map_err(|_| ErrorPayload::new("INTERNAL_ERROR", "Failed to persist config"))?;
         }
         if runtime_changed {
-            self.runtime = Some(build_runtime_for_output_mode(
-                &next_config.output_mode,
+            self.runtime = Some(build_runtime(
                 &next_config.model,
                 &next_config.api_key_source,
             ));
@@ -407,228 +487,157 @@ impl SharedState {
         Ok(json!({ "revision": self.config.revision }))
     }
 
-    pub(super) fn api_key_status(&self) -> Result<ApiKeyStatusResult, ErrorPayload> {
-        let api_key = self.api_keys.get_api_key().map_err(|_| ErrorPayload {
-            code: "INTERNAL_ERROR".to_owned(),
-            message: "Failed to read API key".to_owned(),
-            details: None,
-        })?;
-        let hint = api_key.as_deref().map(mask_api_key_hint);
-        let is_set = api_key.is_some();
-
-        Ok(ApiKeyStatusResult {
+    pub(super) fn api_key_access(&self) -> ApiKeyAccess {
+        ApiKeyAccess {
+            store: Arc::clone(&self.api_keys),
             source: self.config.api_key_source.clone(),
-            is_set,
-            hint,
-        })
+        }
     }
 
-    pub(super) fn set_api_key(&self, params: SetApiKeyParams) -> Result<Value, ErrorPayload> {
-        let api_key = params.api_key.trim();
-        if api_key.is_empty() {
-            return Err(ErrorPayload {
-                code: "INVALID_PARAMS".to_owned(),
-                message: "api_key cannot be empty".to_owned(),
-                details: None,
-            });
-        }
-
-        self.api_keys
-            .set_api_key(api_key)
-            .map_err(|_| ErrorPayload {
-                code: "INTERNAL_ERROR".to_owned(),
-                message: "Failed to store API key".to_owned(),
-                details: None,
-            })?;
-
-        Ok(json!({
-            "stored": true,
-            "source": self.config.api_key_source.clone()
-        }))
-    }
-
-    pub(super) fn start_recording(&mut self, origin: StartOrigin) -> Result<Value, ErrorPayload> {
-        if matches!(self.machine.state(), SessionState::Error) {
-            let _ = self.machine.apply(DomainEvent::Reset);
-            self.session_id = None;
-            self.recording_deadline = None;
-            self.last_audio_level_bucket = None;
-            self.emit_state_changed();
-        }
-
-        if !matches!(self.machine.state(), SessionState::Idle) {
-            return Ok(json!({ "accepted": true }));
-        }
-
-        let recording_deadline = Instant::now()
-            .checked_add(Duration::from_secs(self.config.max_recording_seconds))
-            .ok_or_else(|| ErrorPayload {
-                code: "CONFIG_INVALID".to_owned(),
-                message: "Recording duration is too large".to_owned(),
-                details: None,
-            })?;
-
-        let event = match origin {
-            StartOrigin::Manual => DomainEvent::ManualPressed,
-            StartOrigin::HotkeyToggle => DomainEvent::TogglePressed,
-            StartOrigin::HotkeyHold => DomainEvent::HoldPressed,
-        };
-
-        let result = self.machine.apply(event);
-        match result {
-            Ok(ApplyResult::Transitioned) => {
+    pub(super) fn begin_capture(
+        &mut self,
+        command: CaptureCommand,
+    ) -> Result<CaptureAction, ErrorPayload> {
+        match command {
+            CaptureCommand::Start(origin) => {
+                if self.machine.state() == SessionState::Error {
+                    self.apply_event(DomainEvent::Reset)?;
+                    self.session_id = None;
+                    self.emit_state_changed();
+                }
+                if self.machine.state() != SessionState::Idle {
+                    return Ok(CaptureAction::Accepted(json!({ "accepted": true })));
+                }
+                let event = match origin {
+                    StartOrigin::Manual => DomainEvent::ManualPressed,
+                    StartOrigin::HotkeyToggle => DomainEvent::TogglePressed,
+                    StartOrigin::HotkeyHold => DomainEvent::HoldPressed,
+                };
+                self.apply_event(event)?;
                 self.session_counter += 1;
                 self.session_id = Some(format!("s-{}", self.session_counter));
-
-                let start_result = match self.runtime.as_mut() {
-                    Some(runtime) => runtime.start_recording(),
-                    None => Err(RuntimeErrorCode::AudioCaptureFailed),
-                };
-                if let Err(code) = start_result {
-                    let _ = self.machine.apply(DomainEvent::RecordingFailed);
-                    self.machine.set_last_error(code);
-                    self.session_id = None;
-                    self.recording_deadline = None;
-                    self.last_audio_level_bucket = None;
-                    self.emit_state_changed();
-                    return Err(runtime_error_payload(code, "Failed to start recording"));
+            }
+            CaptureCommand::Stop(reason) => {
+                if !self.machine.is_recording() {
+                    return Ok(CaptureAction::Accepted(json!({ "accepted": true })));
                 }
+                self.apply_event(match reason {
+                    StopReason::Manual | StopReason::HotkeyToggle => DomainEvent::TogglePressed,
+                    StopReason::HotkeyHoldRelease => DomainEvent::HoldReleased,
+                    StopReason::MaxDuration => DomainEvent::MaxDurationReached,
+                })?;
+                if !matches!(self.machine.state(), SessionState::Recording(recording) if recording.stop_requested)
+                {
+                    return Ok(CaptureAction::Accepted(json!({ "accepted": true })));
+                }
+            }
+            CaptureCommand::Cancel => {
+                if !self.machine.is_recording() {
+                    return Ok(CaptureAction::Accepted(
+                        json!({ "accepted": true, "cancelled": false }),
+                    ));
+                }
+            }
+        }
+        self.recording_deadline = None;
+        self.last_audio_level_bucket = None;
+        let runtime = self.runtime.take().ok_or_else(|| {
+            ErrorPayload::new("INTERNAL_ERROR", "Recording runtime is unavailable")
+        })?;
+        Ok(CaptureAction::Pending(PendingCapture { runtime, command }))
+    }
 
-                self.recording_deadline = Some(recording_deadline);
-                self.last_audio_level_bucket = None;
+    pub(super) fn finish_capture(
+        &mut self,
+        completed: CompletedCapture,
+    ) -> Result<SessionAction, ErrorPayload> {
+        let CompletedCapture {
+            runtime,
+            command,
+            result,
+        } = completed;
+        self.runtime = Some(runtime);
+        let audio = result.map_err(|code| {
+            self.capture_failed(code);
+            runtime_error_payload(
+                code,
+                match command {
+                    CaptureCommand::Start(_) => "Failed to start recording",
+                    CaptureCommand::Stop(_) => "Failed to stop audio capture",
+                    CaptureCommand::Cancel => "Failed to cancel audio capture",
+                },
+            )
+        })?;
+        match command {
+            CaptureCommand::Start(origin) => {
+                self.recording_deadline =
+                    Some(Instant::now() + Duration::from_secs(self.config.max_recording_seconds));
                 self.emit_state_changed();
                 self.emit_event(
                     "recording_started",
-                    json!({
-                        "session_id": self.session_id,
-                        "origin": origin
-                    }),
+                    json!({ "session_id": self.session_id, "origin": origin }),
                 );
-                Ok(json!({ "accepted": true }))
+                Ok(SessionAction::Accepted(json!({ "accepted": true })))
             }
-            Ok(ApplyResult::Noop) => Ok(json!({ "accepted": true })),
-            Err(_) => Err(ErrorPayload {
-                code: "INVALID_STATE_TRANSITION".to_owned(),
-                message: "Invalid start_recording transition".to_owned(),
-                details: None,
-            }),
+            CaptureCommand::Cancel => {
+                self.apply_event(DomainEvent::Reset)?;
+                let session_id = self.session_id.take();
+                self.emit_event("recording_cancelled", json!({ "session_id": session_id }));
+                self.emit_state_changed();
+                Ok(SessionAction::Accepted(
+                    json!({ "accepted": true, "cancelled": true }),
+                ))
+            }
+            CaptureCommand::Stop(reason) => {
+                self.apply_event(DomainEvent::RecordingStopped)?;
+                self.emit_event(
+                    "recording_stopped",
+                    json!({ "session_id": self.session_id, "reason": reason }),
+                );
+                self.emit_state_changed();
+                self.emit_event(
+                    "transcribing_started",
+                    json!({ "session_id": self.session_id }),
+                );
+                let runtime = self.runtime.take().ok_or_else(|| {
+                    ErrorPayload::new("INTERNAL_ERROR", "Recording runtime is unavailable")
+                })?;
+                Ok(SessionAction::Transcribe(PendingTranscription {
+                    runtime,
+                    audio,
+                }))
+            }
         }
     }
 
-    pub(super) fn cancel_recording(&mut self) -> Result<Value, ErrorPayload> {
-        // A stop that already entered transcription owns the runtime until it
-        // finishes. Cancellation must not reset that session or reclaim it.
-        if !matches!(self.machine.state(), SessionState::Recording(_)) {
-            return Ok(json!({ "accepted": true, "cancelled": false }));
-        }
+    fn apply_event(&mut self, event: DomainEvent) -> Result<(), ErrorPayload> {
+        self.machine.apply(event).map(|_| ()).map_err(|_| {
+            ErrorPayload::new("INVALID_STATE_TRANSITION", "Invalid session transition")
+        })
+    }
 
+    fn capture_failed(&mut self, code: RuntimeErrorCode) {
+        let _ = self.machine.apply(DomainEvent::RecordingFailed);
+        self.machine.set_last_error(code);
+        self.session_id = None;
         self.recording_deadline = None;
         self.last_audio_level_bucket = None;
-        let result = match self.runtime.as_mut() {
-            Some(runtime) => runtime.cancel_recording(),
-            None => Err(RuntimeErrorCode::AudioCaptureFailed),
-        };
-        if let Err(code) = result {
-            let _ = self.machine.apply(DomainEvent::RecordingFailed);
-            self.machine.set_last_error(code);
-            self.session_id = None;
-            self.emit_state_changed();
-            return Err(runtime_error_payload(
-                code,
-                "Failed to cancel audio capture",
-            ));
-        }
-
-        let _ = self.machine.apply(DomainEvent::Reset);
-        let session_id = self.session_id.take();
-        self.emit_event("recording_cancelled", json!({ "session_id": session_id }));
         self.emit_state_changed();
-        Ok(json!({ "accepted": true, "cancelled": true }))
     }
 
-    pub(super) fn begin_stop_recording(
-        &mut self,
-        reason: StopReason,
-    ) -> Result<StopRecordingAction, ErrorPayload> {
-        if !matches!(self.machine.state(), SessionState::Recording(_)) {
-            self.last_audio_level_bucket = None;
-            return Ok(StopRecordingAction::Accepted(json!({ "accepted": true })));
-        }
-
-        let stop_event = match reason {
-            StopReason::Manual | StopReason::HotkeyToggle => DomainEvent::TogglePressed,
-            StopReason::HotkeyHoldRelease => DomainEvent::HoldReleased,
-            StopReason::MaxDuration => DomainEvent::MaxDurationReached,
-        };
-
-        let _ = self.machine.apply(stop_event).map_err(|_| ErrorPayload {
-            code: "INVALID_STATE_TRANSITION".to_owned(),
-            message: "Invalid stop request transition".to_owned(),
-            details: None,
-        })?;
-
-        let stop_requested = matches!(
-            self.machine.state(),
-            SessionState::Recording(recording) if recording.stop_requested
-        );
-        if !stop_requested {
-            return Ok(StopRecordingAction::Accepted(json!({ "accepted": true })));
-        }
-        self.recording_deadline = None;
-
-        let audio = match self.runtime.as_mut() {
-            Some(runtime) => runtime.stop_recording(),
-            None => Err(RuntimeErrorCode::AudioCaptureFailed),
-        };
-        let audio = match audio {
-            Ok(audio) => audio,
-            Err(code) => {
-                let _ = self.machine.apply(DomainEvent::RecordingFailed);
-                self.machine.set_last_error(code);
-                self.session_id = None;
-                self.last_audio_level_bucket = None;
-                self.emit_state_changed();
-                return Err(runtime_error_payload(code, "Failed to stop audio capture"));
+    pub(super) fn poll_capture_error(&mut self) {
+        if self.machine.is_recording() {
+            if let Some(code) = self
+                .runtime
+                .as_mut()
+                .and_then(SessionRuntime::poll_recording_error)
+            {
+                self.capture_failed(code);
             }
-        };
-
-        let runtime = self.runtime.take().ok_or_else(|| ErrorPayload {
-            code: "INTERNAL_ERROR".to_owned(),
-            message: "Recording runtime is unavailable".to_owned(),
-            details: None,
-        })?;
-
-        if self.machine.apply(DomainEvent::RecordingStopped).is_err() {
-            self.runtime = Some(runtime);
-            return Err(ErrorPayload {
-                code: "INVALID_STATE_TRANSITION".to_owned(),
-                message: "Could not move to transcribing state".to_owned(),
-                details: None,
-            });
         }
-
-        self.emit_event(
-            "recording_stopped",
-            json!({
-                "session_id": self.session_id,
-                "reason": reason
-            }),
-        );
-        self.emit_state_changed();
-        self.emit_event(
-            "transcribing_started",
-            json!({
-                "session_id": self.session_id
-            }),
-        );
-
-        Ok(StopRecordingAction::Transcribe(PendingTranscription {
-            runtime,
-            audio,
-        }))
     }
 
-    pub(super) fn finish_stop_recording(
+    pub(super) fn finish_transcription(
         &mut self,
         completed: CompletedTranscription,
     ) -> Result<Value, ErrorPayload> {
@@ -647,34 +656,20 @@ impl SharedState {
             }
         };
 
-        let _ = self
-            .machine
-            .apply(DomainEvent::TranscriptionSucceeded)
-            .map_err(|_| ErrorPayload {
-                code: "INVALID_STATE_TRANSITION".to_owned(),
-                message: "Could not move to outputting state".to_owned(),
-                details: None,
-            })?;
+        self.apply_event(DomainEvent::TranscriptionSucceeded)?;
 
         let text_length = text.chars().count();
         self.emit_event(
             "transcription_ready",
             json!({
                 "session_id": self.session_id,
-                "text": text.clone(),
+                "text": text,
                 "text_length": text_length
             }),
         );
         self.emit_state_changed();
 
-        let _ = self
-            .machine
-            .apply(DomainEvent::OutputCompleted)
-            .map_err(|_| ErrorPayload {
-                code: "INVALID_STATE_TRANSITION".to_owned(),
-                message: "Could not complete output transition".to_owned(),
-                details: None,
-            })?;
+        self.apply_event(DomainEvent::OutputCompleted)?;
         self.session_id = None;
         self.last_audio_level_bucket = None;
         self.emit_state_changed();
@@ -687,7 +682,7 @@ impl SharedState {
 
     pub(super) fn begin_max_duration_stop_if_needed(
         &mut self,
-    ) -> Result<Option<PendingTranscription>, ErrorPayload> {
+    ) -> Result<Option<PendingCapture>, ErrorPayload> {
         if !matches!(self.machine.state(), SessionState::Recording(_)) {
             self.recording_deadline = None;
             self.last_audio_level_bucket = None;
@@ -701,9 +696,9 @@ impl SharedState {
             return Ok(None);
         }
 
-        match self.begin_stop_recording(StopReason::MaxDuration)? {
-            StopRecordingAction::Accepted(_) => Ok(None),
-            StopRecordingAction::Transcribe(pending) => Ok(Some(pending)),
+        match self.begin_capture(CaptureCommand::Stop(StopReason::MaxDuration))? {
+            CaptureAction::Accepted(_) => Ok(None),
+            CaptureAction::Pending(pending) => Ok(Some(pending)),
         }
     }
 
@@ -769,11 +764,7 @@ fn runtime_error_code_to_string(code: RuntimeErrorCode) -> String {
 }
 
 fn runtime_error_payload(code: RuntimeErrorCode, message: &str) -> ErrorPayload {
-    ErrorPayload {
-        code: runtime_error_code_to_string(code),
-        message: message.to_owned(),
-        details: None,
-    }
+    ErrorPayload::new(runtime_error_code_to_string(code), message)
 }
 
 fn is_valid_model(model: &str) -> bool {

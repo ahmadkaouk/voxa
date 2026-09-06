@@ -1,10 +1,13 @@
-#if canImport(XCTest)
+#if canImport(XCTest) || VOXA_STANDALONE_TESTS
+import Foundation
+#if !VOXA_STANDALONE_TESTS
 import XCTest
 @testable import VoxaMenuBar
+#endif
 
-final class PopoverPrimaryActionTests: XCTestCase {
-    func testMissingAPIKeyOffersSetupOnlyWhenConnected() {
-        XCTAssertEqual(
+enum PopoverPrimaryActionChecks {
+    static func testMissingAPIKeyOffersSetupOnlyWhenConnected() throws {
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: false,
                 connectionStatus: .connected,
@@ -13,7 +16,7 @@ final class PopoverPrimaryActionTests: XCTestCase {
             .addAPIKey
         )
 
-        XCTAssertEqual(
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: false,
                 connectionStatus: .disconnected(message: "offline"),
@@ -21,7 +24,7 @@ final class PopoverPrimaryActionTests: XCTestCase {
             ),
             .reconnect
         )
-        XCTAssertEqual(
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: false,
                 connectionStatus: .connecting,
@@ -29,7 +32,7 @@ final class PopoverPrimaryActionTests: XCTestCase {
             ),
             .connecting
         )
-        XCTAssertEqual(
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: false,
                 connectionStatus: .connected,
@@ -37,7 +40,7 @@ final class PopoverPrimaryActionTests: XCTestCase {
             ),
             .stopRecording
         )
-        XCTAssertEqual(
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: false,
                 connectionStatus: .connected,
@@ -47,8 +50,8 @@ final class PopoverPrimaryActionTests: XCTestCase {
         )
     }
 
-    func testConnectionStateControlsActionAfterSetup() {
-        XCTAssertEqual(
+    static func testConnectionStateControlsActionAfterSetup() throws {
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: true,
                 connectionStatus: .connecting,
@@ -56,7 +59,7 @@ final class PopoverPrimaryActionTests: XCTestCase {
             ),
             .connecting
         )
-        XCTAssertEqual(
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: true,
                 connectionStatus: .disconnected(message: "offline"),
@@ -66,8 +69,8 @@ final class PopoverPrimaryActionTests: XCTestCase {
         )
     }
 
-    func testConnectedRuntimeStateMapsToSafeAction() {
-        XCTAssertEqual(
+    static func testConnectedRuntimeStateMapsToSafeAction() throws {
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: true,
                 connectionStatus: .connected,
@@ -75,7 +78,7 @@ final class PopoverPrimaryActionTests: XCTestCase {
             ),
             .startRecording
         )
-        XCTAssertEqual(
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: true,
                 connectionStatus: .connected,
@@ -83,7 +86,7 @@ final class PopoverPrimaryActionTests: XCTestCase {
             ),
             .stopRecording
         )
-        XCTAssertEqual(
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: true,
                 connectionStatus: .connected,
@@ -91,7 +94,7 @@ final class PopoverPrimaryActionTests: XCTestCase {
             ),
             .working
         )
-        XCTAssertEqual(
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: true,
                 connectionStatus: .connected,
@@ -99,7 +102,7 @@ final class PopoverPrimaryActionTests: XCTestCase {
             ),
             .working
         )
-        XCTAssertEqual(
+        try unitEqual(
             PopoverPrimaryAction.resolve(
                 isAPIKeySet: true,
                 connectionStatus: .connected,
@@ -108,5 +111,19 @@ final class PopoverPrimaryActionTests: XCTestCase {
             .retry
         )
     }
+
+    static let all: [(String, () throws -> Void)] = [
+        ("PopoverPrimaryAction.testMissingAPIKeyOffersSetupOnlyWhenConnected", testMissingAPIKeyOffersSetupOnlyWhenConnected),
+        ("PopoverPrimaryAction.testConnectionStateControlsActionAfterSetup", testConnectionStateControlsActionAfterSetup),
+        ("PopoverPrimaryAction.testConnectedRuntimeStateMapsToSafeAction", testConnectedRuntimeStateMapsToSafeAction),
+    ]
 }
+
+#if !VOXA_STANDALONE_TESTS
+final class PopoverPrimaryActionTests: XCTestCase {
+    func testMissingAPIKeyOffersSetupOnlyWhenConnected() throws { try PopoverPrimaryActionChecks.testMissingAPIKeyOffersSetupOnlyWhenConnected() }
+    func testConnectionStateControlsActionAfterSetup() throws { try PopoverPrimaryActionChecks.testConnectionStateControlsActionAfterSetup() }
+    func testConnectedRuntimeStateMapsToSafeAction() throws { try PopoverPrimaryActionChecks.testConnectedRuntimeStateMapsToSafeAction() }
+}
+#endif
 #endif

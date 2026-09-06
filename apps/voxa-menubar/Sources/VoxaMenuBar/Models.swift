@@ -148,3 +148,37 @@ struct DaemonEventSnapshot {
     let seq: UInt64
     let data: [String: Any]
 }
+
+enum PopoverPrimaryAction: Equatable {
+    case addAPIKey
+    case reconnect
+    case connecting
+    case startRecording
+    case stopRecording
+    case retry
+    case working
+
+    static func resolve(
+        isAPIKeySet: Bool,
+        connectionStatus: ConnectionStatus,
+        runtimeState: RuntimeStateKind
+    ) -> PopoverPrimaryAction {
+        switch connectionStatus {
+        case .connecting:
+            return .connecting
+        case .disconnected:
+            return .reconnect
+        case .connected:
+            switch runtimeState {
+            case .idle:
+                return isAPIKeySet ? .startRecording : .addAPIKey
+            case .recording:
+                return .stopRecording
+            case .error:
+                return isAPIKeySet ? .retry : .addAPIKey
+            case .transcribing, .outputting:
+                return .working
+            }
+        }
+    }
+}

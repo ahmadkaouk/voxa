@@ -2,7 +2,6 @@ mod adapters;
 mod secrets;
 mod server;
 
-use std::env;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,14 +20,4 @@ pub fn run_with_flag(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Resu
     server::run(socket_path, running)
 }
 
-pub fn default_socket_path() -> io::Result<PathBuf> {
-    if let Some(path) = env::var_os("VOXA_SOCKET") {
-        return Ok(PathBuf::from(path));
-    }
-
-    let home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| io::Error::other("HOME is not set"))?;
-
-    Ok(home.join("Library/Application Support/voxa/run/daemon.sock"))
-}
+pub use voxa_core::ipc::default_socket_path;

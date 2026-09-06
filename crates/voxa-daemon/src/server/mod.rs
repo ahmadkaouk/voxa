@@ -1,15 +1,15 @@
 mod connection;
+mod socket;
 mod state;
 
 #[cfg(test)]
 mod tests;
 
-use std::fs;
 use std::io::{self, BufRead, BufReader};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -21,10 +21,27 @@ use voxa_core::ipc::{
 };
 
 use self::connection::ConnectionHandle;
-use self::state::{PendingTranscription, SetConfigParams, SharedState, StopRecordingAction};
+use self::state::{
+    CaptureAction, CaptureCommand, PendingTranscription, SessionAction, SetConfigParams,
+    SharedState,
+};
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_DURATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+struct ServerState {
+    state: Mutex<SharedState>,
+    // Capture commands take this lock before state. Read-only IPC never takes it.
+    capture: Mutex<()>,
+}
+
+impl ServerState {
+    fn lock(&self) -> io::Result<MutexGuard<'_, SharedState>> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("state poisoned"))
+    }
+}
 
 pub fn run(socket_path: PathBuf, running: Arc<AtomicBool>) -> io::Result<()> {
     let state = SharedState::from_disk()?;
@@ -68,16 +85,12 @@ fn run_with_state(
     running: Arc<AtomicBool>,
     state: SharedState,
 ) -> io::Result<()> {
-    if let Some(parent) = socket_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let socket = socket::BoundSocket::bind(socket_path)?;
 
-    ensure_socket_available(&socket_path)?;
-
-    let listener = UnixListener::bind(&socket_path)?;
-    listener.set_nonblocking(true)?;
-
-    let shared = Arc::new(Mutex::new(state));
+    let shared = Arc::new(ServerState {
+        state: Mutex::new(state),
+        capture: Mutex::new(()),
+    });
     let (event_tx, event_rx) = mpsc::channel::<EventEnvelope>();
     let shared_for_dispatcher = Arc::clone(&shared);
     thread::spawn(move || run_event_dispatcher(event_rx, shared_for_dispatcher));
@@ -93,7 +106,7 @@ fn run_with_state(
     });
 
     while running.load(Ordering::SeqCst) {
-        match listener.accept() {
+        match socket.listener.accept() {
             Ok((stream, _)) => {
                 let shared = Arc::clone(&shared);
                 let event_tx = event_tx.clone();
@@ -105,40 +118,36 @@ fn run_with_state(
                 thread::sleep(ACCEPT_POLL_INTERVAL);
             }
             Err(err) => {
-                let _ = fs::remove_file(&socket_path);
                 return Err(err);
             }
         }
     }
 
-    let _ = fs::remove_file(&socket_path);
     Ok(())
-}
-
-fn ensure_socket_available(socket_path: &Path) -> io::Result<()> {
-    if !socket_path.exists() {
-        return Ok(());
-    }
-
-    match UnixStream::connect(socket_path) {
-        Ok(_) => Err(io::Error::new(
-            io::ErrorKind::AddrInUse,
-            "voxa-daemon is already running",
-        )),
-        Err(err) if err.kind() == io::ErrorKind::ConnectionRefused => fs::remove_file(socket_path),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(_) => fs::remove_file(socket_path),
-    }
 }
 
 fn handle_client(
     writer: UnixStream,
-    shared: Arc<Mutex<SharedState>>,
+    shared: Arc<ServerState>,
     event_tx: mpsc::Sender<EventEnvelope>,
 ) -> io::Result<()> {
     writer.set_nonblocking(false)?;
     let read_stream = writer.try_clone()?;
     let connection = ConnectionHandle::new(writer)?;
+    let result = read_client_messages(read_stream, &connection, &shared, &event_tx);
+    if let Ok(mut state) = shared.lock() {
+        state.unsubscribe(&connection);
+    }
+    connection.close();
+    result
+}
+
+fn read_client_messages(
+    read_stream: UnixStream,
+    connection: &ConnectionHandle,
+    shared: &ServerState,
+    event_tx: &mpsc::Sender<EventEnvelope>,
+) -> io::Result<()> {
     let mut reader = BufReader::new(read_stream);
     let mut line = String::new();
     let mut hello_done = false;
@@ -159,11 +168,7 @@ fn handle_client(
         let Ok(message) = message else {
             if !hello_done {
                 connection.send(ServerEnvelope::HelloError {
-                    error: ErrorPayload {
-                        code: "INVALID_REQUEST".to_owned(),
-                        message: "Expected hello handshake".to_owned(),
-                        details: None,
-                    },
+                    error: ErrorPayload::new("INVALID_REQUEST", "Expected hello handshake"),
                 })?;
                 return Ok(());
             }
@@ -187,21 +192,16 @@ fn handle_client(
                 }
                 ClientEnvelope::Hello(_) => {
                     connection.send(ServerEnvelope::HelloError {
-                        error: ErrorPayload {
-                            code: "API_VERSION_UNSUPPORTED".to_owned(),
-                            message: "Unsupported API version".to_owned(),
-                            details: None,
-                        },
+                        error: ErrorPayload::new(
+                            "API_VERSION_UNSUPPORTED",
+                            "Unsupported API version",
+                        ),
                     })?;
                     return Ok(());
                 }
                 _ => {
                     connection.send(ServerEnvelope::HelloError {
-                        error: ErrorPayload {
-                            code: "INVALID_REQUEST".to_owned(),
-                            message: "Expected hello handshake".to_owned(),
-                            details: None,
-                        },
+                        error: ErrorPayload::new("INVALID_REQUEST", "Expected hello handshake"),
                     })?;
                     return Ok(());
                 }
@@ -211,7 +211,7 @@ fn handle_client(
         }
 
         if let ClientEnvelope::Request(request) = message {
-            handle_request(request, &connection, &shared, &event_tx)?;
+            handle_request(request, connection, shared, event_tx)?;
         }
     }
 }
@@ -219,216 +219,110 @@ fn handle_client(
 fn handle_request(
     request: RequestEnvelope,
     connection: &ConnectionHandle,
-    shared: &Arc<Mutex<SharedState>>,
+    shared: &ServerState,
     event_tx: &mpsc::Sender<EventEnvelope>,
 ) -> io::Result<()> {
     match request.method.as_str() {
         "health" => {
-            let result = {
-                let state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                HealthResult {
-                    status: "ok".to_owned(),
-                    uptime_ms: state.uptime_ms(),
-                }
+            let result = HealthResult {
+                status: "ok".to_owned(),
+                uptime_ms: shared.lock()?.uptime_ms(),
             };
-
-            let payload = json_value(result)?;
-            connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                &request.id,
-                payload,
-            )))
+            write_response(connection, &request.id, Ok(result))
         }
         "get_state" => {
-            let result = {
-                let state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                state.state_result()
-            };
-
-            let payload = json_value(result)?;
-            connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                &request.id,
-                payload,
-            )))
-        }
-        "start_recording" => {
-            let params = request.parse_params::<StartRecordingParams>();
-            let params = match params {
-                Ok(params) => params,
-                Err(error) => return write_response_error(connection, &request.id, error),
-            };
-            let origin = params.origin.unwrap_or(StartOrigin::Manual);
-
-            let result = {
-                let mut state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                let result = state.start_recording(origin);
-                dispatch_outbox(&mut state, event_tx)?;
-                result
-            };
-
-            match result {
-                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                    &request.id,
-                    value,
-                ))),
-                Err(error) => write_response_error(connection, &request.id, error),
-            }
-        }
-        "cancel_recording" => {
-            let result = {
-                let mut state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                let result = state.cancel_recording();
-                dispatch_outbox(&mut state, event_tx)?;
-                result
-            };
-
-            match result {
-                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                    &request.id,
-                    value,
-                ))),
-                Err(error) => write_response_error(connection, &request.id, error),
-            }
-        }
-        "stop_recording" => {
-            let params = request.parse_params::<StopRecordingParams>();
-            let params = match params {
-                Ok(params) => params,
-                Err(error) => return write_response_error(connection, &request.id, error),
-            };
-            let reason = params.reason.unwrap_or(voxa_core::ipc::StopReason::Manual);
-
-            let action = {
-                let mut state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                let action = state.begin_stop_recording(reason);
-                dispatch_outbox(&mut state, event_tx)?;
-                action
-            };
-
-            let result = match action {
-                Ok(StopRecordingAction::Accepted(value)) => Ok(value),
-                Ok(StopRecordingAction::Transcribe(pending)) => {
-                    complete_pending_transcription(shared, event_tx, pending)?
-                }
-                Err(error) => Err(error),
-            };
-
-            match result {
-                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                    &request.id,
-                    value,
-                ))),
-                Err(error) => write_response_error(connection, &request.id, error),
-            }
+            let result = shared.lock()?.state_result();
+            write_response(connection, &request.id, Ok(result))
         }
         "get_config" => {
-            let result = {
-                let state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                state.config_result()
+            let result = shared.lock()?.config_result();
+            write_response(connection, &request.id, Ok(result))
+        }
+        "start_recording" | "stop_recording" | "cancel_recording" => {
+            let command = match request.method.as_str() {
+                "start_recording" => request
+                    .parse_params::<StartRecordingParams>()
+                    .map(|params| {
+                        CaptureCommand::Start(params.origin.unwrap_or(StartOrigin::Manual))
+                    }),
+                "stop_recording" => request.parse_params::<StopRecordingParams>().map(|params| {
+                    CaptureCommand::Stop(
+                        params.reason.unwrap_or(voxa_core::ipc::StopReason::Manual),
+                    )
+                }),
+                _ => Ok(CaptureCommand::Cancel),
             };
-
-            let payload = json_value(result)?;
-            connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                &request.id,
-                payload,
-            )))
+            let command = match command {
+                Ok(command) => command,
+                Err(error) => return write_response_error(connection, &request.id, error),
+            };
+            let action = {
+                let _capture = shared
+                    .capture
+                    .lock()
+                    .map_err(|_| io::Error::other("capture lock poisoned"))?;
+                let action = {
+                    let mut state = shared.lock()?;
+                    let action = state.begin_capture(command);
+                    dispatch_outbox(&mut state, event_tx)?;
+                    action
+                };
+                complete_capture_action(shared, event_tx, action)?
+            };
+            // Stop/cancel ordering is decided before releasing the capture lock.
+            // Transcription runs independently of subsequent capture commands.
+            let result = complete_session_action(shared, event_tx, action)?;
+            write_response(connection, &request.id, result)
         }
         "get_api_key_status" => {
-            let result = {
-                let state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                state.api_key_status()
-            };
-
-            match result {
-                Ok(value) => {
-                    let payload = json_value(value)?;
-                    connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                        &request.id,
-                        payload,
-                    )))
-                }
-                Err(error) => write_response_error(connection, &request.id, error),
-            }
+            let access = shared.lock()?.api_key_access();
+            write_response(connection, &request.id, access.api_key_status())
         }
         "set_api_key" => {
-            let params = request.parse_params::<SetApiKeyParams>();
-            let params = match params {
+            let params = match request.parse_params::<SetApiKeyParams>() {
                 Ok(params) => params,
                 Err(error) => return write_response_error(connection, &request.id, error),
             };
-
-            let result = {
-                let state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                state.set_api_key(params)
-            };
-
-            match result {
-                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                    &request.id,
-                    value,
-                ))),
-                Err(error) => write_response_error(connection, &request.id, error),
-            }
+            let access = shared.lock()?.api_key_access();
+            write_response(connection, &request.id, access.set_api_key(params))
         }
         "set_config" => {
-            let params = request.parse_params::<SetConfigParams>();
-            let params = match params {
+            let params = match request.parse_params::<SetConfigParams>() {
                 Ok(params) => params,
                 Err(error) => return write_response_error(connection, &request.id, error),
             };
-
-            let result = {
-                let mut state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                let result = state.set_config(params);
-                dispatch_outbox(&mut state, event_tx)?;
-                result
-            };
-
-            match result {
-                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                    &request.id,
-                    value,
-                ))),
-                Err(error) => write_response_error(connection, &request.id, error),
-            }
+            let result = shared.lock()?.set_config(params);
+            write_response(connection, &request.id, result)
         }
         "subscribe" => {
-            let params = request.parse_params::<SubscribeParams>();
-            let params = match params {
+            let params = match request.parse_params::<SubscribeParams>() {
                 Ok(params) => params,
                 Err(error) => return write_response_error(connection, &request.id, error),
             };
-
-            {
-                let mut state = shared
-                    .lock()
-                    .map_err(|_| io::Error::other("state poisoned"))?;
-                state.subscribe(connection.clone(), &request.id, params.from_seq)
-            }
+            shared
+                .lock()?
+                .subscribe(connection.clone(), &request.id, params.from_seq)
         }
-        _ => connection.send(ServerEnvelope::Response(ResponseEnvelope::err(
+        _ => write_response_error(
+            connection,
             &request.id,
-            "UNKNOWN_METHOD",
-            "Unknown method",
-        ))),
+            ErrorPayload::new("UNKNOWN_METHOD", "Unknown method"),
+        ),
     }
+}
+
+fn write_response<T: serde::Serialize>(
+    connection: &ConnectionHandle,
+    request_id: &str,
+    result: Result<T, ErrorPayload>,
+) -> io::Result<()> {
+    let result = match result {
+        Ok(value) => Ok(json_value(value)?),
+        Err(error) => Err(error),
+    };
+    connection.send(ServerEnvelope::Response(ResponseEnvelope::from_result(
+        request_id, result,
+    )))
 }
 
 fn write_response_error(
@@ -436,12 +330,39 @@ fn write_response_error(
     request_id: &str,
     error: ErrorPayload,
 ) -> io::Result<()> {
-    connection.send(ServerEnvelope::Response(ResponseEnvelope {
-        id: request_id.to_owned(),
-        ok: false,
-        result: None,
-        error: Some(error),
-    }))
+    write_response::<Value>(connection, request_id, Err(error))
+}
+
+fn complete_capture_action(
+    shared: &ServerState,
+    event_tx: &mpsc::Sender<EventEnvelope>,
+    action: Result<CaptureAction, ErrorPayload>,
+) -> io::Result<Result<SessionAction, ErrorPayload>> {
+    match action {
+        Ok(CaptureAction::Accepted(value)) => Ok(Ok(SessionAction::Accepted(value))),
+        Ok(CaptureAction::Pending(pending)) => {
+            let completed = pending.run();
+            let mut state = shared.lock()?;
+            let result = state.finish_capture(completed);
+            dispatch_outbox(&mut state, event_tx)?;
+            Ok(result)
+        }
+        Err(error) => Ok(Err(error)),
+    }
+}
+
+fn complete_session_action(
+    shared: &ServerState,
+    event_tx: &mpsc::Sender<EventEnvelope>,
+    action: Result<SessionAction, ErrorPayload>,
+) -> io::Result<Result<Value, ErrorPayload>> {
+    match action {
+        Ok(SessionAction::Accepted(value)) => Ok(Ok(value)),
+        Ok(SessionAction::Transcribe(pending)) => {
+            complete_pending_transcription(shared, event_tx, pending)
+        }
+        Err(error) => Ok(Err(error)),
+    }
 }
 
 fn dispatch_outbox(
@@ -457,20 +378,18 @@ fn dispatch_outbox(
 }
 
 fn complete_pending_transcription(
-    shared: &Arc<Mutex<SharedState>>,
+    shared: &ServerState,
     event_tx: &mpsc::Sender<EventEnvelope>,
     pending: PendingTranscription,
 ) -> io::Result<Result<Value, ErrorPayload>> {
     let completed = pending.run();
-    let mut state = shared
-        .lock()
-        .map_err(|_| io::Error::other("state poisoned"))?;
-    let result = state.finish_stop_recording(completed);
+    let mut state = shared.lock()?;
+    let result = state.finish_transcription(completed);
     dispatch_outbox(&mut state, event_tx)?;
     Ok(result)
 }
 
-fn run_event_dispatcher(event_rx: mpsc::Receiver<EventEnvelope>, shared: Arc<Mutex<SharedState>>) {
+fn run_event_dispatcher(event_rx: mpsc::Receiver<EventEnvelope>, shared: Arc<ServerState>) {
     while let Ok(event) = event_rx.recv() {
         let mut state = match shared.lock() {
             Ok(state) => state,
@@ -483,30 +402,44 @@ fn run_event_dispatcher(event_rx: mpsc::Receiver<EventEnvelope>, shared: Arc<Mut
 
 fn run_max_duration_watchdog(
     running: Arc<AtomicBool>,
-    shared: Arc<Mutex<SharedState>>,
+    shared: Arc<ServerState>,
     event_tx: mpsc::Sender<EventEnvelope>,
 ) {
     while running.load(Ordering::SeqCst) {
-        let pending = {
-            let mut state = match shared.lock() {
-                Ok(state) => state,
-                Err(_) => return,
-            };
-            let pending = state.begin_max_duration_stop_if_needed();
-            state.emit_audio_level_if_needed();
-            if dispatch_outbox(&mut state, &event_tx).is_err() {
-                return;
-            }
-            pending
-        };
-
-        if let Ok(Some(pending)) = pending {
-            if complete_pending_transcription(&shared, &event_tx, pending).is_err() {
-                return;
-            }
+        if watchdog_tick(&shared, &event_tx).is_err() {
+            return;
         }
         thread::sleep(MAX_DURATION_POLL_INTERVAL);
     }
+}
+
+fn watchdog_tick(shared: &ServerState, event_tx: &mpsc::Sender<EventEnvelope>) -> io::Result<()> {
+    let action = {
+        let _capture = match shared.capture.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => return Ok(()),
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(io::Error::other("capture lock poisoned"));
+            }
+        };
+        let pending = {
+            let mut state = shared.lock()?;
+            state.poll_capture_error();
+            let pending = state.begin_max_duration_stop_if_needed();
+            state.emit_audio_level_if_needed();
+            dispatch_outbox(&mut state, event_tx)?;
+            pending
+        };
+        match pending {
+            Ok(Some(pending)) => {
+                complete_capture_action(shared, event_tx, Ok(CaptureAction::Pending(pending)))?
+            }
+            // Capture failures already emitted a state_changed event.
+            Ok(None) | Err(_) => return Ok(()),
+        }
+    };
+    let _ = complete_session_action(shared, event_tx, action)?;
+    Ok(())
 }
 
 fn json_value<T: serde::Serialize>(value: T) -> io::Result<Value> {

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 use voxa_core::app::SessionRuntime;
-use voxa_core::infra::{InfraError, OutputResult, OutputSink, Recorder, Transcriber};
+use voxa_core::infra::{InfraError, Recorder, Transcriber};
 use voxa_core::ipc::ServerEnvelope;
 
 use super::{
@@ -293,7 +293,6 @@ fn cancel_recording_discards_audio_and_allows_another_recording() {
     assert!(!probe.recording.load(Ordering::SeqCst));
     assert_eq!(probe.stops.load(Ordering::SeqCst), 1);
     assert_eq!(probe.transcriptions.load(Ordering::SeqCst), 0);
-    assert_eq!(probe.outputs.load(Ordering::SeqCst), 0);
 
     let mut saw_cancelled = false;
     loop {
@@ -380,7 +379,6 @@ fn cancel_recording_does_not_interrupt_inflight_transcription() {
             started_tx,
             release_rx,
         }),
-        Box::new(TestOutput),
     );
     let (running, handle) = start_server_with_runtime(path.clone(), runtime);
     wait_for_socket(&path);
@@ -459,7 +457,6 @@ fn cancel_recording_reports_capture_failure_without_transcription() {
     assert_eq!(state["state"], "error");
     assert!(state["session"].is_null());
     assert_eq!(probe.transcriptions.load(Ordering::SeqCst), 0);
-    assert_eq!(probe.outputs.load(Ordering::SeqCst), 0);
     stop_server(&path, running, handle);
 }
 
@@ -474,7 +471,6 @@ fn daemon_remains_responsive_and_dispatches_events_while_transcribing() {
             started_tx,
             release_rx,
         }),
-        Box::new(TestOutput),
     );
     let (running, handle) = start_server_with_runtime(path.clone(), runtime);
     wait_for_socket(&path);
@@ -664,7 +660,7 @@ fn non_runtime_config_change_preserves_injected_runtime() {
         &mut reader,
         "1",
         "set_config",
-        json!({"max_recording_seconds":120}),
+        json!({"max_recording_seconds":120, "output_mode":"none"}),
     );
     let _ = send_request(
         &mut stream,
@@ -1245,7 +1241,6 @@ struct CancellationProbe {
     recording: AtomicBool,
     stops: AtomicUsize,
     transcriptions: AtomicUsize,
-    outputs: AtomicUsize,
 }
 
 struct CancellationProbeRecorder {
@@ -1279,18 +1274,6 @@ impl Transcriber for CancellationProbeTranscriber {
     }
 }
 
-struct CancellationProbeOutput(Arc<CancellationProbe>);
-
-impl OutputSink for CancellationProbeOutput {
-    fn output(&mut self, _text: &str) -> Result<OutputResult, InfraError> {
-        self.0.outputs.fetch_add(1, Ordering::SeqCst);
-        Ok(OutputResult {
-            clipboard: true,
-            autopaste: false,
-        })
-    }
-}
-
 fn cancellation_probe_runtime(probe: &Arc<CancellationProbe>, fail_stop: bool) -> SessionRuntime {
     SessionRuntime::new(
         Box::new(CancellationProbeRecorder {
@@ -1298,7 +1281,6 @@ fn cancellation_probe_runtime(probe: &Arc<CancellationProbe>, fail_stop: bool) -
             fail_stop,
         }),
         Box::new(CancellationProbeTranscriber(Arc::clone(probe))),
-        Box::new(CancellationProbeOutput(Arc::clone(probe))),
     )
 }
 
@@ -1368,17 +1350,6 @@ impl Transcriber for EmptyTranscriber {
     }
 }
 
-struct TestOutput;
-
-impl OutputSink for TestOutput {
-    fn output(&mut self, _text: &str) -> Result<OutputResult, InfraError> {
-        Ok(OutputResult {
-            clipboard: true,
-            autopaste: false,
-        })
-    }
-}
-
 struct FixedTranscriber {
     text: String,
 }
@@ -1395,24 +1366,15 @@ fn runtime_with_fixed_transcript(text: &str) -> SessionRuntime {
         Box::new(FixedTranscriber {
             text: text.to_owned(),
         }),
-        Box::new(TestOutput),
     )
 }
 
 fn runtime_with_transcription_failure() -> SessionRuntime {
-    SessionRuntime::new(
-        Box::new(TestRecorder),
-        Box::new(FailingTranscriber),
-        Box::new(TestOutput),
-    )
+    SessionRuntime::new(Box::new(TestRecorder), Box::new(FailingTranscriber))
 }
 
 fn runtime_with_empty_transcript() -> SessionRuntime {
-    SessionRuntime::new(
-        Box::new(TestRecorder),
-        Box::new(EmptyTranscriber),
-        Box::new(TestOutput),
-    )
+    SessionRuntime::new(Box::new(TestRecorder), Box::new(EmptyTranscriber))
 }
 
 fn runtime_with_fixed_audio_level() -> SessionRuntime {
@@ -1421,7 +1383,6 @@ fn runtime_with_fixed_audio_level() -> SessionRuntime {
         Box::new(FixedTranscriber {
             text: "hello".to_owned(),
         }),
-        Box::new(TestOutput),
     )
 }
 
@@ -1699,4 +1660,443 @@ fn api_key_store_survives_daemon_restart_with_shared_store() {
     assert_eq!(status["hint"], "sk-persist...");
 
     stop_server(&path, running_second, handle_second);
+}
+
+#[test]
+fn socket_cleanup_preserves_regular_file() {
+    let path = temp_socket_path("regular-file");
+    std::fs::write(&path, b"must be preserved").unwrap();
+    let result = super::socket::ensure_socket_available(&path);
+    let preserved = path.exists();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        result.is_err() && preserved,
+        "result={result:?}, preserved={preserved}"
+    );
+}
+
+#[test]
+fn socket_permissions_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let path = temp_socket_path("permissions");
+    let (running, handle) = start_server(path.clone());
+    wait_for_socket(&path);
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    stop_server(&path, running, handle);
+    assert_eq!(mode & 0o077, 0, "socket mode={mode:o}");
+}
+
+#[test]
+fn repeated_subscribe_does_not_duplicate_events() {
+    let path = temp_socket_path("repeat-subscribe");
+    let (running, handle) = start_server(path.clone());
+    wait_for_socket(&path);
+    let (mut subscriber, mut events) = connect_and_handshake(&path);
+    send_request(&mut subscriber, &mut events, "s1", "subscribe", json!({}));
+    send_request(&mut subscriber, &mut events, "s2", "subscribe", json!({}));
+    let (mut control, mut responses) = connect_and_handshake(&path);
+    send_request(
+        &mut control,
+        &mut responses,
+        "start",
+        "start_recording",
+        json!({}),
+    );
+    let first = read_server_envelope(&mut events);
+    let second = read_server_envelope(&mut events);
+    stop_server(&path, running, handle);
+    match (first, second) {
+        (ServerEnvelope::Event(a), ServerEnvelope::Event(b)) => {
+            assert!(a.seq < b.seq, "sequences: {}, {}", a.seq, b.seq)
+        }
+        other => panic!("unexpected messages: {other:?}"),
+    }
+}
+
+#[test]
+fn malformed_subscriber_connection_is_closed() {
+    let path = temp_socket_path("subscriber-close");
+    let (running, handle) = start_server(path.clone());
+    wait_for_socket(&path);
+    let (mut subscriber, mut events) = connect_and_handshake(&path);
+    send_request(&mut subscriber, &mut events, "s1", "subscribe", json!({}));
+    events
+        .get_mut()
+        .set_read_timeout(Some(Duration::from_millis(150)))
+        .unwrap();
+    subscriber.write_all(b"not json\n").unwrap();
+    let error = read_server_envelope(&mut events);
+    assert!(matches!(error, ServerEnvelope::Response(response) if !response.ok));
+    let result = events.read_line(&mut String::new());
+    stop_server(&path, running, handle);
+    assert!(matches!(result, Ok(0)), "expected EOF, got {result:?}");
+}
+
+struct GatedRecorder {
+    operation: &'static str,
+    entered: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+    finishes: Arc<AtomicUsize>,
+}
+
+impl GatedRecorder {
+    fn wait_for(&self, operation: &str) {
+        if self.operation == operation {
+            self.entered.send(()).unwrap();
+            self.release.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+    }
+}
+
+impl Recorder for GatedRecorder {
+    fn start(&mut self) -> Result<(), InfraError> {
+        self.wait_for("start_recording");
+        Ok(())
+    }
+    fn stop(&mut self) -> Result<Vec<u8>, InfraError> {
+        self.finishes.fetch_add(1, Ordering::SeqCst);
+        self.wait_for("stop_recording");
+        Ok(vec![1])
+    }
+    fn cancel(&mut self) -> Result<(), InfraError> {
+        self.finishes.fetch_add(1, Ordering::SeqCst);
+        self.wait_for("cancel_recording");
+        Ok(())
+    }
+}
+
+#[test]
+fn capture_commands_keep_health_and_state_responsive() {
+    for operation in ["start_recording", "stop_recording", "cancel_recording"] {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let runtime = SessionRuntime::new(
+            Box::new(GatedRecorder {
+                operation,
+                entered: entered_tx,
+                release: release_rx,
+                finishes: Arc::new(AtomicUsize::new(0)),
+            }),
+            Box::new(FixedTranscriber {
+                text: "test".into(),
+            }),
+        );
+        let path = temp_socket_path("capture-health");
+        let (running, handle) = start_server_with_runtime(path.clone(), runtime);
+        wait_for_socket(&path);
+        let (mut control, mut responses) = connect_and_handshake(&path);
+        let (mut observer, mut observations) = connect_and_handshake(&path);
+        if operation != "start_recording" {
+            send_request(
+                &mut control,
+                &mut responses,
+                "start",
+                "start_recording",
+                json!({}),
+            );
+        }
+        send_json(
+            &mut control,
+            json!({"type":"request", "id":"capture", "method":operation, "params":{}}),
+        );
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        observations
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        let mut observed = Vec::new();
+        for method in ["health", "get_state"] {
+            send_json(
+                &mut observer,
+                json!({"type":"request", "id":method, "method":method, "params":{}}),
+            );
+            let mut line = String::new();
+            let result = observations.read_line(&mut line);
+            observed.push((method, result, line));
+        }
+        release_tx.send(()).unwrap();
+        let response = read_server_envelope(&mut responses);
+        stop_server(&path, running, handle);
+        assert!(matches!(response, ServerEnvelope::Response(response) if response.ok));
+        for (method, result, line) in observed {
+            assert!(
+                matches!(result, Ok(n) if n > 0),
+                "{operation} blocked {method}: {result:?}"
+            );
+            let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(response["ok"], true);
+            assert_eq!(response["id"], method);
+        }
+    }
+}
+
+#[test]
+fn concurrent_stop_and_cancel_finish_capture_exactly_once() {
+    for first in ["stop_recording", "cancel_recording"] {
+        let second = if first == "stop_recording" {
+            "cancel_recording"
+        } else {
+            "stop_recording"
+        };
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let finishes = Arc::new(AtomicUsize::new(0));
+        let runtime = SessionRuntime::new(
+            Box::new(GatedRecorder {
+                operation: first,
+                entered: entered_tx,
+                release: release_rx,
+                finishes: Arc::clone(&finishes),
+            }),
+            Box::new(FixedTranscriber {
+                text: "transcript".into(),
+            }),
+        );
+        let path = temp_socket_path("stop-cancel-race");
+        let (running, handle) = start_server_with_runtime(path.clone(), runtime);
+        wait_for_socket(&path);
+        let (mut a, mut a_responses) = connect_and_handshake(&path);
+        let (mut b, mut b_responses) = connect_and_handshake(&path);
+        send_request(
+            &mut a,
+            &mut a_responses,
+            "start",
+            "start_recording",
+            json!({}),
+        );
+        send_json(
+            &mut a,
+            json!({"type":"request", "id":"first", "method":first, "params":{}}),
+        );
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        send_json(
+            &mut b,
+            json!({"type":"request", "id":"second", "method":second, "params":{}}),
+        );
+        b_responses
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let waiting = b_responses.read_line(&mut String::new());
+        release_tx.send(()).unwrap();
+        b_responses
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let first_response = read_server_envelope(&mut a_responses);
+        let second_response = read_server_envelope(&mut b_responses);
+        stop_server(&path, running, handle);
+        assert!(
+            waiting.is_err(),
+            "second capture operation must wait for the first"
+        );
+        assert_eq!(finishes.load(Ordering::SeqCst), 1);
+        let ServerEnvelope::Response(a) = first_response else {
+            panic!("expected response")
+        };
+        let ServerEnvelope::Response(b) = second_response else {
+            panic!("expected response")
+        };
+        assert!(a.ok && b.ok);
+        if first == "stop_recording" {
+            assert_eq!(a.result.unwrap()["text"], "transcript");
+            assert_eq!(
+                b.result.unwrap(),
+                json!({"accepted":true, "cancelled":false})
+            );
+        } else {
+            assert_eq!(
+                a.result.unwrap(),
+                json!({"accepted":true, "cancelled":true})
+            );
+            assert_eq!(b.result.unwrap(), json!({"accepted":true}));
+        }
+    }
+}
+
+#[test]
+fn keychain_operations_do_not_block_health() {
+    struct BlockingKeys {
+        entered: mpsc::Sender<()>,
+        release: std::sync::Mutex<mpsc::Receiver<()>>,
+    }
+    impl crate::secrets::ApiKeyStore for BlockingKeys {
+        fn get_api_key(&self) -> std::io::Result<Option<String>> {
+            self.entered.send(()).unwrap();
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap();
+            Ok(None)
+        }
+        fn set_api_key(&self, _: &str) -> std::io::Result<()> {
+            self.get_api_key().map(|_| ())
+        }
+    }
+    for method in ["get_api_key_status", "set_api_key"] {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let state = super::state::SharedState::with_runtime_and_api_keys(
+            SessionRuntime::default(),
+            Arc::new(BlockingKeys {
+                entered: entered_tx,
+                release: std::sync::Mutex::new(release_rx),
+            }),
+        );
+        let path = temp_socket_path("keychain-health");
+        let running = Arc::new(AtomicBool::new(true));
+        let server_running = Arc::clone(&running);
+        let server_path = path.clone();
+        let handle =
+            thread::spawn(move || super::run_with_state(server_path, server_running, state));
+        wait_for_socket(&path);
+        let (mut control, mut responses) = connect_and_handshake(&path);
+        let (mut health, mut health_responses) = connect_and_handshake(&path);
+        send_json(
+            &mut control,
+            json!({"type":"request", "id":"keys", "method":method, "params":{"api_key":"test-key"}}),
+        );
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        health_responses
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        send_json(
+            &mut health,
+            json!({"type":"request", "id":"health", "method":"health", "params":{}}),
+        );
+        let mut line = String::new();
+        let result = health_responses.read_line(&mut line);
+        release_tx.send(()).unwrap();
+        let response = read_server_envelope(&mut responses);
+        stop_server(&path, running, handle);
+        assert!(matches!(response, ServerEnvelope::Response(response) if response.ok));
+        assert!(
+            matches!(result, Ok(n) if n > 0),
+            "{method} blocked health: {result:?}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&line).unwrap()["result"]["status"],
+            "ok"
+        );
+    }
+}
+
+#[test]
+fn capture_failure_is_published_without_stop_and_allows_restart() {
+    struct FailingCapture {
+        fail: Arc<AtomicBool>,
+    }
+    impl Recorder for FailingCapture {
+        fn start(&mut self) -> Result<(), InfraError> {
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<Vec<u8>, InfraError> {
+            Ok(vec![1])
+        }
+        fn poll_error(&mut self) -> Option<InfraError> {
+            self.fail
+                .swap(false, Ordering::SeqCst)
+                .then_some(InfraError::AudioCaptureFailed)
+        }
+    }
+    let fail = Arc::new(AtomicBool::new(false));
+    let runtime = SessionRuntime::new(
+        Box::new(FailingCapture {
+            fail: Arc::clone(&fail),
+        }),
+        Box::new(FixedTranscriber { text: "ok".into() }),
+    );
+    let path = temp_socket_path("capture-failure");
+    let (running, handle) = start_server_with_runtime(path.clone(), runtime);
+    wait_for_socket(&path);
+    let (mut subscriber, mut events) = connect_and_handshake(&path);
+    send_request(&mut subscriber, &mut events, "sub", "subscribe", json!({}));
+    let (mut control, mut responses) = connect_and_handshake(&path);
+    send_request(
+        &mut control,
+        &mut responses,
+        "start",
+        "start_recording",
+        json!({}),
+    );
+    fail.store(true, Ordering::SeqCst);
+    loop {
+        let ServerEnvelope::Event(event) = read_server_envelope(&mut events) else {
+            panic!("expected event")
+        };
+        assert_ne!(event.name, "transcription_ready");
+        if event.name == "state_changed" && event.data["state"] == "error" {
+            assert_eq!(event.data["last_error"], "AUDIO_CAPTURE_FAILED");
+            assert!(event.data["session"].is_null());
+            break;
+        }
+    }
+    send_request(
+        &mut control,
+        &mut responses,
+        "restart",
+        "start_recording",
+        json!({}),
+    );
+    let result = send_request(
+        &mut control,
+        &mut responses,
+        "stop",
+        "stop_recording",
+        json!({}),
+    );
+    assert_eq!(result["text"], "ok");
+    stop_server(&path, running, handle);
+}
+
+#[test]
+fn microphone_initialization_failure_never_emits_recording_started() {
+    struct StartupFailure;
+    impl Recorder for StartupFailure {
+        fn start(&mut self) -> Result<(), InfraError> {
+            Err(InfraError::AudioCaptureFailed)
+        }
+        fn stop(&mut self) -> Result<Vec<u8>, InfraError> {
+            panic!("failed startup must not be stopped")
+        }
+    }
+    let runtime = SessionRuntime::new(
+        Box::new(StartupFailure),
+        Box::new(FixedTranscriber {
+            text: "unused".into(),
+        }),
+    );
+    let path = temp_socket_path("startup-failure");
+    let (running, handle) = start_server_with_runtime(path.clone(), runtime);
+    wait_for_socket(&path);
+    let (mut subscriber, mut events) = connect_and_handshake(&path);
+    send_request(&mut subscriber, &mut events, "sub", "subscribe", json!({}));
+    let (mut control, mut responses) = connect_and_handshake(&path);
+    assert_eq!(
+        send_request_expect_error(
+            &mut control,
+            &mut responses,
+            "start",
+            "start_recording",
+            json!({})
+        ),
+        "AUDIO_CAPTURE_FAILED"
+    );
+    let ServerEnvelope::Event(event) = read_server_envelope(&mut events) else {
+        panic!("expected failure event")
+    };
+    assert_eq!(event.name, "state_changed");
+    assert_eq!(event.data["state"], "error");
+    let state = send_request(
+        &mut control,
+        &mut responses,
+        "state",
+        "get_state",
+        json!({}),
+    );
+    assert_eq!(state["event_seq"], event.seq);
+    assert_eq!(state["last_error"], "AUDIO_CAPTURE_FAILED");
+    stop_server(&path, running, handle);
 }

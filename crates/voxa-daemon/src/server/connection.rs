@@ -13,20 +13,26 @@ pub(super) const OUTBOUND_QUEUE_CAPACITY: usize = 64;
 
 #[derive(Clone)]
 pub(super) struct ConnectionHandle {
-    tx: mpsc::SyncSender<ServerEnvelope>,
+    tx: mpsc::SyncSender<OutboundMessage>,
     shutdown_stream: Arc<UnixStream>,
+}
+
+enum OutboundMessage {
+    Envelope(ServerEnvelope),
+    Close,
 }
 
 impl ConnectionHandle {
     pub(super) fn new(mut stream: UnixStream) -> io::Result<Self> {
         let shutdown_stream = Arc::new(stream.try_clone()?);
-        let (tx, rx) = mpsc::sync_channel::<ServerEnvelope>(OUTBOUND_QUEUE_CAPACITY);
+        let (tx, rx) = mpsc::sync_channel::<OutboundMessage>(OUTBOUND_QUEUE_CAPACITY);
         thread::spawn(move || {
-            while let Ok(envelope) = rx.recv() {
+            while let Ok(OutboundMessage::Envelope(envelope)) = rx.recv() {
                 if write_envelope(&mut stream, &envelope).is_err() {
                     break;
                 }
             }
+            let _ = stream.shutdown(Shutdown::Both);
         });
 
         Ok(Self {
@@ -36,7 +42,20 @@ impl ConnectionHandle {
     }
 
     pub(super) fn send(&self, envelope: ServerEnvelope) -> io::Result<()> {
-        self.tx.try_send(envelope).map_err(map_queue_send_error)
+        self.tx
+            .try_send(OutboundMessage::Envelope(envelope))
+            .map_err(map_queue_send_error)
+    }
+
+    pub(super) fn same_connection(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shutdown_stream, &other.shutdown_stream)
+    }
+
+    /// Let the writer flush queued responses before shutting down the socket.
+    pub(super) fn close(&self) {
+        if self.tx.try_send(OutboundMessage::Close).is_err() {
+            self.disconnect();
+        }
     }
 
     pub(super) fn disconnect(&self) {
@@ -44,7 +63,7 @@ impl ConnectionHandle {
     }
 }
 
-fn map_queue_send_error(error: mpsc::TrySendError<ServerEnvelope>) -> io::Error {
+fn map_queue_send_error<T>(error: mpsc::TrySendError<T>) -> io::Error {
     match error {
         mpsc::TrySendError::Full(_) => io::Error::new(
             io::ErrorKind::WouldBlock,

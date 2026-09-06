@@ -6,27 +6,24 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use reqwest::blocking::{Client, multipart};
 use serde::Deserialize;
-use voxa_core::infra::{InfraError, NullOutputSink, Recorder, Transcriber};
+use voxa_core::infra::{InfraError, Recorder, Transcriber};
 
 use crate::secrets::{ApiKeyStore, build_api_key_store};
+
+#[cfg(test)]
+#[path = "adapter_baseline.rs"]
+mod baseline;
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const TRANSCRIPTIONS_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const REQUEST_TIMEOUT_SECS: u64 = 60;
 const RECORDER_STOP_TIMEOUT_SECS: u64 = 10;
+const RECORDER_START_TIMEOUT: Duration = Duration::from_secs(2);
 
-pub(crate) fn build_runtime_for_output_mode(
-    _output_mode: &str,
-    model: &str,
-    api_key_source: &str,
-) -> voxa_core::app::SessionRuntime {
+pub(crate) fn build_runtime(model: &str, api_key_source: &str) -> voxa_core::app::SessionRuntime {
     let transcriber = build_transcriber(model, api_key_source);
 
-    voxa_core::app::SessionRuntime::new(
-        Box::new(MicRecorder::default()),
-        transcriber,
-        Box::new(NullOutputSink),
-    )
+    voxa_core::app::SessionRuntime::new(Box::new(MicRecorder::default()), transcriber)
 }
 
 #[derive(Default)]
@@ -50,35 +47,18 @@ enum RecordingDisposition {
 
 impl Recorder for MicRecorder {
     fn start(&mut self) -> Result<(), InfraError> {
-        if self.active.is_some() {
-            return Ok(());
-        }
+        self.start_with_capture(record_until_stop, RECORDER_START_TIMEOUT)
+    }
 
-        if let Some(worker) = self.stalled_worker.take() {
-            if worker.is_finished() {
-                let _ = worker.join();
-            } else {
-                self.stalled_worker = Some(worker);
-                return Err(InfraError::AudioCaptureFailed);
-            }
-        }
-
-        let (stop_tx, stop_rx) = mpsc::channel::<RecordingDisposition>();
-        let (result_tx, result_rx) = mpsc::channel::<Result<Vec<u8>, InfraError>>();
-        let level = Arc::new(Mutex::new(0.0_f32));
-        let level_for_worker = Arc::clone(&level);
-        let worker = thread::spawn(move || {
-            let result = record_until_stop(stop_rx, level_for_worker);
-            let _ = result_tx.send(result);
-        });
-
-        self.active = Some(ActiveRecording {
-            stop_tx,
-            result_rx,
-            worker,
-            level,
-        });
-        Ok(())
+    fn poll_error(&mut self) -> Option<InfraError> {
+        let active = self.active.as_ref()?;
+        let error = match active.result_rx.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Ok(Err(error)) => error,
+            Ok(Ok(_)) | Err(mpsc::TryRecvError::Disconnected) => InfraError::AudioCaptureFailed,
+        };
+        self.retire_active();
+        Some(error)
     }
 
     fn stop(&mut self) -> Result<Vec<u8>, InfraError> {
@@ -96,6 +76,70 @@ impl Recorder for MicRecorder {
 }
 
 impl MicRecorder {
+    fn start_with_capture<F>(&mut self, capture: F, timeout: Duration) -> Result<(), InfraError>
+    where
+        F: FnOnce(
+                mpsc::Receiver<RecordingDisposition>,
+                Arc<Mutex<f32>>,
+                mpsc::Sender<Result<(), InfraError>>,
+            ) -> Result<Vec<u8>, InfraError>
+            + Send
+            + 'static,
+    {
+        if self.active.is_some() {
+            return self.poll_error().map_or(Ok(()), Err);
+        }
+        if let Some(worker) = self.stalled_worker.take() {
+            if worker.is_finished() {
+                let _ = worker.join();
+            } else {
+                self.stalled_worker = Some(worker);
+                return Err(InfraError::AudioCaptureFailed);
+            }
+        }
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let level = Arc::new(Mutex::new(0.0));
+        let worker_level = Arc::clone(&level);
+        let worker = thread::spawn(move || {
+            let result = capture(stop_rx, worker_level, ready_tx.clone());
+            // If initialization failed before readiness, wake the start request.
+            let error = result
+                .as_ref()
+                .err()
+                .cloned()
+                .unwrap_or(InfraError::AudioCaptureFailed);
+            let _ = ready_tx.send(Err(error));
+            let _ = result_tx.send(result);
+        });
+        self.active = Some(ActiveRecording {
+            stop_tx,
+            result_rx,
+            worker,
+            level,
+        });
+        let result = ready_rx
+            .recv_timeout(timeout)
+            .unwrap_or(Err(InfraError::AudioCaptureFailed));
+        if result.is_err() {
+            self.retire_active();
+        }
+        result
+    }
+
+    fn retire_active(&mut self) {
+        if let Some(active) = self.active.take() {
+            let _ = active.stop_tx.send(RecordingDisposition::Discard);
+            if active.worker.is_finished() {
+                let _ = active.worker.join();
+            } else {
+                // Never wait under SharedState or allow overlapping capture.
+                self.stalled_worker = Some(active.worker);
+            }
+        }
+    }
+
     fn finish(&mut self, disposition: RecordingDisposition) -> Result<Vec<u8>, InfraError> {
         let active = self.active.take().ok_or(InfraError::AudioCaptureFailed)?;
         let ActiveRecording {
@@ -130,6 +174,7 @@ impl MicRecorder {
 fn record_until_stop(
     stop_rx: mpsc::Receiver<RecordingDisposition>,
     level: Arc<Mutex<f32>>,
+    ready_tx: mpsc::Sender<Result<(), InfraError>>,
 ) -> Result<Vec<u8>, InfraError> {
     let host = cpal::default_host();
     let device = host
@@ -156,6 +201,12 @@ fn record_until_stop(
     )?;
 
     stream.play().map_err(|_| InfraError::AudioCaptureFailed)?;
+    if let Some(error) = take_callback_error(&callback_error)? {
+        return Err(error);
+    }
+    ready_tx
+        .send(Ok(()))
+        .map_err(|_| InfraError::AudioCaptureFailed)?;
 
     let disposition = loop {
         if let Some(err) = take_callback_error(&callback_error)? {
@@ -460,14 +511,14 @@ struct TranscriptionResponse {
 struct OpenAiTranscriber {
     client: Client,
     model: String,
-    api_keys: Box<dyn ApiKeyStore>,
+    api_keys: Arc<dyn ApiKeyStore>,
     url: String,
 }
 
 impl OpenAiTranscriber {
     fn new(
         model: &str,
-        api_keys: Box<dyn ApiKeyStore>,
+        api_keys: Arc<dyn ApiKeyStore>,
         url: String,
     ) -> Result<Self, reqwest::Error> {
         Ok(Self {
@@ -546,6 +597,124 @@ mod tests {
     const WAV_HEADER_SIZE: usize = 44;
 
     #[test]
+    fn microphone_start_waits_for_capture_readiness() {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let starter = thread::spawn(move || {
+            let mut recorder = MicRecorder::default();
+            let result = recorder.start_with_capture(
+                move |stop, _, ready| {
+                    entered_tx.send(()).unwrap();
+                    ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                    ready.send(Ok(())).unwrap();
+                    assert_eq!(
+                        stop.recv_timeout(Duration::from_secs(2)).unwrap(),
+                        RecordingDisposition::Discard
+                    );
+                    Ok(Vec::new())
+                },
+                Duration::from_secs(2),
+            );
+            started_tx.send((recorder, result)).unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            started_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        ready_tx.send(()).unwrap();
+        let (mut recorder, result) = started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(result, Ok(()));
+        assert_eq!(recorder.cancel(), Ok(()));
+        starter.join().unwrap();
+    }
+
+    #[test]
+    fn microphone_start_reports_initialization_failure() {
+        let mut recorder = MicRecorder::default();
+        let result = recorder.start_with_capture(
+            |_, _, _| Err(InfraError::AudioCaptureFailed),
+            Duration::from_secs(1),
+        );
+        assert_eq!(result, Err(InfraError::AudioCaptureFailed));
+        assert!(recorder.active.is_none());
+    }
+
+    #[test]
+    fn microphone_start_timeout_prevents_overlapping_capture_and_recovers() {
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut recorder = MicRecorder::default();
+        let result = recorder.start_with_capture(
+            move |stop, _, ready| {
+                release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                assert!(ready.send(Ok(())).is_err());
+                assert_eq!(stop.recv().unwrap(), RecordingDisposition::Discard);
+                Ok(Vec::new())
+            },
+            Duration::from_millis(20),
+        );
+        assert_eq!(result, Err(InfraError::AudioCaptureFailed));
+        assert!(recorder.active.is_none());
+        assert_eq!(
+            recorder.start_with_capture(
+                |_, _, _| panic!("must not overlap capture"),
+                Duration::from_secs(1)
+            ),
+            Err(InfraError::AudioCaptureFailed)
+        );
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !recorder.stalled_worker.as_ref().unwrap().is_finished() {
+            assert!(std::time::Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            recorder.start_with_capture(
+                |stop, _, ready| {
+                    ready.send(Ok(())).unwrap();
+                    stop.recv_timeout(Duration::from_secs(2)).unwrap();
+                    Ok(Vec::new())
+                },
+                Duration::from_secs(1)
+            ),
+            Ok(())
+        );
+        assert_eq!(recorder.cancel(), Ok(()));
+        assert!(recorder.stalled_worker.is_none());
+    }
+
+    #[test]
+    fn microphone_reports_worker_failure_without_a_stop_request() {
+        let (fail_tx, fail_rx) = mpsc::channel();
+        let mut recorder = MicRecorder::default();
+        recorder
+            .start_with_capture(
+                move |_, _, ready| {
+                    ready.send(Ok(())).unwrap();
+                    fail_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                    Err(InfraError::AudioCaptureFailed)
+                },
+                Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(recorder.poll_error(), None);
+        fail_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(error) = recorder.poll_error() {
+                assert_eq!(error, InfraError::AudioCaptureFailed);
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(recorder.active.is_none());
+        assert_eq!(recorder.current_level(), None);
+        assert_eq!(recorder.poll_error(), None);
+    }
+
+    #[test]
     fn microphone_stop_and_cancel_send_distinct_commands_and_release_capture() {
         for disposition in [
             RecordingDisposition::Transcribe,
@@ -615,7 +784,7 @@ mod tests {
                 .build()
                 .expect("client should build"),
             model: "gpt-transcribe".to_owned(),
-            api_keys: Box::new(FixedApiKeyStore {
+            api_keys: Arc::new(FixedApiKeyStore {
                 value: api_key.map(|value| value.to_owned()),
             }),
             url,

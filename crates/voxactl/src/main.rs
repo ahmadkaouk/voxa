@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::env;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
@@ -33,7 +33,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let socket_path = socket_path().map_err(|err| err.to_string())?;
+    let socket_path = voxa_core::ipc::default_socket_path().map_err(|err| err.to_string())?;
     let mut client = IpcClient::connect(&socket_path).map_err(|err| err.to_string())?;
 
     match command.as_str() {
@@ -149,18 +149,6 @@ fn print_usage() {
     println!("  VOXA_SOCKET   Override daemon socket path");
 }
 
-fn socket_path() -> io::Result<PathBuf> {
-    if let Some(path) = env::var_os("VOXA_SOCKET") {
-        return Ok(PathBuf::from(path));
-    }
-
-    let home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| io::Error::other("HOME is not set"))?;
-
-    Ok(home.join("Library/Application Support/voxa/run/daemon.sock"))
-}
-
 fn request_timeout_for_method(method: &str) -> Duration {
     match method {
         "stop_recording" => Duration::from_secs(STOP_RECORDING_REQUEST_TIMEOUT_SECS),
@@ -224,10 +212,11 @@ struct IpcClient {
     reader: BufReader<UnixStream>,
     next_id: u64,
     pending: VecDeque<ServerEnvelope>,
+    frame: Vec<u8>,
 }
 
 impl IpcClient {
-    fn connect(socket_path: &PathBuf) -> io::Result<Self> {
+    fn connect(socket_path: &Path) -> io::Result<Self> {
         let mut stream = UnixStream::connect(socket_path)?;
         stream.set_read_timeout(Some(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)))?;
 
@@ -240,13 +229,15 @@ impl IpcClient {
         });
         write_envelope(&mut stream, &hello)?;
 
-        let response = read_server_envelope(&mut reader)?;
+        let mut frame = Vec::new();
+        let response = read_server_envelope(&mut reader, &mut frame)?;
         match response {
             ServerEnvelope::HelloOk { .. } => Ok(Self {
                 stream,
                 reader,
                 next_id: 1,
                 pending: VecDeque::new(),
+                frame,
             }),
             ServerEnvelope::HelloError { error } => Err(io::Error::other(format!(
                 "hello failed: {} ({})",
@@ -314,7 +305,7 @@ impl IpcClient {
         }
 
         loop {
-            match read_server_envelope(&mut self.reader) {
+            match read_server_envelope(&mut self.reader, &mut self.frame) {
                 Ok(envelope) => return Ok(envelope),
                 Err(error)
                     if matches!(
@@ -330,7 +321,7 @@ impl IpcClient {
     }
 
     fn read_from_socket(&mut self) -> Result<ServerEnvelope, String> {
-        read_server_envelope(&mut self.reader).map_err(|err| err.to_string())
+        read_server_envelope(&mut self.reader, &mut self.frame).map_err(|err| err.to_string())
     }
 }
 
@@ -342,18 +333,23 @@ fn write_envelope(stream: &mut UnixStream, envelope: &ClientEnvelope) -> io::Res
     stream.flush()
 }
 
-fn read_server_envelope(reader: &mut BufReader<UnixStream>) -> io::Result<ServerEnvelope> {
-    let mut line = String::new();
-    let bytes = reader.read_line(&mut line)?;
-    if bytes == 0 {
+fn read_server_envelope(
+    reader: &mut BufReader<UnixStream>,
+    frame: &mut Vec<u8>,
+) -> io::Result<ServerEnvelope> {
+    // read_until retains bytes on timeout, including an incomplete UTF-8 code point.
+    let bytes = reader.read_until(b'\n', frame)?;
+    if bytes == 0 || !frame.ends_with(b"\n") {
+        frame.clear();
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "daemon closed connection",
         ));
     }
-
-    serde_json::from_str(line.trim())
-        .map_err(|_| io::Error::other("failed to decode daemon response"))
+    let result = serde_json::from_slice(frame)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+    frame.clear();
+    result
 }
 
 #[cfg(test)]
@@ -386,6 +382,7 @@ mod tests {
                 reader,
                 next_id: 1,
                 pending: std::collections::VecDeque::new(),
+                frame: Vec::new(),
             },
             server_stream,
         )
@@ -570,5 +567,36 @@ mod tests {
         ));
         assert!(started_at.elapsed() >= Duration::from_millis(60));
         server.join().expect("server thread should join");
+    }
+}
+
+#[cfg(test)]
+mod framing_tests {
+    use super::*;
+    #[test]
+    fn partial_frame_survives_read_timeout() {
+        let (client_stream, mut server) = UnixStream::pair().unwrap();
+        let reader = BufReader::new(client_stream.try_clone().unwrap());
+        let mut client = IpcClient {
+            stream: client_stream,
+            reader,
+            next_id: 1,
+            pending: VecDeque::new(),
+            frame: Vec::new(),
+        };
+        client
+            .set_read_timeout(Some(Duration::from_millis(15)))
+            .unwrap();
+        let producer = std::thread::spawn(move || {
+            server.write_all(b"{\"type\":\"event\",\"name\":\"state_changed\",\"seq\":1,\"data\":{\"text\":\"caf\xc3").unwrap();
+            std::thread::sleep(Duration::from_millis(80));
+            server.write_all(b"\xa9\"}}\n").unwrap();
+        });
+        let result = client.read_event();
+        producer.join().unwrap();
+        match result {
+            Ok(ServerEnvelope::Event(event)) => assert_eq!(event.data["text"], "café"),
+            other => panic!("fragmented event lost: {other:?}"),
+        }
     }
 }

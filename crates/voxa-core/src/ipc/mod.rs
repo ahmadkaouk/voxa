@@ -1,7 +1,21 @@
+use std::{env, io, path::PathBuf};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const API_VERSION: &str = "1.0";
+
+pub fn default_runtime_directory() -> io::Result<PathBuf> {
+    let home = env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?;
+    Ok(PathBuf::from(home).join("Library/Application Support/voxa/run"))
+}
+
+pub fn default_socket_path() -> io::Result<PathBuf> {
+    match env::var_os("VOXA_SOCKET") {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => Ok(default_runtime_directory()?.join("daemon.sock")),
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type")]
@@ -80,7 +94,7 @@ pub enum IpcRuntimeState {
     Error,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum StartOrigin {
     Manual,
@@ -88,7 +102,7 @@ pub enum StartOrigin {
     HotkeyHold,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     Manual,
@@ -160,15 +174,24 @@ impl RequestEnvelope {
     where
         T: for<'de> Deserialize<'de>,
     {
-        serde_json::from_value(self.params.clone()).map_err(|_| ErrorPayload {
-            code: "INVALID_PARAMS".to_owned(),
-            message: "Invalid request params".to_owned(),
-            details: None,
-        })
+        T::deserialize(&self.params)
+            .map_err(|_| ErrorPayload::new("INVALID_PARAMS", "Invalid request params"))
     }
 }
 
 impl ResponseEnvelope {
+    pub fn from_result(id: &str, result: Result<Value, ErrorPayload>) -> Self {
+        match result {
+            Ok(value) => Self::ok(id, value),
+            Err(error) => Self {
+                id: id.to_owned(),
+                ok: false,
+                result: None,
+                error: Some(error),
+            },
+        }
+    }
+
     pub fn ok(id: &str, result: Value) -> Self {
         Self {
             id: id.to_owned(),
@@ -183,11 +206,17 @@ impl ResponseEnvelope {
             id: id.to_owned(),
             ok: false,
             result: None,
-            error: Some(ErrorPayload {
-                code: code.to_owned(),
-                message: message.to_owned(),
-                details: None,
-            }),
+            error: Some(ErrorPayload::new(code, message)),
+        }
+    }
+}
+
+impl ErrorPayload {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            details: None,
         }
     }
 }

@@ -11,7 +11,10 @@ Goals:
 ## Transport
 - Unix domain socket.
 - Default path: `~/Library/Application Support/voxa/run/daemon.sock`.
-- Socket permissions: user-only.
+- The default runtime directory is restricted to `0700`, and the socket to `0600`.
+- With a custom `VOXA_SOCKET`, use a private parent directory. Existing custom
+  directory permissions are preserved; newly created directories use `0700`.
+- Startup rejects files and symlinks at the socket path and only removes stale sockets.
 
 ## Framing
 - Newline-delimited JSON (NDJSON).
@@ -144,6 +147,11 @@ Request:
 - `manual`
 - `hotkey_toggle`
 - `hotkey_hold`
+
+The daemon acknowledges a new recording and emits `recording_started` after
+microphone initialization succeeds. Initialization has a two-second timeout;
+startup or subsequent capture failures are reported as `AUDIO_CAPTURE_FAILED`.
+Capture failures also publish the updated error state without requiring a stop request.
 
 Success result:
 ```json
@@ -287,6 +295,9 @@ Params:
 - A `from_seq` above the daemon's current sequence is treated as a prior daemon
   epoch and replays the available new-epoch window.
 - The subscribe response is always sent before any replayed or subsequent live event.
+- Repeating `subscribe` on the same connection replaces its subscription using
+  the new cursor, so future live events are delivered once. Events already queued
+  for the previous subscription may arrive before the new response.
 - Replay is best effort: the daemon keeps only the latest 32 events in memory and
   never persists them. If `from_seq` predates that window, clients must use
   `get_state` to reconcile the missing state.

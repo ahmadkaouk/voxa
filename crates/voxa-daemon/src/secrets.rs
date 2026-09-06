@@ -1,22 +1,23 @@
 use std::env;
 use std::io;
 use std::process::Command;
+use std::sync::Arc;
 #[cfg(test)]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 const SECURITY_BIN: &str = "/usr/bin/security";
 const KEYCHAIN_SERVICE: &str = "com.voxa";
 const KEYCHAIN_ACCOUNT: &str = "OPENAI_API_KEY";
 
-pub(crate) trait ApiKeyStore: Send {
+pub(crate) trait ApiKeyStore: Send + Sync {
     fn get_api_key(&self) -> io::Result<Option<String>>;
     fn set_api_key(&self, api_key: &str) -> io::Result<()>;
 }
 
-pub(crate) fn build_api_key_store(source: &str) -> Box<dyn ApiKeyStore> {
+pub(crate) fn build_api_key_store(source: &str) -> Arc<dyn ApiKeyStore> {
     match source {
-        "env" => Box::new(EnvApiKeyStore),
-        _ => Box::new(KeychainApiKeyStore),
+        "env" => Arc::new(EnvApiKeyStore),
+        _ => Arc::new(KeychainApiKeyStore),
     }
 }
 
@@ -164,8 +165,8 @@ fn security_command_error(stderr: &[u8], fallback: &str) -> io::Error {
 }
 
 #[cfg(test)]
-pub(crate) fn in_memory_api_key_store() -> Box<dyn ApiKeyStore> {
-    Box::new(MemoryApiKeyStore {
+pub(crate) fn in_memory_api_key_store() -> Arc<dyn ApiKeyStore> {
+    Arc::new(MemoryApiKeyStore {
         value: Arc::new(Mutex::new(None)),
     })
 }
@@ -173,8 +174,8 @@ pub(crate) fn in_memory_api_key_store() -> Box<dyn ApiKeyStore> {
 #[cfg(test)]
 pub(crate) fn in_memory_api_key_store_with_shared(
     shared: Arc<Mutex<Option<String>>>,
-) -> Box<dyn ApiKeyStore> {
-    Box::new(MemoryApiKeyStore { value: shared })
+) -> Arc<dyn ApiKeyStore> {
+    Arc::new(MemoryApiKeyStore { value: shared })
 }
 
 #[cfg(test)]
