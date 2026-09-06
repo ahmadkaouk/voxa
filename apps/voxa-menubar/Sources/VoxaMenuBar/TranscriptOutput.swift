@@ -4,7 +4,7 @@ func processTranscriptOutput(
     text: String,
     mode: OutputModeOption,
     copyToClipboard: (String) -> Bool,
-    sendAutopaste: () -> Bool
+    autopaste: (String) -> String
 ) -> String {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
@@ -20,12 +20,8 @@ func processTranscriptOutput(
         }
         return "Transcript ready but clipboard copy failed"
     case .clipboardAutopaste:
-        guard copyToClipboard(text) else {
-            return "Transcript ready but clipboard copy failed"
-        }
-        if sendAutopaste() {
-            return "Transcript copied and pasted"
-        }
-        return "Transcript copied (autopaste failed)"
+        // The paste operation owns its temporary clipboard and restoration.
+        // Writing here first would destroy the clipboard we need to preserve.
+        return autopaste(text)
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::env;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -113,9 +114,9 @@ fn run() -> Result<(), String> {
             }
         }
         "events" => {
-            let _ = client.request("subscribe", json!({}))?;
+            client.subscribe_to_events()?;
             loop {
-                let envelope = client.read()?;
+                let envelope = client.read_event()?;
                 if let ServerEnvelope::Event(event) = envelope {
                     print_json(&json!(event))?;
                 }
@@ -222,6 +223,7 @@ struct IpcClient {
     stream: UnixStream,
     reader: BufReader<UnixStream>,
     next_id: u64,
+    pending: VecDeque<ServerEnvelope>,
 }
 
 impl IpcClient {
@@ -244,6 +246,7 @@ impl IpcClient {
                 stream,
                 reader,
                 next_id: 1,
+                pending: VecDeque::new(),
             }),
             ServerEnvelope::HelloError { error } => Err(io::Error::other(format!(
                 "hello failed: {} ({})",
@@ -257,16 +260,11 @@ impl IpcClient {
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let timeout = Some(request_timeout_for_method(method));
-        self.stream
-            .set_read_timeout(timeout)
-            .map_err(|err| err.to_string())?;
-        self.reader
-            .get_mut()
-            .set_read_timeout(timeout)
-            .map_err(|err| err.to_string())?;
+        self.set_read_timeout(timeout)?;
 
+        let request_id = self.next_id.to_string();
         let request = ClientEnvelope::Request(RequestEnvelope {
-            id: self.next_id.to_string(),
+            id: request_id.clone(),
             method: method.to_owned(),
             params,
         });
@@ -274,22 +272,64 @@ impl IpcClient {
 
         write_envelope(&mut self.stream, &request).map_err(|err| err.to_string())?;
 
-        let envelope = self.read()?;
-        match envelope {
-            ServerEnvelope::Response(response) if response.ok => response
-                .result
-                .ok_or_else(|| "response is missing result payload".to_owned()),
-            ServerEnvelope::Response(response) => {
-                let error = response
-                    .error
-                    .ok_or_else(|| "response failed without error payload".to_owned())?;
-                Err(format!("{} ({})", error.message, error.code))
+        loop {
+            match self.read_from_socket()? {
+                event @ ServerEnvelope::Event(_) => {
+                    self.pending.push_back(event);
+                }
+                ServerEnvelope::Response(response) if response.id != request_id => continue,
+                ServerEnvelope::Response(response) if response.ok => {
+                    return response
+                        .result
+                        .ok_or_else(|| "response is missing result payload".to_owned());
+                }
+                ServerEnvelope::Response(response) => {
+                    let error = response
+                        .error
+                        .ok_or_else(|| "response failed without error payload".to_owned())?;
+                    return Err(format!("{} ({})", error.message, error.code));
+                }
+                other => return Err(format!("unexpected envelope: {other:?}")),
             }
-            other => Err(format!("unexpected envelope: {other:?}")),
         }
     }
 
-    fn read(&mut self) -> Result<ServerEnvelope, String> {
+    fn subscribe_to_events(&mut self) -> Result<(), String> {
+        let _ = self.request("subscribe", json!({}))?;
+        Ok(())
+    }
+
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), String> {
+        // `stream` and the reader are duplicated descriptors for the same socket,
+        // so setting the option once on the descriptor used for reads is sufficient.
+        self.reader
+            .get_mut()
+            .set_read_timeout(timeout)
+            .map_err(|err| err.to_string())
+    }
+
+    fn read_event(&mut self) -> Result<ServerEnvelope, String> {
+        if let Some(envelope) = self.pending.pop_front() {
+            return Ok(envelope);
+        }
+
+        loop {
+            match read_server_envelope(&mut self.reader) {
+                Ok(envelope) => return Ok(envelope),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+    }
+
+    fn read_from_socket(&mut self) -> Result<ServerEnvelope, String> {
         read_server_envelope(&mut self.reader).map_err(|err| err.to_string())
     }
 }
@@ -318,14 +358,59 @@ fn read_server_envelope(reader: &mut BufReader<UnixStream>) -> io::Result<Server
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use serde_json::json;
 
     use super::{
-        parse_config_set_params, parse_start_origin, parse_stop_reason, request_timeout_for_method,
+        IpcClient, parse_config_set_params, parse_start_origin, parse_stop_reason,
+        request_timeout_for_method,
     };
-    use voxa_core::ipc::{StartOrigin, StopReason};
+    use voxa_core::ipc::{
+        ClientEnvelope, EventEnvelope, ResponseEnvelope, ServerEnvelope, StartOrigin, StopReason,
+    };
+
+    fn client_and_server_stream() -> (IpcClient, UnixStream) {
+        let (client_stream, server_stream) = UnixStream::pair().expect("socket pair should open");
+        let reader = BufReader::new(
+            client_stream
+                .try_clone()
+                .expect("client stream should clone"),
+        );
+        (
+            IpcClient {
+                stream: client_stream,
+                reader,
+                next_id: 1,
+                pending: std::collections::VecDeque::new(),
+            },
+            server_stream,
+        )
+    }
+
+    fn read_client_request(stream: &UnixStream) -> voxa_core::ipc::RequestEnvelope {
+        let mut reader = BufReader::new(stream.try_clone().expect("server stream should clone"));
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .expect("client request should be readable");
+        match serde_json::from_str(&line).expect("client request should decode") {
+            ClientEnvelope::Request(request) => request,
+            other => panic!("expected request, got {other:?}"),
+        }
+    }
+
+    fn write_server_envelope(stream: &mut UnixStream, envelope: ServerEnvelope) {
+        let serialized = serde_json::to_string(&envelope).expect("server envelope should encode");
+        stream
+            .write_all(serialized.as_bytes())
+            .expect("server envelope should write");
+        stream.write_all(b"\n").expect("newline should write");
+        stream.flush().expect("server stream should flush");
+    }
 
     #[test]
     fn parse_start_origin_defaults_to_manual() {
@@ -369,11 +454,11 @@ mod tests {
 
     #[test]
     fn parse_config_set_params_supports_string_fields() {
-        let result = parse_config_set_params("model", "gpt-4o-mini-transcribe");
+        let result = parse_config_set_params("model", "gpt-transcribe");
         assert_eq!(
             result,
             Ok(json!({
-                "model": "gpt-4o-mini-transcribe"
+                "model": "gpt-transcribe"
             }))
         );
     }
@@ -407,5 +492,83 @@ mod tests {
             request_timeout_for_method("start_recording"),
             Duration::from_secs(3)
         );
+    }
+
+    #[test]
+    fn request_skips_events_and_unrelated_responses() {
+        let (mut client, mut server_stream) = client_and_server_stream();
+        let server = thread::spawn(move || {
+            let request = read_client_request(&server_stream);
+            write_server_envelope(
+                &mut server_stream,
+                ServerEnvelope::Event(EventEnvelope {
+                    name: "state_changed".to_owned(),
+                    seq: 1,
+                    data: json!({ "state": "idle" }),
+                }),
+            );
+            write_server_envelope(
+                &mut server_stream,
+                ServerEnvelope::Response(ResponseEnvelope::ok(
+                    "unrelated",
+                    json!({ "ignored": true }),
+                )),
+            );
+            write_server_envelope(
+                &mut server_stream,
+                ServerEnvelope::Response(ResponseEnvelope::ok(
+                    &request.id,
+                    json!({ "status": "ok" }),
+                )),
+            );
+        });
+
+        assert_eq!(
+            client.request("health", json!({})),
+            Ok(json!({ "status": "ok" }))
+        );
+        assert!(matches!(
+            client.read_event(),
+            Ok(ServerEnvelope::Event(EventEnvelope { seq: 1, .. }))
+        ));
+        server.join().expect("server thread should join");
+    }
+
+    #[test]
+    fn event_stream_survives_idle_read_timeouts() {
+        let (mut client, mut server_stream) = client_and_server_stream();
+        let server = thread::spawn(move || {
+            let request = read_client_request(&server_stream);
+            write_server_envelope(
+                &mut server_stream,
+                ServerEnvelope::Response(ResponseEnvelope::ok(
+                    &request.id,
+                    json!({ "subscribed": true, "current_seq": 0 }),
+                )),
+            );
+            thread::sleep(Duration::from_millis(80));
+            write_server_envelope(
+                &mut server_stream,
+                ServerEnvelope::Event(EventEnvelope {
+                    name: "state_changed".to_owned(),
+                    seq: 7,
+                    data: json!({ "state": "idle" }),
+                }),
+            );
+        });
+
+        client
+            .subscribe_to_events()
+            .expect("subscription should succeed");
+        client
+            .set_read_timeout(Some(Duration::from_millis(15)))
+            .expect("short test timeout should set");
+        let started_at = Instant::now();
+        assert!(matches!(
+            client.read_event(),
+            Ok(ServerEnvelope::Event(EventEnvelope { seq: 7, .. }))
+        ));
+        assert!(started_at.elapsed() >= Duration::from_millis(60));
+        server.join().expect("server thread should join");
     }
 }

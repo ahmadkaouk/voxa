@@ -22,11 +22,16 @@ The core idea is simple: `voxa-daemon` runs as a separate local server, owns rec
 ## What You Can Do Today
 
 - Use the SwiftUI menu bar app for push-to-talk dictation
+- Transcribe completed recordings with OpenAI's `gpt-transcribe` model
 - Send transcripts to the clipboard or directly into the active app
 - Control and inspect the daemon from `voxactl`
 - Build a packaged macOS app bundle and DMG
 
 The menu bar app installs or updates a per-user LaunchAgent for `voxa-daemon` and starts it automatically.
+
+GPT-Transcribe is the default and supported transcription model. Saved GPT-4o Mini
+Transcribe and GPT-4o Transcribe settings migrate on startup while preserving other
+preferences; the new model is written to disk on the next configuration save.
 
 ## Build From Source
 

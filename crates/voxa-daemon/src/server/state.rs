@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use std::{env, fs};
+use std::{collections::VecDeque, env, fs};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -10,11 +10,11 @@ use voxa_core::domain::{
     ApplyResult, DomainEvent, RecordingOrigin, RuntimeErrorCode, SessionMachine, SessionState,
 };
 use voxa_core::ipc::{
-    ApiKeyStatusResult, ConfigResult, ErrorPayload, EventEnvelope, IpcRuntimeState, ServerEnvelope,
-    SetApiKeyParams, StartOrigin, StateResult, StopReason,
+    ApiKeyStatusResult, ConfigResult, ErrorPayload, EventEnvelope, IpcRuntimeState,
+    ResponseEnvelope, ServerEnvelope, SetApiKeyParams, StartOrigin, StateResult, StopReason,
 };
 
-use super::connection::ConnectionHandle;
+use super::connection::{ConnectionHandle, OUTBOUND_QUEUE_CAPACITY};
 use crate::adapters::build_runtime_for_output_mode;
 use crate::secrets::{ApiKeyStore, build_api_key_store};
 #[cfg(test)]
@@ -22,6 +22,13 @@ use crate::secrets::{in_memory_api_key_store, in_memory_api_key_store_with_share
 
 const DEFAULT_TOGGLE_HOTKEY: &str = "option_f";
 const DEFAULT_HOLD_HOTKEY: &str = "option_g";
+const DEFAULT_MODEL: &str = "gpt-transcribe";
+const MAX_RECORDING_SECONDS: u64 = 3_600;
+// Replay is deliberately smaller than the per-connection outbound queue. This
+// bounds retained transcript-bearing events and leaves room for the subscribe
+// response plus short-lived messages already queued for a healthy client.
+const EVENT_REPLAY_CAPACITY: usize = 32;
+const _: () = assert!(EVENT_REPLAY_CAPACITY < OUTBOUND_QUEUE_CAPACITY);
 
 #[derive(Debug, Clone, Serialize)]
 struct DaemonConfig {
@@ -39,7 +46,7 @@ impl Default for DaemonConfig {
         Self {
             toggle_hotkey: DEFAULT_TOGGLE_HOTKEY.to_owned(),
             hold_hotkey: DEFAULT_HOLD_HOTKEY.to_owned(),
-            model: "gpt-4o-mini-transcribe".to_owned(),
+            model: DEFAULT_MODEL.to_owned(),
             output_mode: "clipboard_autopaste".to_owned(),
             max_recording_seconds: 300,
             api_key_source: "keychain".to_owned(),
@@ -86,14 +93,43 @@ pub(super) struct SharedState {
     session_id: Option<String>,
     event_seq: u64,
     outbox: Vec<EventEnvelope>,
+    event_replay: VecDeque<EventEnvelope>,
     started_at: Instant,
     recording_deadline: Option<Instant>,
     last_audio_level_bucket: Option<u8>,
-    subscribers: Vec<ConnectionHandle>,
+    subscribers: Vec<Subscriber>,
     config: DaemonConfig,
-    runtime: SessionRuntime,
+    runtime: Option<SessionRuntime>,
     config_path: Option<PathBuf>,
     api_keys: Box<dyn ApiKeyStore>,
+}
+
+struct Subscriber {
+    connection: ConnectionHandle,
+    min_live_seq: u64,
+}
+
+pub(super) enum StopRecordingAction {
+    Accepted(Value),
+    Transcribe(PendingTranscription),
+}
+
+pub(super) struct PendingTranscription {
+    runtime: SessionRuntime,
+    audio: Vec<u8>,
+}
+
+pub(super) struct CompletedTranscription {
+    runtime: SessionRuntime,
+    result: Result<String, RuntimeErrorCode>,
+}
+
+impl PendingTranscription {
+    pub(super) fn run(self) -> CompletedTranscription {
+        let Self { mut runtime, audio } = self;
+        let result = runtime.transcribe(audio);
+        CompletedTranscription { runtime, result }
+    }
 }
 
 impl SharedState {
@@ -129,8 +165,10 @@ impl SharedState {
         runtime: SessionRuntime,
         max_recording_seconds: u64,
     ) -> Self {
-        let mut config = DaemonConfig::default();
-        config.max_recording_seconds = max_recording_seconds.max(1);
+        let config = DaemonConfig {
+            max_recording_seconds: max_recording_seconds.clamp(1, MAX_RECORDING_SECONDS),
+            ..DaemonConfig::default()
+        };
         Self::with_config_and_runtime(config, runtime, None, in_memory_api_key_store())
     }
 
@@ -159,12 +197,13 @@ impl SharedState {
             session_id: None,
             event_seq: 0,
             outbox: Vec::new(),
+            event_replay: VecDeque::with_capacity(EVENT_REPLAY_CAPACITY),
             started_at: Instant::now(),
             recording_deadline: None,
             last_audio_level_bucket: None,
             subscribers: Vec::new(),
             config,
-            runtime,
+            runtime: Some(runtime),
             config_path,
             api_keys,
         }
@@ -217,18 +256,67 @@ impl SharedState {
         }
     }
 
-    pub(super) fn subscribe(&mut self, connection: ConnectionHandle) -> Value {
-        self.subscribers.push(connection);
-        json!({
-            "subscribed": true,
-            "current_seq": self.event_seq
-        })
+    pub(super) fn subscribe(
+        &mut self,
+        connection: ConnectionHandle,
+        request_id: &str,
+        from_seq: Option<u64>,
+    ) -> io::Result<()> {
+        let response = ServerEnvelope::Response(ResponseEnvelope::ok(
+            request_id,
+            json!({
+                "subscribed": true,
+                "current_seq": self.event_seq
+            }),
+        ));
+
+        // Enqueue the response and any replay while holding SharedState. The
+        // dispatcher needs the same lock, so it cannot interleave a live event
+        // ahead of either part of this ordered subscription sequence.
+        connection.send(response)?;
+        let replay_from_seq = from_seq.filter(|seq| *seq > 0).map(|seq| {
+            // A cursor beyond this daemon's sequence belongs to an older
+            // process epoch. Replay the bounded history of the new epoch.
+            if seq > self.event_seq { 0 } else { seq }
+        });
+        if let Some(from_seq) = replay_from_seq {
+            for event in self
+                .event_replay
+                .iter()
+                .filter(|event| event.seq > from_seq)
+            {
+                connection.send(ServerEnvelope::Event(event.clone()))?;
+            }
+        }
+
+        let min_live_seq = replay_from_seq
+            .map(|from_seq| from_seq.min(self.event_seq).saturating_add(1))
+            .unwrap_or_else(|| self.event_seq.saturating_add(1));
+        self.subscribers.push(Subscriber {
+            connection,
+            min_live_seq,
+        });
+        Ok(())
     }
 
-    pub(super) fn notify_subscribers(&mut self, envelope: &ServerEnvelope) {
+    pub(super) fn publish_event(&mut self, event: EventEnvelope) {
+        if self.event_replay.len() == EVENT_REPLAY_CAPACITY {
+            self.event_replay.pop_front();
+        }
+        self.event_replay.push_back(event.clone());
+
+        let event_seq = event.seq;
+        let envelope = ServerEnvelope::Event(event);
         let mut index = 0;
         while index < self.subscribers.len() {
-            if self.subscribers[index].send(envelope.clone()).is_err() {
+            if event_seq < self.subscribers[index].min_live_seq {
+                index += 1;
+            } else if self.subscribers[index]
+                .connection
+                .send(envelope.clone())
+                .is_err()
+            {
+                self.subscribers[index].connection.disconnect();
                 self.subscribers.swap_remove(index);
             } else {
                 index += 1;
@@ -237,6 +325,14 @@ impl SharedState {
     }
 
     pub(super) fn set_config(&mut self, params: SetConfigParams) -> Result<Value, ErrorPayload> {
+        if !matches!(self.machine.state(), SessionState::Idle) {
+            return Err(ErrorPayload {
+                code: "CONFIG_BUSY".to_owned(),
+                message: "Config cannot be changed while the daemon is busy".to_owned(),
+                details: None,
+            });
+        }
+
         let mut next_config = self.config.clone();
 
         if let Some(toggle_hotkey) = params.toggle_hotkey {
@@ -252,10 +348,12 @@ impl SharedState {
             next_config.output_mode = output_mode;
         }
         if let Some(max_recording_seconds) = params.max_recording_seconds {
-            if max_recording_seconds == 0 {
+            if !(1..=MAX_RECORDING_SECONDS).contains(&max_recording_seconds) {
                 return Err(ErrorPayload {
                     code: "CONFIG_INVALID".to_owned(),
-                    message: "max_recording_seconds must be greater than 0".to_owned(),
+                    message: format!(
+                        "max_recording_seconds must be between 1 and {MAX_RECORDING_SECONDS}"
+                    ),
                     details: None,
                 });
             }
@@ -286,6 +384,10 @@ impl SharedState {
             });
         }
 
+        let runtime_changed = next_config.model != self.config.model
+            || next_config.output_mode != self.config.output_mode
+            || next_config.api_key_source != self.config.api_key_source;
+
         next_config.revision = self.config.revision + 1;
         if let Some(path) = self.config_path.as_deref() {
             persist_config_to_disk(path, &next_config).map_err(|_| ErrorPayload {
@@ -294,11 +396,13 @@ impl SharedState {
                 details: None,
             })?;
         }
-        self.runtime = build_runtime_for_output_mode(
-            &next_config.output_mode,
-            &next_config.model,
-            &next_config.api_key_source,
-        );
+        if runtime_changed {
+            self.runtime = Some(build_runtime_for_output_mode(
+                &next_config.output_mode,
+                &next_config.model,
+                &next_config.api_key_source,
+            ));
+        }
         self.config = next_config;
         Ok(json!({ "revision": self.config.revision }))
     }
@@ -356,6 +460,14 @@ impl SharedState {
             return Ok(json!({ "accepted": true }));
         }
 
+        let recording_deadline = Instant::now()
+            .checked_add(Duration::from_secs(self.config.max_recording_seconds))
+            .ok_or_else(|| ErrorPayload {
+                code: "CONFIG_INVALID".to_owned(),
+                message: "Recording duration is too large".to_owned(),
+                details: None,
+            })?;
+
         let event = match origin {
             StartOrigin::Manual => DomainEvent::ManualPressed,
             StartOrigin::HotkeyToggle => DomainEvent::TogglePressed,
@@ -368,7 +480,11 @@ impl SharedState {
                 self.session_counter += 1;
                 self.session_id = Some(format!("s-{}", self.session_counter));
 
-                if let Err(code) = self.runtime.start_recording() {
+                let start_result = match self.runtime.as_mut() {
+                    Some(runtime) => runtime.start_recording(),
+                    None => Err(RuntimeErrorCode::AudioCaptureFailed),
+                };
+                if let Err(code) = start_result {
                     let _ = self.machine.apply(DomainEvent::RecordingFailed);
                     self.machine.set_last_error(code);
                     self.session_id = None;
@@ -378,8 +494,7 @@ impl SharedState {
                     return Err(runtime_error_payload(code, "Failed to start recording"));
                 }
 
-                self.recording_deadline =
-                    Some(Instant::now() + Duration::from_secs(self.config.max_recording_seconds));
+                self.recording_deadline = Some(recording_deadline);
                 self.last_audio_level_bucket = None;
                 self.emit_state_changed();
                 self.emit_event(
@@ -400,12 +515,45 @@ impl SharedState {
         }
     }
 
-    pub(super) fn stop_recording(&mut self, reason: StopReason) -> Result<Value, ErrorPayload> {
+    pub(super) fn cancel_recording(&mut self) -> Result<Value, ErrorPayload> {
+        // A stop that already entered transcription owns the runtime until it
+        // finishes. Cancellation must not reset that session or reclaim it.
+        if !matches!(self.machine.state(), SessionState::Recording(_)) {
+            return Ok(json!({ "accepted": true, "cancelled": false }));
+        }
+
+        self.recording_deadline = None;
+        self.last_audio_level_bucket = None;
+        let result = match self.runtime.as_mut() {
+            Some(runtime) => runtime.cancel_recording(),
+            None => Err(RuntimeErrorCode::AudioCaptureFailed),
+        };
+        if let Err(code) = result {
+            let _ = self.machine.apply(DomainEvent::RecordingFailed);
+            self.machine.set_last_error(code);
+            self.session_id = None;
+            self.emit_state_changed();
+            return Err(runtime_error_payload(
+                code,
+                "Failed to cancel audio capture",
+            ));
+        }
+
+        let _ = self.machine.apply(DomainEvent::Reset);
+        let session_id = self.session_id.take();
+        self.emit_event("recording_cancelled", json!({ "session_id": session_id }));
+        self.emit_state_changed();
+        Ok(json!({ "accepted": true, "cancelled": true }))
+    }
+
+    pub(super) fn begin_stop_recording(
+        &mut self,
+        reason: StopReason,
+    ) -> Result<StopRecordingAction, ErrorPayload> {
         if !matches!(self.machine.state(), SessionState::Recording(_)) {
             self.last_audio_level_bucket = None;
-            return Ok(json!({ "accepted": true }));
+            return Ok(StopRecordingAction::Accepted(json!({ "accepted": true })));
         }
-        self.recording_deadline = None;
 
         let stop_event = match reason {
             StopReason::Manual | StopReason::HotkeyToggle => DomainEvent::TogglePressed,
@@ -419,7 +567,20 @@ impl SharedState {
             details: None,
         })?;
 
-        let audio = match self.runtime.stop_recording() {
+        let stop_requested = matches!(
+            self.machine.state(),
+            SessionState::Recording(recording) if recording.stop_requested
+        );
+        if !stop_requested {
+            return Ok(StopRecordingAction::Accepted(json!({ "accepted": true })));
+        }
+        self.recording_deadline = None;
+
+        let audio = match self.runtime.as_mut() {
+            Some(runtime) => runtime.stop_recording(),
+            None => Err(RuntimeErrorCode::AudioCaptureFailed),
+        };
+        let audio = match audio {
             Ok(audio) => audio,
             Err(code) => {
                 let _ = self.machine.apply(DomainEvent::RecordingFailed);
@@ -431,14 +592,20 @@ impl SharedState {
             }
         };
 
-        let _ = self
-            .machine
-            .apply(DomainEvent::RecordingStopped)
-            .map_err(|_| ErrorPayload {
+        let runtime = self.runtime.take().ok_or_else(|| ErrorPayload {
+            code: "INTERNAL_ERROR".to_owned(),
+            message: "Recording runtime is unavailable".to_owned(),
+            details: None,
+        })?;
+
+        if self.machine.apply(DomainEvent::RecordingStopped).is_err() {
+            self.runtime = Some(runtime);
+            return Err(ErrorPayload {
                 code: "INVALID_STATE_TRANSITION".to_owned(),
                 message: "Could not move to transcribing state".to_owned(),
                 details: None,
-            })?;
+            });
+        }
 
         self.emit_event(
             "recording_stopped",
@@ -455,7 +622,20 @@ impl SharedState {
             }),
         );
 
-        let text = match self.runtime.transcribe(audio) {
+        Ok(StopRecordingAction::Transcribe(PendingTranscription {
+            runtime,
+            audio,
+        }))
+    }
+
+    pub(super) fn finish_stop_recording(
+        &mut self,
+        completed: CompletedTranscription,
+    ) -> Result<Value, ErrorPayload> {
+        let CompletedTranscription { runtime, result } = completed;
+        self.runtime = Some(runtime);
+
+        let text = match result {
             Ok(text) => text,
             Err(RuntimeErrorCode::ApiEmptyTranscript) => String::new(),
             Err(code) => {
@@ -505,21 +685,26 @@ impl SharedState {
         }))
     }
 
-    pub(super) fn enforce_max_duration_if_needed(&mut self) {
+    pub(super) fn begin_max_duration_stop_if_needed(
+        &mut self,
+    ) -> Result<Option<PendingTranscription>, ErrorPayload> {
         if !matches!(self.machine.state(), SessionState::Recording(_)) {
             self.recording_deadline = None;
             self.last_audio_level_bucket = None;
-            return;
+            return Ok(None);
         }
 
         let Some(deadline) = self.recording_deadline else {
-            return;
+            return Ok(None);
         };
         if Instant::now() < deadline {
-            return;
+            return Ok(None);
         }
 
-        let _ = self.stop_recording(StopReason::MaxDuration);
+        match self.begin_stop_recording(StopReason::MaxDuration)? {
+            StopRecordingAction::Accepted(_) => Ok(None),
+            StopRecordingAction::Transcribe(pending) => Ok(Some(pending)),
+        }
     }
 
     pub(super) fn emit_audio_level_if_needed(&mut self) {
@@ -530,7 +715,8 @@ impl SharedState {
 
         let level = self
             .runtime
-            .current_recording_level()
+            .as_ref()
+            .and_then(SessionRuntime::current_recording_level)
             .unwrap_or(0.0)
             .clamp(0.0, 1.0);
         let bucket = (level * 40.0).round() as u8;
@@ -591,7 +777,7 @@ fn runtime_error_payload(code: RuntimeErrorCode, message: &str) -> ErrorPayload 
 }
 
 fn is_valid_model(model: &str) -> bool {
-    matches!(model, "gpt-4o-mini-transcribe" | "gpt-4o-transcribe")
+    model == DEFAULT_MODEL
 }
 
 fn is_valid_output_mode(mode: &str) -> bool {
@@ -640,13 +826,19 @@ fn load_config_from_disk(path: &Path) -> DaemonConfig {
         config.hold_hotkey = hold_hotkey;
     }
     if let Some(model) = parsed.model {
-        config.model = model;
+        // Upgrade saved GPT-4o choices before validation so existing shortcuts,
+        // output preferences, and API key source survive the model migration.
+        // The migrated value is persisted with the next configuration save.
+        config.model = match model.as_str() {
+            "gpt-4o-mini-transcribe" | "gpt-4o-transcribe" => DEFAULT_MODEL.to_owned(),
+            _ => model,
+        };
     }
     if let Some(output_mode) = parsed.output_mode {
         config.output_mode = output_mode;
     }
     if let Some(max_recording_seconds) = parsed.max_recording_seconds {
-        if max_recording_seconds == 0 {
+        if !(1..=MAX_RECORDING_SECONDS).contains(&max_recording_seconds) {
             return DaemonConfig::default();
         }
         config.max_recording_seconds = max_recording_seconds;
@@ -678,4 +870,59 @@ fn persist_config_to_disk(path: &Path, config: &DaemonConfig) -> io::Result<()> 
     let temp_path = path.with_extension("tmp");
     fs::write(&temp_path, serialized)?;
     fs::rename(temp_path, path)
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn saved_models_migrate_without_resetting_other_preferences() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "voxa-model-migration-{}-{suffix}.toml",
+            std::process::id()
+        ));
+
+        for model in [
+            "gpt-4o-mini-transcribe",
+            "gpt-4o-transcribe",
+            "gpt-transcribe",
+        ] {
+            let original = DaemonConfig {
+                toggle_hotkey: "control_option_f".to_owned(),
+                hold_hotkey: "control_option_g".to_owned(),
+                model: model.to_owned(),
+                output_mode: "clipboard_only".to_owned(),
+                max_recording_seconds: 90,
+                api_key_source: "env".to_owned(),
+                revision: 7,
+            };
+            persist_config_to_disk(&path, &original).expect("config should save");
+
+            let loaded = load_config_from_disk(&path);
+            let expected = DaemonConfig {
+                model: "gpt-transcribe".to_owned(),
+                ..original
+            };
+            assert_eq!(
+                serde_json::to_value(&loaded).unwrap(),
+                serde_json::to_value(&expected).unwrap(),
+                "loading {model} should only change the model"
+            );
+
+            persist_config_to_disk(&path, &loaded).expect("migrated config should save");
+            assert_eq!(
+                serde_json::to_value(load_config_from_disk(&path)).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+            assert!(!fs::read_to_string(&path).unwrap().contains("gpt-4o"));
+        }
+
+        fs::remove_file(path).expect("test config should be removed");
+    }
 }

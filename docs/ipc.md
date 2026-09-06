@@ -176,6 +176,25 @@ Notes:
 - When no active recording exists, response remains idempotent with `{"accepted": true}`.
 - Output side effects (clipboard/autopaste) are client responsibilities in the menu bar app.
 
+### `cancel_recording`
+Request:
+```json
+{"type":"request","id":"cancel-1","method":"cancel_recording","params":{}}
+```
+
+Success result:
+```json
+{"accepted": true, "cancelled": true}
+```
+
+Notes:
+- Stops microphone capture and discards its audio, then transitions directly to `idle`.
+- Emits `recording_cancelled` with the cancelled `session_id`, followed by `state_changed`.
+- Does not transcribe, emit `transcription_ready`, or perform output.
+- Outside `recording`, returns `{"accepted": true, "cancelled": false}` without changing state or emitting events. An in-flight transcription continues normally.
+- A concurrent stop and cancel are serialized: whichever transitions out of `recording` first wins. A later cancel cannot undo transcription that has already started.
+- A capture-stop failure returns the recording error and transitions to `error` without transcription.
+
 ### `get_config`
 Request:
 ```json
@@ -187,7 +206,7 @@ Response result:
 {
   "toggle_hotkey": "option_f",
   "hold_hotkey": "option_g",
-  "model": "gpt-4o-mini-transcribe",
+  "model": "gpt-transcribe",
   "output_mode": "clipboard_autopaste",
   "max_recording_seconds": 300,
   "api_key_source": "keychain",
@@ -205,7 +224,7 @@ Request:
   "params":{
     "toggle_hotkey":"option_f",
     "hold_hotkey":"option_g",
-    "model":"gpt-4o-mini-transcribe",
+    "model":"gpt-transcribe",
     "output_mode":"clipboard_autopaste",
     "max_recording_seconds":300
   }
@@ -216,6 +235,8 @@ Rules:
 - Partial updates are allowed.
 - Validation runs before commit.
 - Commit is atomic.
+- Updates are rejected with `CONFIG_BUSY` unless the daemon state is `idle`.
+- `max_recording_seconds` must be between `1` and `3600`.
 
 Success result:
 ```json
@@ -260,8 +281,15 @@ Request:
 
 Params:
 - `from_seq` optional.
-- `0` means subscribe from now.
-- If `from_seq > 0`, daemon may replay buffered events if available.
+- Omitted or `0` means subscribe from now; buffered history is not replayed.
+- If `from_seq > 0`, the daemon replays available buffered events whose `seq` is
+  greater than `from_seq`, in increasing order.
+- A `from_seq` above the daemon's current sequence is treated as a prior daemon
+  epoch and replays the available new-epoch window.
+- The subscribe response is always sent before any replayed or subsequent live event.
+- Replay is best effort: the daemon keeps only the latest 32 events in memory and
+  never persists them. If `from_seq` predates that window, clients must use
+  `get_state` to reconcile the missing state.
 
 Success result:
 ```json
@@ -315,6 +343,19 @@ All events include `seq` and are emitted in strict increasing order per daemon p
 }
 ```
 
+### `recording_cancelled`
+```json
+{
+  "type":"event",
+  "name":"recording_cancelled",
+  "seq":46,
+  "data":{"session_id":"s-abc"}
+}
+```
+
+Emitted instead of `recording_stopped` when captured audio is discarded. The next
+state is `idle`; no transcription or output events are emitted for that session.
+
 ### `transcribing_started`
 ```json
 {
@@ -367,6 +408,7 @@ Domain/runtime errors:
 - `INVALID_STATE_TRANSITION`
 - `CONFIG_INVALID`
 - `CONFIG_HOTKEY_CONFLICT`
+- `CONFIG_BUSY`
 - `AUDIO_DEVICE_UNAVAILABLE`
 - `AUDIO_PERMISSION_DENIED`
 - `AUDIO_CAPTURE_FAILED`
@@ -390,11 +432,11 @@ Domain/runtime errors:
 
 ## Timeouts and Retries
 - Request timeout recommendation: 5 seconds for fast control methods such as `health`,
-  `get_state`, `get_config`, and `start_recording`.
+  `get_state`, `get_config`, `start_recording`, and `cancel_recording`.
 - `stop_recording` should use a longer client timeout because the response includes the
   transcription result and may remain in flight until transcription completes.
 - Client reconnect backoff: 200ms, 500ms, 1s, 2s, max 5s.
-- `start_recording` and `stop_recording` are idempotent from client perspective.
+- `start_recording`, `stop_recording`, and `cancel_recording` are idempotent from client perspective.
 
 ## Backward Compatibility Rules
 - Do not remove or rename existing fields in v1.
@@ -402,5 +444,4 @@ Domain/runtime errors:
 - Breaking changes require `api_version` bump.
 
 ## Open Questions
-- How many events should daemon buffer for replay on `from_seq` subscribe?
 - Should `set_config` support optimistic concurrency via `expected_revision`?

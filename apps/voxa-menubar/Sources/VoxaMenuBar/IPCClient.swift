@@ -64,6 +64,11 @@ enum ServerEnvelope {
     case event(DaemonEventSnapshot)
 }
 
+struct IPCSubscription {
+    let connection: IPCConnection
+    let currentSeq: UInt64
+}
+
 final class IPCTransport {
     static let apiVersion = "1.0"
     private static let defaultRequestResponseTimeoutSeconds: TimeInterval = 5.0
@@ -148,11 +153,11 @@ final class IPCTransport {
         return try Self.parseAPIKeyStatusSnapshot(result)
     }
 
-    func setAPIKey(_ apiKey: String) throws {
-        _ = try request(method: "set_api_key", params: ["api_key": apiKey])
+    func setAPIKey(_ apiKey: String) throws -> [String: Any] {
+        try request(method: "set_api_key", params: ["api_key": apiKey])
     }
 
-    func subscribe(fromSeq: UInt64?) throws -> IPCConnection {
+    func subscribe(fromSeq: UInt64?) throws -> IPCSubscription {
         let connection = try IPCConnection.connect(socketPath: socketPath)
 
         do {
@@ -180,9 +185,15 @@ final class IPCTransport {
                     throw error
                 }
                 switch envelope {
-                case let .response(id, ok, _, error) where id == requestId:
+                case let .response(id, ok, result, error) where id == requestId:
                     if ok {
-                        return connection
+                        guard let currentSeq = result?["current_seq"] as? NSNumber else {
+                            throw IPCError.invalidEnvelope
+                        }
+                        return IPCSubscription(
+                            connection: connection,
+                            currentSeq: currentSeq.uint64Value
+                        )
                     }
 
                     guard let error else {

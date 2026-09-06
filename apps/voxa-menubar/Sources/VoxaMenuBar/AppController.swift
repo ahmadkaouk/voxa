@@ -1,6 +1,5 @@
 import AppKit
 import ApplicationServices
-import AVFoundation
 import CoreGraphics
 import Foundation
 import SwiftUI
@@ -21,7 +20,7 @@ final class AppController: ObservableObject {
     @Published private(set) var configRevision: UInt64 = 0
     @Published private(set) var toggleHotkey: HotkeyOption = .defaultToggle
     @Published private(set) var holdHotkey: HotkeyOption = .defaultHold
-    @Published private(set) var model: ModelOption = .gpt4oMiniTranscribe
+    @Published private(set) var model: ModelOption = .gptTranscribe
     @Published private(set) var outputMode: OutputModeOption = .clipboardAutopaste
     @Published private(set) var maxRecordingSeconds: UInt64 = 300
     @Published private(set) var apiKeySource: String = "keychain"
@@ -30,14 +29,18 @@ final class AppController: ObservableObject {
     @Published private(set) var apiKeySaveCount: UInt64 = 0
     @Published private(set) var apiKeyError: String?
     @Published private(set) var hasAccessibilityPermission = true
+    @Published private(set) var lastTranscript: String?
     @Published var apiKeyInput = ""
 
     private let transport: IPCTransport
     private let hotkeyBridge = GlobalHotkeyBridge()
     private let activityOverlay = ActivityOverlayController()
-    private let soundCues = SoundCueController()
+    private let soundCues = DictationSoundController()
+    private let clipboardAutopaster = ClipboardAutopaster()
     private let eventQueue = DispatchQueue(label: "voxa.menubar.events", qos: .userInitiated)
     private let requestQueue = DispatchQueue(label: "voxa.menubar.requests", qos: .userInitiated)
+    private let outputQueue = DispatchQueue(label: "voxa.menubar.output", qos: .userInitiated)
+    private let reconnectSignal = DispatchSemaphore(value: 0)
 
     private let lifecycleLock = NSLock()
     private var shouldStop = false
@@ -181,12 +184,14 @@ final class AppController: ObservableObject {
     }
 
     func startRecording() {
+        guard !isBusy, runtimeState == .idle || runtimeState == .error else { return }
         clearActivityOverlayPhaseOverride()
         sendCommand(
             method: "start_recording",
             params: ["origin": "manual"],
             pendingMessage: "Requesting recording start...",
-            successMessage: "Recording request accepted"
+            successMessage: "Recording request accepted",
+            refreshStateAfterSuccess: false
         )
     }
 
@@ -198,18 +203,35 @@ final class AppController: ObservableObject {
             method: "stop_recording",
             params: ["reason": "manual"],
             pendingMessage: "Requesting recording stop...",
-            successMessage: "Recording stop request accepted"
+            successMessage: "Recording stop request accepted",
+            refreshStateAfterSuccess: false
         )
     }
 
-    func dismissActivityOverlay() {
-        if runtimeState == .recording {
-            stopRecordingFromOverlay()
-            return
+    func cancelRecordingFromOverlay() {
+        guard runtimeState == .recording, !isBusy else { return }
+        isBusy = true
+        statusMessage = "Cancelling recording..."
+        requestQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try self.transport.request(method: "cancel_recording", params: [:])
+                let cancelled = result["cancelled"] as? Bool == true
+                DispatchQueue.main.async {
+                    self.isBusy = false
+                    self.statusMessage = cancelled ? "Recording cancelled" : "Recording has already ended"
+                }
+                if let state = try? self.transport.getState() {
+                    self.publishState(state)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isBusy = false
+                    self.statusMessage = error.localizedDescription
+                }
+                self.refreshOverlayStateAfterHotkeyError()
+            }
         }
-
-        overlayDismissedForCurrentRecording = true
-        activityOverlay.hide()
     }
 
     func stopRecordingFromOverlay() {
@@ -227,7 +249,8 @@ final class AppController: ObservableObject {
             method: "get_state",
             params: [:],
             pendingMessage: "Refreshing daemon state...",
-            successMessage: "State refreshed"
+            successMessage: "State refreshed",
+            refreshStateAfterSuccess: true
         )
     }
 
@@ -267,7 +290,13 @@ final class AppController: ObservableObject {
             params: ["toggle_hotkey": value.persistedValue],
             pendingMessage: "Updating toggle hotkey...",
             successMessage: "Toggle hotkey updated"
-        )
+        ) { controller in
+            controller.toggleHotkey = value
+            controller.hotkeyBridge.updateBindings(
+                toggle: value,
+                hold: controller.holdHotkey
+            )
+        }
     }
 
     func setHoldHotkey(_ value: HotkeyOption) {
@@ -279,7 +308,13 @@ final class AppController: ObservableObject {
             params: ["hold_hotkey": value.persistedValue],
             pendingMessage: "Updating hold hotkey...",
             successMessage: "Hold hotkey updated"
-        )
+        ) { controller in
+            controller.holdHotkey = value
+            controller.hotkeyBridge.updateBindings(
+                toggle: controller.toggleHotkey,
+                hold: value
+            )
+        }
     }
 
     func setHotkeyCaptureEnabled(_ enabled: Bool) {
@@ -295,7 +330,9 @@ final class AppController: ObservableObject {
             params: ["model": value.rawValue],
             pendingMessage: "Updating model...",
             successMessage: "Model updated"
-        )
+        ) { controller in
+            controller.model = value
+        }
     }
 
     func setOutputMode(_ value: OutputModeOption) {
@@ -307,7 +344,9 @@ final class AppController: ObservableObject {
             params: ["output_mode": value.rawValue],
             pendingMessage: "Updating output mode...",
             successMessage: "Output mode updated"
-        )
+        ) { controller in
+            controller.outputMode = value
+        }
     }
 
     func setMaxRecordingSeconds(_ value: UInt64) {
@@ -320,7 +359,9 @@ final class AppController: ObservableObject {
             params: ["max_recording_seconds": clamped],
             pendingMessage: "Updating max recording duration...",
             successMessage: "Max recording duration updated"
-        )
+        ) { controller in
+            controller.maxRecordingSeconds = clamped
+        }
     }
 
     func saveAPIKey() {
@@ -341,15 +382,21 @@ final class AppController: ObservableObject {
             guard let self else { return }
 
             do {
-                try self.transport.setAPIKey(trimmed)
-                let status = try self.transport.getAPIKeyStatus()
+                let result = try self.transport.setAPIKey(trimmed)
+                let source = result["source"] as? String
+                let hint = String(trimmed.prefix(10)) + "..."
                 DispatchQueue.main.async {
-                    self.publishAPIKeyStatus(status)
+                    self.isAPIKeySet = true
+                    self.apiKeyHint = hint
+                    if let source {
+                        self.apiKeySource = source
+                    }
                     self.apiKeyError = nil
                     self.statusMessage = "API key saved"
                     self.apiKeySaveCount += 1
                     self.apiKeyInput = ""
                     self.isBusy = false
+                    self.syncActivityOverlay()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -366,6 +413,7 @@ final class AppController: ObservableObject {
         eventConnection?.close()
         eventConnection = nil
         lifecycleLock.unlock()
+        reconnectSignal.signal()
     }
 
     func startDaemon() {
@@ -431,6 +479,7 @@ final class AppController: ObservableObject {
         eventConnection?.close()
         eventConnection = nil
         lifecycleLock.unlock()
+        reconnectSignal.signal()
     }
 
     private func runEventLoop() {
@@ -447,21 +496,28 @@ final class AppController: ObservableObject {
             do {
                 try ensureDaemonRunning()
                 publishConnectionStatus(.connecting, message: "Connecting to daemon...")
+                // Subscribe before reading snapshots so events emitted during
+                // startup/reconnect cannot fall into a snapshot-subscribe gap.
+                let subscribeFrom = currentLastSeenSeq()
+                let subscription = try transport.subscribe(
+                    fromSeq: subscribeFrom == 0 ? nil : subscribeFrom
+                )
+                let connection = subscription.connection
+                reconcileSubscriptionCursor(
+                    currentSeq: subscription.currentSeq,
+                    previousCursor: subscribeFrom
+                )
+
+                lifecycleLock.lock()
+                eventConnection = connection
+                lifecycleLock.unlock()
+
                 let state = try transport.getState()
                 let config = try transport.getConfig()
                 let apiKeyStatus = try transport.getAPIKeyStatus()
                 publishState(state)
                 publishConfig(config)
                 publishAPIKeyStatus(apiKeyStatus)
-
-                let subscribeFrom = currentLastSeenSeq()
-                let connection = try transport.subscribe(
-                    fromSeq: subscribeFrom == 0 ? nil : subscribeFrom
-                )
-
-                lifecycleLock.lock()
-                eventConnection = connection
-                lifecycleLock.unlock()
 
                 publishConnectionStatus(.connected, message: "Connected")
                 backoffIndex = 0
@@ -496,7 +552,7 @@ final class AppController: ObservableObject {
                 )
 
                 let sleepDuration = backoffSchedule[min(backoffIndex, backoffSchedule.count - 1)]
-                Thread.sleep(forTimeInterval: sleepDuration)
+                _ = reconnectSignal.wait(timeout: .now() + sleepDuration)
                 backoffIndex += 1
             }
         }
@@ -549,7 +605,8 @@ final class AppController: ObservableObject {
         method: String,
         params: [String: Any],
         pendingMessage: String,
-        successMessage: String
+        successMessage: String,
+        refreshStateAfterSuccess: Bool
     ) {
         DispatchQueue.main.async {
             self.isBusy = true
@@ -561,21 +618,21 @@ final class AppController: ObservableObject {
 
             do {
                 _ = try self.transport.request(method: method, params: params)
-                let state = try self.transport.getState()
-                let config = try self.transport.getConfig()
-                let apiKeyStatus = try self.transport.getAPIKeyStatus()
-
                 DispatchQueue.main.async {
-                    self.publishState(state)
-                    self.publishConfig(config)
-                    self.publishAPIKeyStatus(apiKeyStatus)
                     self.statusMessage = successMessage
                     self.isBusy = false
+                }
+
+                if refreshStateAfterSuccess, let state = try? self.transport.getState() {
+                    self.publishState(state)
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.statusMessage = error.localizedDescription
                     self.isBusy = false
+                }
+                if method == "stop_recording" {
+                    self.refreshOverlayStateAfterHotkeyError()
                 }
             }
         }
@@ -584,7 +641,8 @@ final class AppController: ObservableObject {
     private func updateConfig(
         params: [String: Any],
         pendingMessage: String,
-        successMessage: String
+        successMessage: String,
+        applyAccepted: @escaping (AppController) -> Void
     ) {
         DispatchQueue.main.async {
             self.isBusy = true
@@ -595,12 +653,15 @@ final class AppController: ObservableObject {
             guard let self else { return }
 
             do {
-                _ = try self.transport.request(method: "set_config", params: params)
-                let config = try self.transport.getConfig()
-                let apiKeyStatus = try self.transport.getAPIKeyStatus()
+                let result = try self.transport.request(method: "set_config", params: params)
+                let revision = (result["revision"] as? NSNumber)?.uint64Value
+
                 DispatchQueue.main.async {
-                    self.publishConfig(config)
-                    self.publishAPIKeyStatus(apiKeyStatus)
+                    applyAccepted(self)
+                    self.syncActivityOverlay()
+                    if let revision {
+                        self.configRevision = revision
+                    }
                     self.statusMessage = successMessage
                     self.isBusy = false
                 }
@@ -642,10 +703,6 @@ final class AppController: ObservableObject {
                         params: ["origin": "hotkey_toggle"]
                     )
                 }
-                let refreshedState = try self.transport.getState()
-                DispatchQueue.main.async {
-                    self.publishState(refreshedState)
-                }
             } catch {
                 DispatchQueue.main.async {
                     self.statusMessage = error.localizedDescription
@@ -672,7 +729,10 @@ final class AppController: ObservableObject {
     private func handleHoldHotkeyDeactivated() {
         DispatchQueue.main.async {
             self.overlayDismissedForCurrentRecording = false
-            self.transitionOverlayToProcessing()
+            // Cancel may already have returned to idle while the key is still held.
+            if self.runtimeState == .recording {
+                self.transitionOverlayToProcessing()
+            }
         }
 
         sendHotkeyCommand(
@@ -687,10 +747,6 @@ final class AppController: ObservableObject {
 
             do {
                 _ = try self.transport.request(method: method, params: params)
-                let state = try self.transport.getState()
-                DispatchQueue.main.async {
-                    self.publishState(state)
-                }
             } catch {
                 DispatchQueue.main.async {
                     self.statusMessage = error.localizedDescription
@@ -703,73 +759,59 @@ final class AppController: ObservableObject {
     private func handleTranscriptionReady(_ text: String) {
         setActivityOverlayPhaseOverride(.outputting, autoClearAfter: 0.45)
         syncActivityOverlay()
-        statusMessage = processTranscriptOutput(
-            text: text,
-            mode: outputMode,
-            copyToClipboard: { [weak self] value in
-                self?.writeTextToClipboard(value) ?? false
-            },
-            sendAutopaste: { [weak self] in
-                self?.sendCommandVShortcut() ?? false
+
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            statusMessage = "Transcript ready (empty)"
+            return
+        }
+        lastTranscript = text
+        let mode = outputMode
+        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let canPaste = mode == .clipboardAutopaste
+            && refreshAccessibilityPermission(prompt: false)
+            && targetPID != nil && targetPID != getpid()
+
+        statusMessage = "Sending transcript…"
+        outputQueue.async { [weak self] in
+            guard let self else { return }
+            let message = processTranscriptOutput(
+                text: text,
+                mode: mode,
+                copyToClipboard: self.writeTextToClipboard,
+                autopaste: { value in
+                    self.clipboardAutopaster.paste(value) { ownedCount in
+                        guard canPaste, let targetPID else { return false }
+                        return sendPasteShortcut(to: targetPID, clipboardChangeCount: ownedCount)
+                    }.message
+                }
+            )
+            DispatchQueue.main.async {
+                self.statusMessage = message
             }
-        )
+        }
+    }
+
+    func copyLastTranscript() {
+        guard let text = lastTranscript else { return }
+        // Serialize explicit copies with paste/restore, so an earlier paste can
+        // never restore its saved clipboard over a requested transcript copy.
+        outputQueue.async { [weak self] in
+            guard let self else { return }
+            let copied = self.writeTextToClipboard(text)
+            DispatchQueue.main.async {
+                self.statusMessage = copied
+                    ? "Last transcript copied to clipboard"
+                    : "Could not copy last transcript"
+            }
+        }
     }
 
     private func writeTextToClipboard(_ text: String) -> Bool {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        return pasteboard.setString(text, forType: .string)
-    }
-
-    private func sendCommandVShortcut() -> Bool {
-        guard refreshAccessibilityPermission(prompt: true) else {
-            return false
+        onPasteboardThread {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            return pasteboard.setString(text, forType: .string)
         }
-
-        let commandKey: CGKeyCode = 55
-        let vKey: CGKeyCode = 9
-        let delay = 0.02
-
-        guard let source = CGEventSource(stateID: .hidSystemState) else {
-            return false
-        }
-
-        guard postKeyEvent(source: source, keyCode: commandKey, keyDown: true) else {
-            return false
-        }
-        Thread.sleep(forTimeInterval: delay)
-        guard postKeyEvent(source: source, keyCode: vKey, keyDown: true, flags: .maskCommand)
-        else {
-            return false
-        }
-
-        Thread.sleep(forTimeInterval: delay)
-        guard postKeyEvent(source: source, keyCode: vKey, keyDown: false, flags: .maskCommand)
-        else {
-            return false
-        }
-
-        Thread.sleep(forTimeInterval: delay)
-        return postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
-    }
-
-    private func postKeyEvent(
-        source: CGEventSource,
-        keyCode: CGKeyCode,
-        keyDown: Bool,
-        flags: CGEventFlags = []
-    ) -> Bool {
-        guard let event = CGEvent(
-            keyboardEventSource: source,
-            virtualKey: keyCode,
-            keyDown: keyDown
-        ) else {
-            return false
-        }
-
-        event.flags = flags
-        event.post(tap: .cghidEventTap)
-        return true
     }
 
     @discardableResult
@@ -808,7 +850,6 @@ final class AppController: ObservableObject {
                 : nil
             self.lastErrorCode = snapshot.lastError
             self.eventSequence = max(self.eventSequence, snapshot.eventSeq)
-            self.updateLastSeenSeq(snapshot.eventSeq)
             if snapshot.state != .recording {
                 self.recordingLevel = 0
             }
@@ -839,6 +880,8 @@ final class AppController: ObservableObject {
 
         if state == .recording {
             soundCues.playListeningStarted()
+        } else if state == .error {
+            soundCues.playError()
         } else if previousState == .recording {
             soundCues.playRecordingEnded()
         }
@@ -859,6 +902,7 @@ final class AppController: ObservableObject {
             self.maxRecordingSeconds = snapshot.maxRecordingSeconds
             self.configRevision = snapshot.revision
             self.hotkeyBridge.updateBindings(toggle: self.toggleHotkey, hold: self.holdHotkey)
+            self.syncActivityOverlay()
         }
     }
 
@@ -867,6 +911,7 @@ final class AppController: ObservableObject {
             self.apiKeySource = snapshot.source
             self.isAPIKeySet = snapshot.isSet
             self.apiKeyHint = snapshot.hint
+            self.syncActivityOverlay()
         }
     }
 
@@ -900,6 +945,9 @@ final class AppController: ObservableObject {
         let state = try? transport.getState()
 
         DispatchQueue.main.async {
+            if self.activityOverlayPhaseOverride == .transcribing {
+                self.clearActivityOverlayPhaseOverride()
+            }
             if let state {
                 self.publishState(state)
             } else {
@@ -920,8 +968,11 @@ final class AppController: ObservableObject {
             phase,
             content: currentActivityOverlayContent(for: phase),
             level: recordingLevel,
-            onDismiss: { [weak self] in
-                self?.dismissActivityOverlay()
+            onStart: { [weak self] in
+                self?.startRecording()
+            },
+            onCancel: { [weak self] in
+                self?.cancelRecordingFromOverlay()
             },
             onStop: { [weak self] in
                 self?.stopRecordingFromOverlay()
@@ -941,13 +992,17 @@ final class AppController: ObservableObject {
             return .transcribing
         case .outputting:
             return .outputting
-        case .idle, .error:
+        case .idle:
+            return isAPIKeySet ? .idle : nil
+        case .error:
             return nil
         }
     }
 
     private func currentActivityOverlayContent(for phase: ActivityOverlayPhase) -> ActivityOverlayContent {
         switch phase {
+        case .idle:
+            return ActivityOverlayContent(title: "Start dictation", subtitle: toggleHotkey.label)
         case .listening:
             return ActivityOverlayContent(title: "Listening", subtitle: nil)
         case .transcribing:
@@ -1005,8 +1060,22 @@ final class AppController: ObservableObject {
 
     private func updateLastSeenSeq(_ value: UInt64) {
         lifecycleLock.lock()
-        if value > lastSeenSeq {
+        if value < lastSeenSeq {
+            // A lower live/replayed event sequence starts a fresh daemon epoch.
             lastSeenSeq = value
+        } else if value > lastSeenSeq {
+            lastSeenSeq = value
+        }
+        lifecycleLock.unlock()
+    }
+
+    private func reconcileSubscriptionCursor(currentSeq: UInt64, previousCursor: UInt64) {
+        lifecycleLock.lock()
+        if previousCursor == 0 {
+            // Establish the initial subscription cutoff. For a lower sequence
+            // after restart, retain the old cursor until the first replayed
+            // event arrives so an interrupted replay can be requested again.
+            lastSeenSeq = currentSeq
         }
         lifecycleLock.unlock()
     }
@@ -1289,250 +1358,4 @@ private func runProcess(executable: String, arguments: [String]) throws -> Strin
     }
 
     return stdoutText
-}
-
-private final class SoundCueController {
-    private enum Cue {
-        case listeningStarted
-        case recordingEnded
-
-        var duration: TimeInterval {
-            switch self {
-            case .listeningStarted:
-                return 0.19
-            case .recordingEnded:
-                return 0.17
-            }
-        }
-
-        var gain: Double {
-            switch self {
-            case .listeningStarted:
-                return 0.18
-            case .recordingEnded:
-                return 0.16
-            }
-        }
-    }
-
-    private let sampleRate: Double = 44_100
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
-    private let format: AVAudioFormat
-
-    init() {
-        format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
-        try? engine.start()
-    }
-
-    func playListeningStarted() {
-        play(.listeningStarted)
-    }
-
-    func playRecordingEnded() {
-        play(.recordingEnded)
-    }
-
-    private func play(_ cue: Cue) {
-        if !engine.isRunning {
-            do {
-                try engine.start()
-            } catch {
-                NSSound.beep()
-                return
-            }
-        }
-
-        guard let buffer = makeBuffer(for: cue) else {
-            NSSound.beep()
-            return
-        }
-
-        player.stop()
-        player.scheduleBuffer(buffer, at: nil, options: .interrupts)
-        player.play()
-    }
-
-    private func makeBuffer(for cue: Cue) -> AVAudioPCMBuffer? {
-        let frameCount = AVAudioFrameCount(sampleRate * cue.duration)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
-              let channelData = buffer.floatChannelData
-        else {
-            return nil
-        }
-
-        buffer.frameLength = frameCount
-        for frame in 0..<Int(frameCount) {
-            let time = Double(frame) / sampleRate
-            let value = Float(clamp(sample(for: cue, at: time) * cue.gain, min: -1, max: 1))
-            for channel in 0..<Int(format.channelCount) {
-                channelData[channel][frame] = value
-            }
-        }
-
-        return buffer
-    }
-
-    private func sample(for cue: Cue, at time: TimeInterval) -> Double {
-        switch cue {
-        case .listeningStarted:
-            return bellTone(time: time, start: 0.00, duration: 0.12, frequency: 659.25, amplitude: 0.72)
-                + bellTone(time: time, start: 0.055, duration: 0.13, frequency: 987.77, amplitude: 0.55)
-        case .recordingEnded:
-            return bellTone(time: time, start: 0.00, duration: 0.10, frequency: 987.77, amplitude: 0.50)
-                + bellTone(time: time, start: 0.045, duration: 0.12, frequency: 587.33, amplitude: 0.58)
-        }
-    }
-
-    private func bellTone(
-        time: TimeInterval,
-        start: TimeInterval,
-        duration: TimeInterval,
-        frequency: Double,
-        amplitude: Double
-    ) -> Double {
-        let localTime = time - start
-        guard localTime >= 0, localTime <= duration else {
-            return 0
-        }
-
-        let envelope = noteEnvelope(time: localTime, duration: duration)
-        let fundamental = sin(2 * .pi * frequency * localTime)
-        let shimmer = sin(2 * .pi * frequency * 2.01 * localTime) * 0.22
-        return (fundamental + shimmer) * envelope * amplitude
-    }
-
-    private func noteEnvelope(time: TimeInterval, duration: TimeInterval) -> Double {
-        let attack = min(0.012, duration * 0.25)
-        let release = min(0.075, duration * 0.55)
-        let releaseStart = max(attack, duration - release)
-
-        let attackLevel = time < attack ? smoothstep(time / attack) : 1
-        let releaseLevel = time > releaseStart
-            ? 1 - smoothstep((time - releaseStart) / release)
-            : 1
-
-        return attackLevel * releaseLevel
-    }
-
-    private func smoothstep(_ value: Double) -> Double {
-        let x = clamp(value, min: 0, max: 1)
-        return x * x * (3 - 2 * x)
-    }
-
-    private func clamp(_ value: Double, min minimum: Double, max maximum: Double) -> Double {
-        Swift.max(minimum, Swift.min(maximum, value))
-    }
-}
-
-private final class ActivityOverlayController {
-    private let panelSize = NSSize(width: 236, height: 68)
-    private var panel: NSPanel?
-    private var hostingView: TransparentHostingView<ActivityOverlayView>?
-
-    func show(
-        _ phase: ActivityOverlayPhase,
-        content: ActivityOverlayContent,
-        level: Double,
-        onDismiss: @escaping () -> Void,
-        onStop: @escaping () -> Void
-    ) {
-        let panel = ensurePanel()
-        if let hostingView {
-            hostingView.rootView = ActivityOverlayView(
-                phase: phase,
-                content: content,
-                level: level,
-                onDismiss: onDismiss,
-                onStop: onStop
-            )
-        }
-        position(panel)
-        panel.orderFrontRegardless()
-    }
-
-    func hide() {
-        panel?.orderOut(nil)
-    }
-
-    @discardableResult
-    private func ensurePanel() -> NSPanel {
-        if let panel {
-            return panel
-        }
-
-        let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: panelSize),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: true
-        )
-        panel.isFloatingPanel = true
-        panel.level = .statusBar
-        panel.backgroundColor = .clear
-        panel.isOpaque = false
-        panel.hasShadow = false
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        panel.ignoresMouseEvents = false
-        panel.isMovable = false
-        panel.isReleasedWhenClosed = false
-
-        let hostingView = TransparentHostingView(
-            rootView: ActivityOverlayView(
-                phase: .listening,
-                content: ActivityOverlayContent(
-                    title: "Listening",
-                    subtitle: nil
-                ),
-                level: 0,
-                onDismiss: {},
-                onStop: {}
-            )
-        )
-        hostingView.frame = NSRect(origin: .zero, size: panelSize)
-        hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
-        panel.contentView = hostingView
-
-        self.hostingView = hostingView
-        self.panel = panel
-        return panel
-    }
-
-    private func position(_ panel: NSPanel) {
-        let screen = currentScreen() ?? NSScreen.main ?? NSScreen.screens.first
-        guard let screen else { return }
-
-        let visibleFrame = screen.visibleFrame
-        let origin = CGPoint(
-            x: round(visibleFrame.midX - (panelSize.width / 2)),
-            y: visibleFrame.minY + 20
-        )
-        panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
-    }
-
-    private func currentScreen() -> NSScreen? {
-        let mouseLocation = NSEvent.mouseLocation
-        return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
-    }
-}
-
-private final class TransparentHostingView<Content: View>: NSHostingView<Content> {
-    override var isOpaque: Bool {
-        false
-    }
-
-    required init(rootView: Content) {
-        super.init(rootView: rootView)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
 }

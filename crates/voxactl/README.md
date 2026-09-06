@@ -12,7 +12,7 @@ cargo run -p voxactl -- status
 cargo run -p voxactl -- start manual
 cargo run -p voxactl -- stop manual
 cargo run -p voxactl -- config get
-cargo run -p voxactl -- config set model gpt-4o-transcribe
+cargo run -p voxactl -- config set model gpt-transcribe
 cargo run -p voxactl -- config set max_recording_seconds 120
 cargo run -p voxactl -- api-key status
 cargo run -p voxactl -- api-key set sk-your-key

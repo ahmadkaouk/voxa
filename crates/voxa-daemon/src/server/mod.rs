@@ -21,7 +21,7 @@ use voxa_core::ipc::{
 };
 
 use self::connection::ConnectionHandle;
-use self::state::{SetConfigParams, SharedState};
+use self::state::{PendingTranscription, SetConfigParams, SharedState, StopRecordingAction};
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_DURATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -138,7 +138,7 @@ fn handle_client(
 ) -> io::Result<()> {
     writer.set_nonblocking(false)?;
     let read_stream = writer.try_clone()?;
-    let connection = ConnectionHandle::new(writer);
+    let connection = ConnectionHandle::new(writer)?;
     let mut reader = BufReader::new(read_stream);
     let mut line = String::new();
     let mut hello_done = false;
@@ -279,6 +279,24 @@ fn handle_request(
                 Err(error) => write_response_error(connection, &request.id, error),
             }
         }
+        "cancel_recording" => {
+            let result = {
+                let mut state = shared
+                    .lock()
+                    .map_err(|_| io::Error::other("state poisoned"))?;
+                let result = state.cancel_recording();
+                dispatch_outbox(&mut state, event_tx)?;
+                result
+            };
+
+            match result {
+                Ok(value) => connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
+                    &request.id,
+                    value,
+                ))),
+                Err(error) => write_response_error(connection, &request.id, error),
+            }
+        }
         "stop_recording" => {
             let params = request.parse_params::<StopRecordingParams>();
             let params = match params {
@@ -287,13 +305,21 @@ fn handle_request(
             };
             let reason = params.reason.unwrap_or(voxa_core::ipc::StopReason::Manual);
 
-            let result = {
+            let action = {
                 let mut state = shared
                     .lock()
                     .map_err(|_| io::Error::other("state poisoned"))?;
-                let result = state.stop_recording(reason);
+                let action = state.begin_stop_recording(reason);
                 dispatch_outbox(&mut state, event_tx)?;
-                result
+                action
+            };
+
+            let result = match action {
+                Ok(StopRecordingAction::Accepted(value)) => Ok(value),
+                Ok(StopRecordingAction::Transcribe(pending)) => {
+                    complete_pending_transcription(shared, event_tx, pending)?
+                }
+                Err(error) => Err(error),
             };
 
             match result {
@@ -385,21 +411,17 @@ fn handle_request(
         }
         "subscribe" => {
             let params = request.parse_params::<SubscribeParams>();
-            if let Err(error) = params {
-                return write_response_error(connection, &request.id, error);
-            }
+            let params = match params {
+                Ok(params) => params,
+                Err(error) => return write_response_error(connection, &request.id, error),
+            };
 
-            let response = {
+            {
                 let mut state = shared
                     .lock()
                     .map_err(|_| io::Error::other("state poisoned"))?;
-                state.subscribe(connection.clone())
-            };
-
-            connection.send(ServerEnvelope::Response(ResponseEnvelope::ok(
-                &request.id,
-                response,
-            )))
+                state.subscribe(connection.clone(), &request.id, params.from_seq)
+            }
         }
         _ => connection.send(ServerEnvelope::Response(ResponseEnvelope::err(
             &request.id,
@@ -434,16 +456,28 @@ fn dispatch_outbox(
     Ok(())
 }
 
+fn complete_pending_transcription(
+    shared: &Arc<Mutex<SharedState>>,
+    event_tx: &mpsc::Sender<EventEnvelope>,
+    pending: PendingTranscription,
+) -> io::Result<Result<Value, ErrorPayload>> {
+    let completed = pending.run();
+    let mut state = shared
+        .lock()
+        .map_err(|_| io::Error::other("state poisoned"))?;
+    let result = state.finish_stop_recording(completed);
+    dispatch_outbox(&mut state, event_tx)?;
+    Ok(result)
+}
+
 fn run_event_dispatcher(event_rx: mpsc::Receiver<EventEnvelope>, shared: Arc<Mutex<SharedState>>) {
     while let Ok(event) = event_rx.recv() {
-        let envelope = ServerEnvelope::Event(event);
-
         let mut state = match shared.lock() {
             Ok(state) => state,
             Err(_) => return,
         };
 
-        state.notify_subscribers(&envelope);
+        state.publish_event(event);
     }
 }
 
@@ -453,16 +487,24 @@ fn run_max_duration_watchdog(
     event_tx: mpsc::Sender<EventEnvelope>,
 ) {
     while running.load(Ordering::SeqCst) {
-        let mut state = match shared.lock() {
-            Ok(state) => state,
-            Err(_) => return,
+        let pending = {
+            let mut state = match shared.lock() {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            let pending = state.begin_max_duration_stop_if_needed();
+            state.emit_audio_level_if_needed();
+            if dispatch_outbox(&mut state, &event_tx).is_err() {
+                return;
+            }
+            pending
         };
-        state.enforce_max_duration_if_needed();
-        state.emit_audio_level_if_needed();
-        if dispatch_outbox(&mut state, &event_tx).is_err() {
-            return;
+
+        if let Ok(Some(pending)) = pending {
+            if complete_pending_transcription(&shared, &event_tx, pending).is_err() {
+                return;
+            }
         }
-        drop(state);
         thread::sleep(MAX_DURATION_POLL_INTERVAL);
     }
 }

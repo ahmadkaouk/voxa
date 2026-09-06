@@ -4,10 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_PACKAGE_DIR="$ROOT_DIR/apps/voxa-menubar"
 DIST_DIR="$ROOT_DIR/dist"
+APPS_DIR="$DIST_DIR/apps.noindex"
 BUILD_DIR="$DIST_DIR/build"
-STAGE_DIR="$DIST_DIR/dmg"
+STAGE_DIR="$APPS_DIR/dmg"
 APP_NAME="Voxa"
-APP_DIR="$DIST_DIR/$APP_NAME.app"
+APP_DIR="$APPS_DIR/$APP_NAME.app"
 APP_EXECUTABLE="$APP_DIR/Contents/MacOS/$APP_NAME"
 APP_RESOURCES_DIR="$APP_DIR/Contents/Resources"
 DAEMON_BUNDLE_PATH="$APP_RESOURCES_DIR/bin/voxa-daemon"
@@ -258,6 +259,7 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_PATH"
 
 cp "$MENU_BAR_BIN" "$APP_EXECUTABLE"
 cp "$DAEMON_BIN" "$DAEMON_BUNDLE_PATH"
+cp -R "$APP_PACKAGE_DIR/Sources/VoxaMenuBar/Resources/Sounds" "$APP_RESOURCES_DIR/Sounds"
 chmod +x "$APP_EXECUTABLE" "$DAEMON_BUNDLE_PATH"
 
 cat > "$INFO_PLIST_PATH" <<'EOF'

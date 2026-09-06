@@ -12,7 +12,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "VoxaMenuBar",
-            path: "Sources/VoxaMenuBar"
+            path: "Sources/VoxaMenuBar",
+            resources: [.copy("Resources/Sounds")]
         ),
         .testTarget(
             name: "VoxaMenuBarTests",

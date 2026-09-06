@@ -17,6 +17,40 @@ struct VoxaMenuBarApp: App {
     }
 }
 
+enum PopoverPrimaryAction: Equatable {
+    case addAPIKey
+    case reconnect
+    case connecting
+    case startRecording
+    case stopRecording
+    case retry
+    case working
+
+    static func resolve(
+        isAPIKeySet: Bool,
+        connectionStatus: ConnectionStatus,
+        runtimeState: RuntimeStateKind
+    ) -> PopoverPrimaryAction {
+        switch connectionStatus {
+        case .connecting:
+            return .connecting
+        case .disconnected:
+            return .reconnect
+        case .connected:
+            switch runtimeState {
+            case .idle:
+                return isAPIKeySet ? .startRecording : .addAPIKey
+            case .recording:
+                return .stopRecording
+            case .error:
+                return isAPIKeySet ? .retry : .addAPIKey
+            case .transcribing, .outputting:
+                return .working
+            }
+        }
+    }
+}
+
 struct VoxaPopoverView: View {
     @ObservedObject var controller: AppController
     @State private var expandedMenu: ExpandedMenu?
@@ -34,9 +68,9 @@ struct VoxaPopoverView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             statusSection
-            Divider()
 
             if let lastError = controller.lastErrorCode, !lastError.isEmpty {
+                Divider()
                 sectionGroup {
                     statusMessageRow(
                         title: "Last error",
@@ -47,8 +81,6 @@ struct VoxaPopoverView: View {
                 Divider()
             }
 
-            actionSection
-            Divider()
             generalSection
             Divider()
             hotkeysSection
@@ -57,8 +89,8 @@ struct VoxaPopoverView: View {
             Divider()
             footerActions
         }
-        .padding(.vertical, 4)
-        .frame(width: 278)
+        .padding(.vertical, 7)
+        .frame(width: 324)
         .animation(.easeInOut(duration: 0.14), value: expandedMenu)
         .onChange(of: controller.apiKeySaveCount) { _ in
             showsAPIKeyEditor = false
@@ -77,46 +109,71 @@ struct VoxaPopoverView: View {
     }
 
     private var statusSection: some View {
-        sectionGroup {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(statusTint)
-                    .frame(width: 7, height: 7)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(statusTint.opacity(0.14))
+                        .frame(width: 30, height: 30)
 
-                Text(statusMenuTitle)
-                    .font(.system(size: 13, weight: .medium))
+                    Circle()
+                        .fill(statusTint)
+                        .frame(width: 9, height: 9)
+                }
+                .accessibilityHidden(true)
 
-                Spacer()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(statusMenuTitle)
+                        .font(.system(size: 14, weight: .semibold))
+
+                    Text(statusSubtitle)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 4)
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 4)
 
-            Text(statusSubtitle)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .padding(.horizontal, 26)
-                .padding(.top, 1)
-                .padding(.bottom, 2)
-        }
-    }
-
-    private var actionSection: some View {
-        sectionGroup {
-            menuActionRow(
-                primaryActionTitle,
-                systemImage: primaryActionSymbol,
-                tint: primaryActionTint
-            ) {
-                performPrimaryAction()
+            Button(action: performPrimaryAction) {
+                HStack(spacing: 8) {
+                    Image(systemName: primaryActionSymbol)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(primaryActionTitle)
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+                .padding(.horizontal, 4)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .tint(primaryActionTint)
             .disabled(primaryActionDisabled)
+            .accessibilityHint(primaryActionAccessibilityHint)
         }
+        .padding(13)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.7)
+        )
+        .padding(.horizontal, 10)
+        .padding(.bottom, 7)
+        .accessibilityElement(children: .contain)
     }
 
     private var generalSection: some View {
         sectionGroup("General") {
-            expandableRow(.model, title: "Model", systemImage: "waveform") {
+            expandableRow(
+                .model,
+                title: "Model",
+                systemImage: "waveform",
+                value: controller.model.label
+            ) {
                 ForEach(ModelOption.allCases) { model in
                     optionButton(
                         title: model.label,
@@ -127,7 +184,12 @@ struct VoxaPopoverView: View {
                 }
             }
 
-            expandableRow(.output, title: "Output", systemImage: "square.and.arrow.up") {
+            expandableRow(
+                .output,
+                title: "Output",
+                systemImage: "square.and.arrow.up",
+                value: controller.outputMode.label
+            ) {
                 ForEach(OutputModeOption.allCases) { mode in
                     optionButton(
                         title: mode.label,
@@ -136,9 +198,19 @@ struct VoxaPopoverView: View {
                         controller.setOutputMode(mode)
                     }
                 }
+                Divider()
+                Button("Copy Last Transcript") {
+                    controller.copyLastTranscript()
+                }
+                .disabled(controller.lastTranscript == nil)
             }
 
-            expandableRow(.maxRecording, title: "Max Recording", systemImage: "timer") {
+            expandableRow(
+                .maxRecording,
+                title: "Max Recording",
+                systemImage: "timer",
+                value: formattedRecordingDuration(controller.maxRecordingSeconds)
+            ) {
                 ForEach(maxRecordingOptions, id: \.self) { seconds in
                     optionButton(
                         title: formattedRecordingDuration(seconds),
@@ -149,7 +221,7 @@ struct VoxaPopoverView: View {
                 }
             }
         }
-        .disabled(controller.isBusy)
+        .disabled(controller.isBusy || controller.runtimeState != .idle)
     }
 
     private var hotkeysSection: some View {
@@ -170,7 +242,7 @@ struct VoxaPopoverView: View {
                 target: .hold
             )
         }
-        .disabled(controller.isBusy)
+        .disabled(controller.isBusy || controller.runtimeState != .idle)
     }
 
     private var accountSection: some View {
@@ -185,7 +257,7 @@ struct VoxaPopoverView: View {
                 showsAPIKeyEditor.toggle()
             }
 
-            if showsAPIKeyEditor || !controller.isAPIKeySet {
+            if showsAPIKeyEditor {
                 apiKeyEditor
             }
         }
@@ -300,47 +372,81 @@ struct VoxaPopoverView: View {
     }
 
     private var primaryActionTitle: String {
-        switch controller.runtimeState {
-        case .recording:
-            return "Stop Recording"
-        case .error:
-            return "Try Again"
-        case .transcribing, .outputting:
-            return "Working…"
-        case .idle:
+        switch primaryActionKind {
+        case .addAPIKey:
+            return "Add API Key"
+        case .reconnect:
+            return "Reconnect to Voxa"
+        case .connecting:
+            return "Starting…"
+        case .startRecording:
             return "Start Recording"
+        case .stopRecording:
+            return "Stop Recording"
+        case .retry:
+            return "Try Again"
+        case .working:
+            return "Working…"
         }
     }
 
     private var primaryActionSymbol: String {
-        switch controller.runtimeState {
-        case .recording:
-            return "stop.fill"
-        case .error:
+        switch primaryActionKind {
+        case .addAPIKey:
+            return "key.fill"
+        case .reconnect, .retry:
             return "arrow.clockwise"
-        case .transcribing, .outputting:
-            return "hourglass"
-        case .idle:
+        case .connecting:
+            return "bolt.horizontal.circle"
+        case .startRecording:
             return "mic.fill"
+        case .stopRecording:
+            return "stop.fill"
+        case .working:
+            return "hourglass"
         }
     }
 
     private var primaryActionTint: Color {
-        switch controller.runtimeState {
-        case .recording:
+        switch primaryActionKind {
+        case .stopRecording:
             return Color(nsColor: .systemRed)
-        case .error:
+        case .reconnect, .retry:
             return Color(nsColor: .systemOrange)
-        default:
-            return Color(nsColor: .secondaryLabelColor)
+        case .connecting, .working:
+            return Color(nsColor: .systemGray)
+        case .addAPIKey, .startRecording:
+            return Color(nsColor: .controlAccentColor)
         }
     }
 
     private var primaryActionDisabled: Bool {
-        controller.isBusy
-            || !controller.connectionStatus.isConnected
-            || controller.runtimeState == .transcribing
-            || controller.runtimeState == .outputting
+        controller.isBusy || primaryActionKind == .connecting || primaryActionKind == .working
+    }
+
+    private var primaryActionAccessibilityHint: String {
+        switch primaryActionKind {
+        case .addAPIKey:
+            return "Opens the secure API key editor"
+        case .reconnect:
+            return "Attempts to reconnect to the local Voxa service"
+        case .connecting:
+            return "Voxa is connecting to its local service"
+        case .startRecording, .retry:
+            return "Starts a new dictation"
+        case .stopRecording:
+            return "Stops recording and begins transcription"
+        case .working:
+            return "Voxa is processing the current dictation"
+        }
+    }
+
+    private var primaryActionKind: PopoverPrimaryAction {
+        PopoverPrimaryAction.resolve(
+            isAPIKeySet: controller.isAPIKeySet,
+            connectionStatus: controller.connectionStatus,
+            runtimeState: controller.runtimeState
+        )
     }
 
     private var apiKeyStatusText: String {
@@ -376,10 +482,17 @@ struct VoxaPopoverView: View {
     }
 
     private func performPrimaryAction() {
-        if controller.runtimeState == .recording {
+        switch primaryActionKind {
+        case .addAPIKey:
+            showsAPIKeyEditor = true
+        case .reconnect:
+            controller.reconnectNow()
+        case .stopRecording:
             controller.stopRecording()
-        } else {
+        case .startRecording, .retry:
             controller.startRecording()
+        case .connecting, .working:
+            break
         }
     }
 
@@ -488,6 +601,13 @@ struct VoxaPopoverView: View {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(
+                [value, expandedMenu == menu ? "Expanded" : "Collapsed"]
+                    .compactMap { $0 }
+                    .joined(separator: ", ")
+            )
+            .accessibilityHint("Shows available \(title.lowercased()) options")
 
             if expandedMenu == menu {
                 VStack(alignment: .leading, spacing: 0) {
@@ -602,6 +722,8 @@ struct VoxaPopoverView: View {
             SecureField("OPENAI_API_KEY", text: $controller.apiKeyInput)
                 .textFieldStyle(.roundedBorder)
                 .disabled(controller.isBusy)
+                .accessibilityLabel("OpenAI API key")
+                .accessibilityHint("Enter the API key used for transcription")
 
             if let apiKeyError = controller.apiKeyError, !apiKeyError.isEmpty {
                 Text(apiKeyError)
@@ -616,13 +738,11 @@ struct VoxaPopoverView: View {
                 }
                 .disabled(controller.isBusy || controller.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                if controller.isAPIKeySet {
-                    Button("Cancel") {
-                        showsAPIKeyEditor = false
-                        controller.apiKeyInput = ""
-                    }
-                    .disabled(controller.isBusy)
+                Button("Cancel") {
+                    showsAPIKeyEditor = false
+                    controller.apiKeyInput = ""
                 }
+                .disabled(controller.isBusy)
 
                 Spacer()
             }
@@ -884,202 +1004,5 @@ private struct MenuRowChrome<Content: View>: View {
         }
 
         return Color.black.opacity(0.05)
-    }
-}
-
-enum ActivityOverlayPhase: Equatable {
-    case listening
-    case transcribing
-    case outputting
-}
-
-struct ActivityOverlayContent: Equatable {
-    let title: String
-    let subtitle: String?
-}
-
-struct ActivityOverlayView: View {
-    let phase: ActivityOverlayPhase
-    let content: ActivityOverlayContent
-    let level: Double
-    let onDismiss: () -> Void
-    let onStop: () -> Void
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 0.05)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-
-            HStack(alignment: .center, spacing: 8) {
-                leadingIndicator(time: time)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(content.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.black.opacity(0.92))
-
-                    if let subtitle = content.subtitle {
-                        Text(subtitle)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.black.opacity(0.58))
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    activityTrack(time: time)
-                }
-
-                Spacer(minLength: 0)
-                dismissControl
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(width: 236, height: 68)
-            .background(backgroundCard)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .background(Color.clear)
-        .animation(.easeInOut(duration: 0.16), value: phase)
-        .animation(.easeInOut(duration: 0.16), value: content)
-    }
-
-    private var backgroundCard: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color(nsColor: NSColor(calibratedWhite: 0.93, alpha: 0.98)))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 0.7)
-            )
-    }
-
-    private var dismissControl: some View {
-        Button(action: onDismiss) {
-            ZStack {
-                Circle()
-                    .fill(Color.black.opacity(0.06))
-                    .frame(width: 18, height: 18)
-
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.5))
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func leadingIndicator(time: TimeInterval) -> some View {
-        switch phase {
-        case .listening:
-            Button(action: onStop) {
-                statusBadge(
-                    fill: Color(red: 0.95, green: 0.27, blue: 0.24),
-                    ring: Color(red: 0.95, green: 0.27, blue: 0.24).opacity(0.22),
-                    image: "mic.fill",
-                    time: time
-                )
-            }
-            .buttonStyle(.plain)
-        case .transcribing:
-            statusBadge(
-                fill: Color(red: 0.98, green: 0.67, blue: 0.20),
-                ring: Color(red: 0.98, green: 0.67, blue: 0.20).opacity(0.18),
-                image: "waveform",
-                time: time
-            )
-        case .outputting:
-            statusBadge(
-                fill: Color.black.opacity(0.82),
-                ring: Color.black.opacity(0.10),
-                image: "arrow.up.right",
-                time: time
-            )
-        }
-    }
-
-    private func statusBadge(
-        fill: Color,
-        ring: Color,
-        image: String,
-        time: TimeInterval
-    ) -> some View {
-        ZStack {
-            Circle()
-                .fill(fill)
-                .frame(width: 32, height: 32)
-
-            Circle()
-                .stroke(ring, lineWidth: 8)
-                .frame(width: 32, height: 32)
-                .scaleEffect(1 + pulseScale(time: time))
-                .opacity(0.5 - (pulseScale(time: time) * 0.22))
-
-            Image(systemName: image)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-    }
-
-    @ViewBuilder
-    private func activityTrack(time: TimeInterval) -> some View {
-        switch phase {
-        case .listening:
-            waveform(time: time)
-        case .transcribing:
-            loadingDots(time: time, tint: Color(red: 0.98, green: 0.67, blue: 0.20))
-        case .outputting:
-            loadingDots(time: time, tint: Color.black.opacity(0.82))
-        }
-    }
-
-    private func waveform(time: TimeInterval) -> some View {
-        HStack(alignment: .center, spacing: 2.5) {
-            ForEach(0..<5, id: \.self) { index in
-                Capsule(style: .continuous)
-                    .fill(
-                        index.isMultiple(of: 2)
-                            ? Color(red: 0.95, green: 0.27, blue: 0.24)
-                            : Color(red: 1.0, green: 0.58, blue: 0.53)
-                    )
-                    .frame(width: 3, height: barHeight(index: index, time: time))
-            }
-        }
-        .frame(width: 30, height: 12, alignment: .leading)
-    }
-
-    private func loadingDots(time: TimeInterval, tint: Color) -> some View {
-        HStack(alignment: .center, spacing: 3.5) {
-            ForEach(0..<4, id: \.self) { index in
-                Circle()
-                    .fill(tint.opacity(0.32 + (0.68 * dotOpacity(index: index, time: time))))
-                    .frame(width: 4.5, height: 4.5)
-                    .scaleEffect(0.88 + (0.22 * dotOpacity(index: index, time: time)))
-            }
-        }
-        .frame(width: 30, height: 12, alignment: .leading)
-    }
-
-    private func barHeight(index: Int, time: TimeInterval) -> CGFloat {
-        let normalizedLevel = max(0, min(level, 1))
-        if normalizedLevel <= 0.01 {
-            return 4
-        }
-
-        let primary = sin((time * 10.5) + Double(index) * 0.7)
-        let secondary = sin((time * 5.4) + Double(index) * 1.08)
-        let motion = abs((primary * 0.7) + (secondary * 0.3))
-        let envelope = pow(normalizedLevel, 0.85)
-        return 4 + CGFloat((3.0 + (motion * 10.0)) * envelope)
-    }
-
-    private func pulseScale(time: TimeInterval) -> CGFloat {
-        let normalizedLevel = phase == .listening ? max(0, min(level, 1)) : 0.6
-        let motion = (sin(time * 5.8) + 1) * 0.5
-        return CGFloat(0.08 + (normalizedLevel * 0.14) + (motion * 0.05))
-    }
-
-    private func dotOpacity(index: Int, time: TimeInterval) -> CGFloat {
-        let phaseOffset = time * 4.8 + (Double(index) * 0.24)
-        let value = (sin(phaseOffset * .pi) + 1) * 0.5
-        return CGFloat(value)
     }
 }

@@ -82,22 +82,19 @@ enum ConnectionStatus {
 }
 
 enum ModelOption: String, CaseIterable, Identifiable {
-    case gpt4oMiniTranscribe = "gpt-4o-mini-transcribe"
-    case gpt4oTranscribe = "gpt-4o-transcribe"
+    case gptTranscribe = "gpt-transcribe"
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .gpt4oMiniTranscribe:
-            return "GPT-4o Mini Transcribe"
-        case .gpt4oTranscribe:
-            return "GPT-4o Transcribe"
+        case .gptTranscribe:
+            return "GPT-Transcribe"
         }
     }
 
     static func fromRawOrDefault(_ raw: String) -> ModelOption {
-        ModelOption(rawValue: raw) ?? .gpt4oMiniTranscribe
+        ModelOption(rawValue: raw) ?? .gptTranscribe
     }
 }
 
@@ -111,7 +108,7 @@ enum OutputModeOption: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .clipboardAutopaste:
-            return "Clipboard + Autopaste"
+            return "Autopaste (Keep Clipboard)"
         case .clipboardOnly:
             return "Clipboard Only"
         case .none:

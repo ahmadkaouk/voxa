@@ -13,6 +13,7 @@ use crate::secrets::{ApiKeyStore, build_api_key_store};
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const TRANSCRIPTIONS_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const REQUEST_TIMEOUT_SECS: u64 = 60;
+const RECORDER_STOP_TIMEOUT_SECS: u64 = 10;
 
 pub(crate) fn build_runtime_for_output_mode(
     _output_mode: &str,
@@ -31,13 +32,20 @@ pub(crate) fn build_runtime_for_output_mode(
 #[derive(Default)]
 struct MicRecorder {
     active: Option<ActiveRecording>,
+    stalled_worker: Option<thread::JoinHandle<()>>,
 }
 
 struct ActiveRecording {
-    stop_tx: mpsc::Sender<()>,
+    stop_tx: mpsc::Sender<RecordingDisposition>,
     result_rx: mpsc::Receiver<Result<Vec<u8>, InfraError>>,
     worker: thread::JoinHandle<()>,
     level: Arc<Mutex<f32>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecordingDisposition {
+    Transcribe,
+    Discard,
 }
 
 impl Recorder for MicRecorder {
@@ -46,7 +54,16 @@ impl Recorder for MicRecorder {
             return Ok(());
         }
 
-        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        if let Some(worker) = self.stalled_worker.take() {
+            if worker.is_finished() {
+                let _ = worker.join();
+            } else {
+                self.stalled_worker = Some(worker);
+                return Err(InfraError::AudioCaptureFailed);
+            }
+        }
+
+        let (stop_tx, stop_rx) = mpsc::channel::<RecordingDisposition>();
         let (result_tx, result_rx) = mpsc::channel::<Result<Vec<u8>, InfraError>>();
         let level = Arc::new(Mutex::new(0.0_f32));
         let level_for_worker = Arc::clone(&level);
@@ -65,14 +82,11 @@ impl Recorder for MicRecorder {
     }
 
     fn stop(&mut self) -> Result<Vec<u8>, InfraError> {
-        let active = self.active.take().ok_or(InfraError::AudioCaptureFailed)?;
-        let _ = active.stop_tx.send(());
-        let result = active
-            .result_rx
-            .recv()
-            .unwrap_or(Err(InfraError::AudioCaptureFailed));
-        let _ = active.worker.join();
-        result
+        self.finish(RecordingDisposition::Transcribe)
+    }
+
+    fn cancel(&mut self) -> Result<(), InfraError> {
+        self.finish(RecordingDisposition::Discard).map(drop)
     }
 
     fn current_level(&self) -> Option<f32> {
@@ -81,8 +95,40 @@ impl Recorder for MicRecorder {
     }
 }
 
+impl MicRecorder {
+    fn finish(&mut self, disposition: RecordingDisposition) -> Result<Vec<u8>, InfraError> {
+        let active = self.active.take().ok_or(InfraError::AudioCaptureFailed)?;
+        let ActiveRecording {
+            stop_tx,
+            result_rx,
+            worker,
+            level: _,
+        } = active;
+        let _ = stop_tx.send(disposition);
+        match result_rx.recv_timeout(Duration::from_secs(RECORDER_STOP_TIMEOUT_SECS)) {
+            Ok(result) => {
+                if worker.join().is_err() {
+                    Err(InfraError::AudioCaptureFailed)
+                } else {
+                    result
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = worker.join();
+                Err(InfraError::AudioCaptureFailed)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Do not permit a second capture while the timed-out worker may
+                // still own the microphone. A later start can reap it once done.
+                self.stalled_worker = Some(worker);
+                Err(InfraError::AudioCaptureFailed)
+            }
+        }
+    }
+}
+
 fn record_until_stop(
-    stop_rx: mpsc::Receiver<()>,
+    stop_rx: mpsc::Receiver<RecordingDisposition>,
     level: Arc<Mutex<f32>>,
 ) -> Result<Vec<u8>, InfraError> {
     let host = cpal::default_host();
@@ -111,28 +157,34 @@ fn record_until_stop(
 
     stream.play().map_err(|_| InfraError::AudioCaptureFailed)?;
 
-    loop {
+    let disposition = loop {
         if let Some(err) = take_callback_error(&callback_error)? {
             return Err(err);
         }
 
         match stop_rx.recv_timeout(Duration::from_millis(20)) {
-            Ok(_) => break,
+            Ok(disposition) => break disposition,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break RecordingDisposition::Discard,
         }
-    }
+    };
 
     drop(stream);
+
+    // Cancellation needs no WAV conversion, including when the user cancels
+    // before the first audio buffer arrives.
+    if disposition == RecordingDisposition::Discard {
+        return Ok(Vec::new());
+    }
 
     if let Some(err) = take_callback_error(&callback_error)? {
         return Err(err);
     }
 
-    let captured = samples
-        .lock()
-        .map_err(|_| InfraError::AudioCaptureFailed)?
-        .clone();
+    let captured = {
+        let mut samples = samples.lock().map_err(|_| InfraError::AudioCaptureFailed)?;
+        std::mem::take(&mut *samples)
+    };
     normalize_to_wav(&captured, channels, sample_rate)
 }
 
@@ -220,19 +272,19 @@ fn push_samples<T, F>(
     T: Copy,
     F: Fn(T) -> f32,
 {
-    let normalized: Vec<f32> = data.iter().copied().map(normalize).collect();
-    let target_level = meter_level_for_normalized_samples(&normalized);
+    let target_level = {
+        let Ok(mut output) = samples.lock() else {
+            store_callback_error(callback_error, InfraError::AudioCaptureFailed);
+            return;
+        };
+        let start = output.len();
+        output.extend(data.iter().copied().map(normalize));
+        meter_level_for_normalized_samples(&output[start..])
+    };
 
     if let Ok(mut current_level) = level.lock() {
         *current_level = blend_meter_level(*current_level, target_level);
     }
-
-    let Ok(mut output) = samples.lock() else {
-        store_callback_error(callback_error, InfraError::AudioCaptureFailed);
-        return;
-    };
-
-    output.extend(normalized);
 }
 
 fn meter_level_for_normalized_samples(samples: &[f32]) -> f32 {
@@ -493,6 +545,48 @@ mod tests {
 
     const WAV_HEADER_SIZE: usize = 44;
 
+    #[test]
+    fn microphone_stop_and_cancel_send_distinct_commands_and_release_capture() {
+        for disposition in [
+            RecordingDisposition::Transcribe,
+            RecordingDisposition::Discard,
+        ] {
+            let (stop_tx, stop_rx) = mpsc::channel();
+            let (result_tx, result_rx) = mpsc::channel();
+            let worker = thread::spawn(move || {
+                let received = stop_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("capture should stop");
+                assert_eq!(received, disposition);
+                let audio = if received == RecordingDisposition::Transcribe {
+                    vec![1, 2, 3]
+                } else {
+                    Vec::new()
+                };
+                result_tx
+                    .send(Ok(audio))
+                    .expect("result should be accepted");
+            });
+            let mut recorder = MicRecorder {
+                active: Some(ActiveRecording {
+                    stop_tx,
+                    result_rx,
+                    worker,
+                    level: Arc::new(Mutex::new(0.5)),
+                }),
+                stalled_worker: None,
+            };
+
+            match disposition {
+                RecordingDisposition::Transcribe => assert_eq!(recorder.stop(), Ok(vec![1, 2, 3])),
+                RecordingDisposition::Discard => assert_eq!(recorder.cancel(), Ok(())),
+            }
+            assert!(recorder.active.is_none());
+            assert!(recorder.stalled_worker.is_none());
+            assert_eq!(recorder.current_level(), None);
+        }
+    }
+
     struct FixedApiKeyStore {
         value: Option<String>,
     }
@@ -520,7 +614,7 @@ mod tests {
                 .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
                 .build()
                 .expect("client should build"),
-            model: "gpt-4o-mini-transcribe".to_owned(),
+            model: "gpt-transcribe".to_owned(),
             api_keys: Box::new(FixedApiKeyStore {
                 value: api_key.map(|value| value.to_owned()),
             }),
@@ -601,9 +695,12 @@ mod tests {
         let mock = server
             .mock("POST", "/v1/audio/transcriptions")
             .match_header("authorization", "Bearer test-key")
+            .match_body(mockito::Matcher::Regex(
+                "name=\"model\"\r\n\r\ngpt-transcribe\r\n".to_owned(),
+            ))
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"text":"hello world"}"#)
+            .with_body(r#"{"text":"hello world","languages":[{"code":"en"}]}"#)
             .create();
 
         let mut transcriber =

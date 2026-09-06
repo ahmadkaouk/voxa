@@ -31,6 +31,10 @@ impl SessionRuntime {
         self.recorder.stop().map_err(map_infra_error)
     }
 
+    pub fn cancel_recording(&mut self) -> Result<(), RuntimeErrorCode> {
+        self.recorder.cancel().map_err(map_infra_error)
+    }
+
     pub fn current_recording_level(&self) -> Option<f32> {
         self.recorder.current_level()
     }
