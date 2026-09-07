@@ -109,7 +109,7 @@ final class AppController: ObservableObject {
                 let loaded = try store.load()
                 preferences = loaded
                 _ = session.updateSettings(loaded.dictation)
-                try await LegacyCaptureGuard.check()
+                try await LegacyCaptureGuard.retireLaunchAgent()
                 let key = try await keychain.value(source: loaded.apiKeySource)
                 try Task.checkCancellation()
                 guard !closing else { return }

@@ -7,5 +7,6 @@
 - [native-recording-proof.md](native-recording-proof.md): stage 2 recorder, local development preview, fixture coverage, and hardware validation gate.
 - [native-session-pipeline.md](native-session-pipeline.md): stage 3 session coordinator, transcription client, output worker, and regression evidence.
 - [native-application-integration.md](native-application-integration.md): stage 4 native UI/hotkeys, settings/Keychain integration, and signed candidate validation.
+- [native-candidate-validation.md](native-candidate-validation.md): stage 5 native package, upgrade/rollback checks, performance fixtures, and remaining daily-use gates.
 - `ipc.md`: IPC protocol spec.
 - `voxactl.md`: CLI usage and troubleshooting for daemon IPC control.

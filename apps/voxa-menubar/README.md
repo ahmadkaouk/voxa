@@ -5,8 +5,8 @@ UI and global hotkeys drive one `DictationSession`, which directly calls the nat
 recorder, transcription client, and serialized transcript output worker.
 
 `AppController` handles setup, preferences, presentation effects, and shutdown.
-It no longer connects to a daemon. The preserved installed legacy application and
-Rust source remain available while the native candidate is validated.
+It no longer connects to a daemon. Signed legacy application backups and Rust
+source remain available while the installed native candidate is validated.
 
 ## Run
 
@@ -30,11 +30,16 @@ Depending on the features you use, macOS may ask for:
 ./scripts/package-macos.sh
 ```
 
-Stage 4 packaging still includes the unused legacy daemon. The native app never
-starts it. Stage 5 will remove the helper from the bundle and retire the owned
-LaunchAgent after the signed native test. Quit the older Voxa app and Recorder
-Preview before launching the native candidate; capture is blocked if another
-Voxa capture process is detected.
+Packaging builds and signs one native executable with no Rust helper. Quit older
+Voxa copies and Recorder Preview before launching the candidate. Setup waits until
+the legacy daemon is stopped, unregisters the recognized Voxa LaunchAgent, and
+archives its plist while preserving the original TOML and Keychain entry.
+
+`./scripts/install.sh` builds and installs the signed app; use `--app /path/to/Voxa.app`
+to install an existing candidate. It refuses to replace a running destination and
+preserves a verified backup. `VOXA_DIST_DIR` selects a separate build output, and
+`VOXA_INSTALL_DIR` supports test installs outside `/Applications`. See the
+[stage 5 validation report](../../docs/native-candidate-validation.md).
 
 Generated app bundles and installer staging live under `dist/apps.noindex/` so macOS app search does not list development copies alongside `/Applications/Voxa.app`. Keep local app backups in `dist/apps.noindex/backups/`. The distributable disk image remains `dist/Voxa.dmg`.
 

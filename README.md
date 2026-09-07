@@ -4,43 +4,37 @@ Voxa is a macOS dictation application. The Swift migration branch now connects t
 
 Status: macOS-only, build-from-source, native migration in progress. See the [migration plan](docs/swift-migration-plan.md) and [native app report](docs/native-application-integration.md).
 
-The daemon architecture documented below describes the preserved legacy implementation. The installed legacy app remains available until signed native validation is complete.
-
-The core idea is simple: `voxa-daemon` runs as a separate local server, owns recording, transcription, config, and runtime state, and exposes a local IPC API. Clients stay lightweight and talk to the daemon instead of re-implementing that logic. That keeps the architecture flexible and makes it easier to add or experiment with different clients over time.
+Stage 5 validates the native candidate. Rust source and the signed legacy app remain
+available for rollback until the daily-use gate passes; see [candidate validation](docs/native-candidate-validation.md).
 
 ## Architecture
 
-- `voxa-daemon` is the server boundary. It records audio, calls OpenAI for transcription, stores config and secrets, and publishes runtime state over IPC.
-- Clients connect over IPC, send commands, subscribe to events, and provide their own UX.
-- `voxa-core` holds shared domain types and protocol primitives used across the workspace.
+One SwiftUI application process contains the UI/hotkeys and one `DictationSession`.
+The session directly calls `AudioRecorder`, `TranscriptionClient`, and `TranscriptOutput`.
+Small helpers handle preferences, Keychain, permissions, and retiring the old LaunchAgent.
 
-## Included Components
-
-- `apps/voxa-menubar`: the main SwiftUI menu bar client for everyday use
-- `crates/voxactl`: a small CLI used mainly for testing, debugging, and development
-- `crates/voxa-daemon`: the local daemon and IPC server
-- `crates/voxa-core`: shared domain, IPC, and infrastructure primitives
+`apps/voxa-menubar` contains the application. The `crates` directory and IPC code are
+preserved legacy implementations and regression coverage; native dictation does not use them.
 
 ## What You Can Do Today
 
 - Use the SwiftUI menu bar app for push-to-talk dictation
 - Transcribe completed recordings with OpenAI's `gpt-transcribe` model
 - Send transcripts to the clipboard or directly into the active app
-- Control and inspect the daemon from `voxactl`
 - Build a packaged macOS app bundle and DMG
 
-The menu bar app installs or updates a per-user LaunchAgent for `voxa-daemon` and starts it automatically.
+The app retires its recognized legacy LaunchAgent after the old recorder stops. It does not start a daemon.
 
 GPT-Transcribe is the default and supported transcription model. Saved GPT-4o Mini
 Transcribe and GPT-4o Transcribe settings migrate on startup while preserving other
-preferences; the new model is written to disk on the next configuration save.
+preferences. Native settings are saved in UserDefaults; the original TOML remains available for rollback.
 
 ## Build From Source
 
 ### Requirements
 
 - macOS 13+
-- Rust toolchain (stable)
+- Rust toolchain only for the retained legacy regression suite; native packaging and installation do not require Rust
 - Xcode Command Line Tools / Swift 6.0+ (TOMLDecoder requires Swift 6; deployment still targets macOS 13)
 - OpenAI API key
 
@@ -48,20 +42,18 @@ For DMG packaging, macOS tools `sips`, `iconutil`, and `hdiutil` must also be av
 
 ### Run
 
-1. Install the Rust binaries:
+Build, sign, and install the native app (quit the installed Voxa first):
 
 ```bash
 ./scripts/install.sh
 ```
 
-2. Run the menu bar app:
+Launch `/Applications/Voxa.app`, allow any required Keychain/microphone permissions,
+and use the menu bar controls or configured shortcuts. Existing settings and the
+OpenAI key are reused. A fresh install can add its key from the menu bar UI.
 
-```bash
-cd apps/voxa-menubar
-swift run voxa-menubar
-```
-
-3. Add your OpenAI API key from the menu bar UI.
+For a development run, `swift run --package-path apps/voxa-menubar voxa-menubar`
+remains available. Run only one Voxa copy at a time.
 
 ## Common Tasks
 
@@ -80,7 +72,7 @@ cargo test --workspace
 Run the Swift tests:
 
 ```bash
-swift test --package-path apps/voxa-menubar
+./scripts/test-swift.sh
 ```
 
 ## Repository Layout

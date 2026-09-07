@@ -17,6 +17,7 @@ swiftc -parse-as-library -warnings-as-errors -target "$(uname -m)-apple-macosx13
   "$SOURCE_DIR/TranscriptionClient.swift" "$SOURCE_DIR/TranscriptOutput.swift" \
   "$SOURCE_DIR/ClipboardPaste.swift" "$SOURCE_DIR/DictationSession.swift" \
   "$SOURCE_DIR/Hotkeys.swift" "$SOURCE_DIR/Preferences.swift" "$SOURCE_DIR/Keychain.swift" \
+  "$SOURCE_DIR/LegacyCaptureGuard.swift" "$TEST_DIR/LegacyLaunchAgentTests.swift" \
   "$TEST_DIR/NativeSetupTests.swift" \
   "$TEST_DIR/UnitChecksSupport.swift" "$TEST_DIR/NativePipelineChecksSupport.swift" \
   "$TEST_DIR/DictationSessionTests.swift" "$TEST_DIR/TranscriptionClientTests.swift" \

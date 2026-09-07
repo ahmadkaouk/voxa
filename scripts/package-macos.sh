@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_PACKAGE_DIR="$ROOT_DIR/apps/voxa-menubar"
-DIST_DIR="$ROOT_DIR/dist"
+DIST_DIR="${VOXA_DIST_DIR:-$ROOT_DIR/dist}"
+mkdir -p "$DIST_DIR"
+DIST_DIR="$(cd "$DIST_DIR" && pwd -P)"
 APPS_DIR="$DIST_DIR/apps.noindex"
 BUILD_DIR="$DIST_DIR/build"
 STAGE_DIR="$APPS_DIR/dmg"
@@ -11,13 +13,11 @@ APP_NAME="Voxa"
 APP_DIR="$APPS_DIR/$APP_NAME.app"
 APP_EXECUTABLE="$APP_DIR/Contents/MacOS/$APP_NAME"
 APP_RESOURCES_DIR="$APP_DIR/Contents/Resources"
-DAEMON_BUNDLE_PATH="$APP_RESOURCES_DIR/bin/voxa-daemon"
 ICON_SOURCE="$ROOT_DIR/apps/voxa-menubar/Resources/VoxaIcon.png"
 ICONSET_DIR="$BUILD_DIR/Voxa.iconset"
 ICON_PATH="$APP_RESOURCES_DIR/Voxa.icns"
 INFO_PLIST_PATH="$APP_DIR/Contents/Info.plist"
 DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
-DAEMON_BIN="$ROOT_DIR/target/release/voxa-daemon"
 LOCAL_CODESIGN_DIR="${VOXA_CODESIGN_DIR:-$HOME/Library/Application Support/Voxa/codesign}"
 LOCAL_CODESIGN_KEYCHAIN="$LOCAL_CODESIGN_DIR/voxa-local-development.keychain-db"
 LOCAL_CODESIGN_PASSWORD_FILE="$LOCAL_CODESIGN_DIR/keychain-password"
@@ -215,27 +215,29 @@ codesign_target() {
 }
 
 verify_signed_app() {
-  codesign --verify --verbose=2 "$APP_DIR"
+  "$ROOT_DIR/scripts/verify-native-bundle.sh" "$APP_DIR"
 }
+
+# Never replace the resources/signature of a running candidate. VOXA_DIST_DIR can build a
+# separate candidate while the currently installed or development app stays available.
+RUNNING_EXECUTABLES="$(ps -axo comm=)"
+while read -r running_executable; do
+  if [ "$running_executable" = "$APP_EXECUTABLE" ]; then
+    echo "Quit $APP_DIR before rebuilding it, or choose a separate VOXA_DIST_DIR." >&2
+    exit 1
+  fi
+done <<< "$RUNNING_EXECUTABLES"
 
 rm -rf "$BUILD_DIR" "$STAGE_DIR" "$APP_DIR"
 mkdir -p "$BUILD_DIR" "$STAGE_DIR"
 
-echo "Building release daemon..."
-cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p voxa-daemon --release
-
-echo "Building release menu bar app..."
-swift build --package-path "$APP_PACKAGE_DIR" --configuration release --product voxa-menubar
-MENU_BAR_BIN_DIR="$(swift build --package-path "$APP_PACKAGE_DIR" --configuration release --show-bin-path)"
+echo "Building native release app..."
+swift build --package-path "$APP_PACKAGE_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --product voxa-menubar
+MENU_BAR_BIN_DIR="$(swift build --package-path "$APP_PACKAGE_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --show-bin-path)"
 MENU_BAR_BIN="$MENU_BAR_BIN_DIR/voxa-menubar"
 
 if [ ! -x "$MENU_BAR_BIN" ]; then
   echo "Missing built app executable: $MENU_BAR_BIN" >&2
-  exit 1
-fi
-
-if [ ! -x "$DAEMON_BIN" ]; then
-  echo "Missing built daemon executable: $DAEMON_BIN" >&2
   exit 1
 fi
 
@@ -244,7 +246,7 @@ if [ ! -f "$ICON_SOURCE" ]; then
   exit 1
 fi
 
-mkdir -p "$APP_DIR/Contents/MacOS" "$APP_RESOURCES_DIR/bin" "$ICONSET_DIR"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_RESOURCES_DIR" "$ICONSET_DIR"
 
 sips -z 1024 1024 "$ICON_SOURCE" --out "$BUILD_DIR/icon_1024x1024.png" >/dev/null
 for size in 16 32 64 128 256 512; do
@@ -258,10 +260,9 @@ cp "$BUILD_DIR/icon_1024x1024.png" "$ICONSET_DIR/icon_512x512@2x.png"
 iconutil -c icns "$ICONSET_DIR" -o "$ICON_PATH"
 
 cp "$MENU_BAR_BIN" "$APP_EXECUTABLE"
-cp "$DAEMON_BIN" "$DAEMON_BUNDLE_PATH"
 cp -R "$APP_PACKAGE_DIR/Sources/VoxaMenuBar/Resources/Sounds" "$APP_RESOURCES_DIR/Sounds"
 cp "$APP_PACKAGE_DIR/Sources/VoxaMenuBar/Resources/ThirdPartyNotices.txt" "$APP_RESOURCES_DIR/ThirdPartyNotices.txt"
-chmod +x "$APP_EXECUTABLE" "$DAEMON_BUNDLE_PATH"
+chmod +x "$APP_EXECUTABLE"
 
 cat > "$INFO_PLIST_PATH" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -301,8 +302,6 @@ if [ "$USE_LOCAL_CODESIGN_KEYCHAIN" -eq 1 ]; then
   activate_local_codesign_keychain
 fi
 
-echo "Signing bundled daemon with identity: $CODESIGN_IDENTITY"
-codesign_target "$DAEMON_BUNDLE_PATH" "com.voxa.daemon"
 echo "Signing app bundle with identity: $CODESIGN_IDENTITY"
 codesign_target "$APP_DIR" "com.voxa.menubar"
 verify_signed_app
