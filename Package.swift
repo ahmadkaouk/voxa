@@ -16,13 +16,11 @@ let package = Package(
         .executableTarget(
             name: "VoxaMenuBar",
             dependencies: [.product(name: "TOMLDecoder", package: "TOMLDecoder")],
-            path: "Sources/VoxaMenuBar",
             resources: [.copy("Resources/Sounds"), .copy("Resources/ThirdPartyNotices.txt")]
         ),
         .testTarget(
             name: "VoxaMenuBarTests",
-            dependencies: ["VoxaMenuBar"],
-            path: "Tests/VoxaMenuBarTests"
+            dependencies: ["VoxaMenuBar"]
         ),
     ]
 )

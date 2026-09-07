@@ -1,4 +1,4 @@
-# voxa-menubar
+# Voxa development
 
 `voxa-menubar` is Voxa's native SwiftUI menu bar application. The UI and global
 hotkeys drive one `DictationSession`, which directly calls the native
@@ -7,11 +7,14 @@ recorder, transcription client, and serialized transcript output worker.
 `AppController` handles setup, preferences, presentation effects, and shutdown.
 The application runs in one process.
 
-## Run
+All commands below run from the repository root. Open `Package.swift` in Xcode
+or use the Swift command-line tools.
+
+## Build and run
 
 ```bash
 # Requires Swift 6.0+ (the pinned TOMLDecoder dependency)
-cd apps/voxa-menubar
+swift build
 swift run voxa-menubar
 ```
 
@@ -41,7 +44,7 @@ preserves a verified backup. `VOXA_DIST_DIR` selects a separate build output, an
 
 Generated app bundles and installer staging live under `dist/apps.noindex/` so macOS app search does not list development copies alongside `/Applications/Voxa.app`. Keep local app backups in `dist/apps.noindex/backups/`. The distributable disk image remains `dist/Voxa.dmg`.
 
-Packaging now code-signs the app bundle so macOS permissions can persist across in-place updates.
+Packaging code-signs the app bundle so macOS permissions can persist across in-place updates.
 
 - If `VOXA_CODESIGN_IDENTITY` is set, the package script signs with that identity.
 - Otherwise it prefers an installed `Apple Development` or `Developer ID Application` identity.
@@ -64,13 +67,15 @@ After switching from older ad-hoc builds to a stable signed build, macOS may ask
 - Permission recovery actions open Microphone, Accessibility, and Input Monitoring settings. Returning to the app or waking the Mac refreshes access and re-registers hotkeys.
 - Normal Quit waits for microphone release and clipboard cleanup.
 
-Run all Swift checks, including the application build, with `./scripts/test-swift.sh`
+## Validation
+
+Run all Swift checks, including the application build, with `./scripts/check.sh`
 from the repository root. It uses XCTest when available and otherwise runs the same
 existing assertions through standalone harnesses for hotkeys, clipboard, sounds,
 recording, and the native pipeline. A new test file without standalone coverage
 fails the fallback path instead of being skipped.
 
-The native recorder and pipeline are connected to the app. `./scripts/test-audio-recorder.sh`
+`./scripts/test-audio-recorder.sh`
 checks capture fixtures; `./scripts/test-native-pipeline.sh` checks session ordering,
 HTTP/output behavior, settings migration, and a disposable Keychain entry. These
 checks use no real microphone or external API.

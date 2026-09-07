@@ -10,7 +10,7 @@ One SwiftUI application process contains the UI/hotkeys and one `DictationSessio
 The session directly calls `AudioRecorder`, `TranscriptionClient`, and `TranscriptOutput`.
 Small helpers handle preferences, Keychain, permissions, and retiring the old LaunchAgent.
 
-`apps/voxa-menubar` contains one application target and its test target. The app has no
+The root Swift package contains one application target and its test target. The app has no
 Rust dependency, daemon, local IPC server, or external control CLI.
 
 ## What You Can Do Today
@@ -48,24 +48,36 @@ Launch `/Applications/Voxa.app`, allow any required Keychain/microphone permissi
 and use the menu bar controls or configured shortcuts. Existing settings and the
 OpenAI key are reused. A fresh install can add its key from the menu bar UI.
 
-For a development run, `swift run --package-path apps/voxa-menubar voxa-menubar`
+For a development run from the repository root, `swift run voxa-menubar`
 remains available. Run only one Voxa copy at a time.
 
 ## Common Tasks
 
-Check the workspace:
+Build and check the application:
 
 ```bash
 ./scripts/check.sh
 ```
 
+Build the signed application and DMG without installing:
+
+```bash
+./scripts/package-macos.sh
+```
+
 ## Repository Layout
 
-- `apps/voxa-menubar`: SwiftUI menu bar app
+- `Package.swift`, `Package.resolved`: Swift package and pinned dependencies
+- `Sources/VoxaMenuBar/`: application code and bundled resources
+- `Tests/VoxaMenuBarTests/`: regression tests
+- `assets/`: application icon source used by packaging
 - `scripts/`: build, packaging, installation, tests, and development fixtures
-- `docs/`: native architecture
+- `docs/`: architecture and development guide
+
+Generated build files live in `.build/` and `dist/` and are ignored by Git.
+Preserve signed app backups under `dist/apps.noindex/backups/` before cleaning build outputs.
 
 ## Documentation
 
-- [Application usage and development](apps/voxa-menubar/README.md)
+- [Development guide](docs/development.md)
 - [Architecture](docs/architecture.md)

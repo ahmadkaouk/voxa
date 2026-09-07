@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_PACKAGE_DIR="$ROOT_DIR/apps/voxa-menubar"
 DIST_DIR="${VOXA_DIST_DIR:-$ROOT_DIR/dist}"
 mkdir -p "$DIST_DIR"
 DIST_DIR="$(cd "$DIST_DIR" && pwd -P)"
@@ -13,7 +12,7 @@ APP_NAME="Voxa"
 APP_DIR="$APPS_DIR/$APP_NAME.app"
 APP_EXECUTABLE="$APP_DIR/Contents/MacOS/$APP_NAME"
 APP_RESOURCES_DIR="$APP_DIR/Contents/Resources"
-ICON_SOURCE="$ROOT_DIR/apps/voxa-menubar/Resources/VoxaIcon.png"
+ICON_SOURCE="$ROOT_DIR/assets/VoxaIcon.png"
 ICONSET_DIR="$BUILD_DIR/Voxa.iconset"
 ICON_PATH="$APP_RESOURCES_DIR/Voxa.icns"
 INFO_PLIST_PATH="$APP_DIR/Contents/Info.plist"
@@ -232,8 +231,8 @@ rm -rf "$BUILD_DIR" "$STAGE_DIR" "$APP_DIR"
 mkdir -p "$BUILD_DIR" "$STAGE_DIR"
 
 echo "Building native release app..."
-swift build --package-path "$APP_PACKAGE_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --product voxa-menubar
-MENU_BAR_BIN_DIR="$(swift build --package-path "$APP_PACKAGE_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --show-bin-path)"
+swift build --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --product voxa-menubar
+MENU_BAR_BIN_DIR="$(swift build --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --show-bin-path)"
 MENU_BAR_BIN="$MENU_BAR_BIN_DIR/voxa-menubar"
 
 if [ ! -x "$MENU_BAR_BIN" ]; then
@@ -260,8 +259,8 @@ cp "$BUILD_DIR/icon_1024x1024.png" "$ICONSET_DIR/icon_512x512@2x.png"
 iconutil -c icns "$ICONSET_DIR" -o "$ICON_PATH"
 
 cp "$MENU_BAR_BIN" "$APP_EXECUTABLE"
-cp -R "$APP_PACKAGE_DIR/Sources/VoxaMenuBar/Resources/Sounds" "$APP_RESOURCES_DIR/Sounds"
-cp "$APP_PACKAGE_DIR/Sources/VoxaMenuBar/Resources/ThirdPartyNotices.txt" "$APP_RESOURCES_DIR/ThirdPartyNotices.txt"
+cp -R "$ROOT_DIR/Sources/VoxaMenuBar/Resources/Sounds" "$APP_RESOURCES_DIR/Sounds"
+cp "$ROOT_DIR/Sources/VoxaMenuBar/Resources/ThirdPartyNotices.txt" "$APP_RESOURCES_DIR/ThirdPartyNotices.txt"
 chmod +x "$APP_EXECUTABLE"
 
 cat > "$INFO_PLIST_PATH" <<'EOF'

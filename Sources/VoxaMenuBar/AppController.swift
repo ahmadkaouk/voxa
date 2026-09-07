@@ -84,7 +84,6 @@ final class AppController: ObservableObject {
     var outputMode: OutputModeOption { session.settings.outputMode }
     var maxRecordingSeconds: UInt64 { preferences.maxRecordingSeconds }
     var apiKeySource: String { preferences.apiKeySource }
-    var hasAccessibilityPermission: Bool { permissions.accessibility }
     var errorMessage: String? {
         if case .failed(_, let message) = session.state { return message }
         return setupError ?? settingsError
@@ -150,7 +149,6 @@ final class AppController: ObservableObject {
         statusMessage = "Ready when you are"
         session.start(prepare: recordingPreparation())
     }
-    func stopRecording() { session.stop() }
     func setHotkeyCaptureEnabled(_ enabled: Bool) {
         capturingHotkey = enabled
         hotkeys.setEnabled(!enabled)

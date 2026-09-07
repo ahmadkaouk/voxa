@@ -242,10 +242,6 @@ struct HotkeyOption: Identifiable, Equatable {
         return encoded
     }
 
-    var isModifierOnly: Bool {
-        keyCodes.isEmpty
-    }
-
     fileprivate var inputTokens: Set<HotkeyInputToken> {
         var tokens: Set<HotkeyInputToken> = []
         if modifiers.contains(.control) {
