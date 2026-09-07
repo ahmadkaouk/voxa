@@ -10,8 +10,8 @@ export VOXA_INSTALL_DIR="$TEST_DIR/Applications"
 export VOXA_DIST_DIR="$TEST_DIR/artifacts"
 ORIGINAL_HASH="$(shasum -a 256 "$PREVIOUS/Contents/MacOS/Voxa")"
 ORIGINAL_HASH="${ORIGINAL_HASH%% *}"
-NATIVE_HASH="$(shasum -a 256 "$CANDIDATE/Contents/MacOS/Voxa")"
-NATIVE_HASH="${NATIVE_HASH%% *}"
+CANDIDATE_HASH="$(shasum -a 256 "$CANDIDATE/Contents/MacOS/Voxa")"
+CANDIDATE_HASH="${CANDIDATE_HASH%% *}"
 
 # Clean install, then replacement of a signed installation with a verified backup.
 "$ROOT_DIR/scripts/install.sh" --app "$CANDIDATE"
@@ -20,7 +20,7 @@ rm -rf "$VOXA_INSTALL_DIR/Voxa.app"
 ditto "$PREVIOUS" "$VOXA_INSTALL_DIR/Voxa.app"
 "$ROOT_DIR/scripts/install.sh" --app "$CANDIDATE"
 ACTUAL_HASH="$(shasum -a 256 "$VOXA_INSTALL_DIR/Voxa.app/Contents/MacOS/Voxa")"
-[ "${ACTUAL_HASH%% *}" = "$NATIVE_HASH" ]
+[ "${ACTUAL_HASH%% *}" = "$CANDIDATE_HASH" ]
 BACKUPS=("$VOXA_DIST_DIR"/apps.noindex/backups/*/Voxa.app)
 [ "${#BACKUPS[@]}" -eq 1 ]
 BACKUP_HASH="$(shasum -a 256 "${BACKUPS[0]}/Contents/MacOS/Voxa")"

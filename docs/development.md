@@ -1,102 +1,80 @@
 # Voxa development
 
-`voxa-menubar` is Voxa's native SwiftUI menu bar application. The UI and global
-hotkeys drive one `DictationSession`, which directly calls the native
-recorder, transcription client, and serialized transcript output worker.
+See the [README](../README.md) for installation, permissions, and everyday use,
+and the [architecture guide](architecture.md) for component ownership and recovery
+behavior. All commands below run from the repository root.
 
-`AppController` handles setup, preferences, presentation effects, and shutdown.
-The application runs in one process.
+## Build and check
 
-All commands below run from the repository root. Open `Package.swift` in Xcode
-or use the Swift command-line tools.
-
-## Build and run
+Open `Package.swift` in Xcode or use Swift 6.0+ from the command line:
 
 ```bash
-# Requires Swift 6.0+ (the pinned TOMLDecoder dependency)
 swift build
 swift run voxa-menubar
+./scripts/check.sh
 ```
 
-## Permissions
+Quit other Voxa copies before running a development build. The check script uses
+XCTest when available and otherwise runs the same assertions through standalone
+harnesses. Unregistered test files fail the fallback path instead of being skipped.
 
-Depending on the features you use, macOS may ask for:
+Focused checks are available through `scripts/test-swift-unit.sh`,
+`scripts/test-audio-recorder.sh`, `scripts/test-dictation-sounds.sh`,
+`scripts/test-transcript-output.sh`, and `scripts/test-native-pipeline.sh`.
+They use fixture audio and isolated pasteboards, with no microphone capture or
+external API calls. The pipeline checks also exercise a disposable Keychain entry.
 
-- Microphone access
-- Accessibility permission for autopaste
-- Input Monitoring for global hotkeys
+## Packaging and signing
 
-## Packaging
+`./scripts/package-macos.sh` creates a signed app under `dist/apps.noindex/`
+and a distributable `dist/Voxa.dmg`. The `.noindex` directory keeps development
+app copies out of macOS app search.
 
-```bash
-./scripts/package-macos.sh
-```
+The packager uses `VOXA_CODESIGN_IDENTITY` when set. Otherwise, it prefers an
+installed Apple Development or Developer ID Application identity. If neither is
+available, it creates and reuses **Voxa Local Development** under
+`~/Library/Application Support/Voxa/codesign/`.
 
-Packaging builds and signs one native executable. Quit other Voxa copies before
-launching it. When upgrading an older installation, setup waits until the legacy
-recorder is stopped, unregisters the recognized Voxa LaunchAgent, and
-archives its plist while preserving the original TOML and Keychain entry.
+Keep the same signing identity when replacing `/Applications/Voxa.app` so macOS
+permissions can persist. Switching from an ad-hoc build to a stable identity may
+require granting Accessibility and Input Monitoring again.
 
-`./scripts/install.sh` builds and installs the signed app; use `--app /path/to/Voxa.app`
-to install an existing candidate. It refuses to replace a running destination and
-preserves a verified backup. `VOXA_DIST_DIR` selects a separate build output, and
-`VOXA_INSTALL_DIR` supports test installs outside `/Applications`.
+`./scripts/install.sh` builds and installs Voxa. To install an existing signed
+candidate, use `./scripts/install.sh --app /path/to/Voxa.app`. It refuses to replace
+a running destination and preserves a verified backup under
+`dist/apps.noindex/backups/`. Preserve these backups before cleaning build outputs.
 
-Generated app bundles and installer staging live under `dist/apps.noindex/` so macOS app search does not list development copies alongside `/Applications/Voxa.app`. Keep local app backups in `dist/apps.noindex/backups/`. The distributable disk image remains `dist/Voxa.dmg`.
-
-Packaging code-signs the app bundle so macOS permissions can persist across in-place updates.
-
-- If `VOXA_CODESIGN_IDENTITY` is set, the package script signs with that identity.
-- Otherwise it prefers an installed `Apple Development` or `Developer ID Application` identity.
-- If neither is available, it creates and reuses a stable local identity named `Voxa Local Development` in `~/Library/Application Support/Voxa/codesign/`.
-
-After switching from older ad-hoc builds to a stable signed build, macOS may ask for Accessibility and Input Monitoring one more time. Updates signed with the same identity should then keep those permissions when you replace `/Applications/Voxa.app` in place.
-
-## Notes
-
-- Autopaste temporarily borrows the clipboard, waits for a text read, then restores all saved items and formats. Restoration is skipped if the clipboard changed in the meantime. Clipboard reads are a best-effort delivery signal; macOS does not provide a universal paste-success acknowledgement.
-- If the paste shortcut cannot be sent or the clipboard is not read within two seconds, the transcript remains available for manual paste. If the original clipboard cannot be fully saved, autopaste leaves it untouched. Output → Copy Last Transcript can recover the latest dictation in either case; it is kept only in memory while Voxa is running.
-- Clipboard Only intentionally replaces the clipboard. All output operations are serialized so overlapping transcripts and explicit copies cannot restore over each other.
-- The dictation bar rests as a small handle when Voxa is ready and an API key is configured. Click it to start, use the checkmark to finish, or X to discard the recording without transcription or paste.
-- Recording uses a compact dark pill with a live white meter, followed by processing dots and a brief completion check. Reduced Motion disables continuous animation.
-- Bundled [UI SFX Zen](https://uisfx.com/) sounds distinguish start, stop, and errors, with playback levels about 3 dB above the upstream defaults. The MP3 assets and CC0 license are in `Sources/VoxaMenuBar/Resources/Sounds/Zen`; playback works offline.
-- To inspect the real overlay and sounds without microphone access, run `./scripts/preview-overlay.sh` from the repository root, then open `dist/apps.noindex/Voxa Overlay Preview.app`. Its meter and state transitions are simulated.
-- Settings import reads the old `~/Library/Application Support/voxa/config.toml` once using TOMLDecoder 0.4.5. A validated, versioned UserDefaults value records completion. Failed imports can be retried; the original file is never changed.
-- Native Security APIs read/update the existing `com.voxa` / `OPENAI_API_KEY` item. Keychain authorization may be requested because the app now accesses the key itself. Secrets are never saved in preferences or logs.
-- `api_key_source = "env"` stays read-only. Keychain mode retains the `OPENAI_API_KEY` fallback for a missing/empty entry. `VOXA_CONFIG_PATH` overrides the initial import source; `VOXA_OPENAI_TRANSCRIPTIONS_URL` retains the development endpoint override.
-- Permission recovery actions open Microphone, Accessibility, and Input Monitoring settings. Returning to the app or waking the Mac refreshes access and re-registers hotkeys.
-- Normal Quit waits for microphone release and clipboard cleanup.
-
-## Validation
-
-Run all Swift checks, including the application build, with `./scripts/check.sh`
-from the repository root. It uses XCTest when available and otherwise runs the same
-existing assertions through standalone harnesses for hotkeys, clipboard, sounds,
-recording, and the native pipeline. A new test file without standalone coverage
-fails the fallback path instead of being skipped.
-
-`./scripts/test-audio-recorder.sh`
-checks capture fixtures; `./scripts/test-native-pipeline.sh` checks session ordering,
-HTTP/output behavior, settings migration, and a disposable Keychain entry. These
-checks use no real microphone or external API.
-
-To check installation and update recovery, pass a newly packaged app and a previous
-signed app to `./scripts/test-install.sh`. For example, from the repository root:
+Test installation, backup, failed-replacement recovery, and the running-app guard
+using temporary copies of a candidate and a previous signed app:
 
 ```bash
 ./scripts/test-install.sh dist/apps.noindex/Voxa.app /Applications/Voxa.app
 ```
 
-This tests clean installation, update/backup, failed-replacement restoration, and
-refusal to replace a running destination using temporary copies. It does not
-replace or launch either supplied app.
+This check does not replace or launch either supplied app.
 
-Clipboard integration checks can also run with just Command Line Tools (no XCTest runner):
+## Development overrides
 
-```bash
-./scripts/test-transcript-output.sh
-```
+| Variable | Purpose |
+| --- | --- |
+| `VOXA_DIST_DIR` | Select a separate packaging output and backup directory. |
+| `VOXA_INSTALL_DIR` | Change the installation directory; defaults to `/Applications`. |
+| `VOXA_CODESIGN_IDENTITY` | Select the identity used to sign the app. |
+| `VOXA_CONFIG_PATH` | Select the legacy TOML file imported before native settings have been saved. |
+| `VOXA_OPENAI_TRANSCRIPTIONS_URL` | Override the transcription endpoint for development. |
+| `OPENAI_API_KEY` | Supply a key for environment mode, or as a fallback when the Keychain item is missing. |
 
-They exercise the production pasteboard code using isolated, uniquely named pasteboards and do not alter the system clipboard.
+An imported `api_key_source = "env"` selects read-only environment mode. Native
+settings and Keychain access are described in the [architecture guide](architecture.md).
 
-Add `--live` to also open a temporary native text window and test the actual paste shortcut, selection replacement, Unicode, and clipboard restoration. That optional check requires Accessibility permission for the test process and temporarily uses the system clipboard; it saves and restores its contents and returns focus to the previous app.
+## Manual checks
+
+Build the overlay preview with `./scripts/preview-overlay.sh`, then open
+`dist/apps.noindex/Voxa Overlay Preview.app`. It uses the production overlay and
+sounds with simulated recording states and levels, without microphone access.
+
+`./scripts/test-transcript-output.sh --live` opens a temporary text window to
+check the actual paste shortcut, selection replacement, Unicode, and clipboard
+restoration. It requires Accessibility permission for the test process and
+saves/restores the system clipboard. Ordinary output checks use isolated
+pasteboards and leave the system clipboard alone.

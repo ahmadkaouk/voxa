@@ -5,8 +5,6 @@ BUILD_DIR="$ROOT_DIR/.build/output-checks"
 mkdir -p "$BUILD_DIR"
 swiftc -parse-as-library -warnings-as-errors -D VOXA_STANDALONE_TESTS \
   -module-cache-path "$BUILD_DIR/module-cache" \
-  "$ROOT_DIR/Sources/VoxaMenuBar/Models.swift" \
-  "$ROOT_DIR/Sources/VoxaMenuBar/TranscriptOutput.swift" \
   "$ROOT_DIR/Sources/VoxaMenuBar/ClipboardPaste.swift" \
   "$ROOT_DIR/Tests/VoxaMenuBarTests/TranscriptOutputTests.swift" \
   -o "$BUILD_DIR/output-checks"

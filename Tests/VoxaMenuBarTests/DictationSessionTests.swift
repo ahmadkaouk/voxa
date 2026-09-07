@@ -24,13 +24,12 @@ private final class SessionRecorderFixture: DictationRecording {
         if let startError { throw startError }
         current.phase = .recording
     }
-    func stop(id: UUID) async throws -> RecordedAudio {
+    func stop(id: UUID) async throws -> Data {
         stops.append(id)
         await stopGate?.wait()
         if let stopError { throw stopError }
         current.phase = .finished
-        return RecordedAudio(wav: Data([1, 2, 3]), duration: 1, inputSampleRate: 48_000,
-                             inputChannels: 1, firstBufferLatency: 0.1)
+        return Data([1, 2, 3])
     }
     func cancel(id: UUID) async {
         cancels.append(id)
@@ -96,7 +95,7 @@ private final class SessionFixture {
         try await Task.sleep(nanoseconds: 1_000_000)
     }))
     func wait(_ phase: String) async throws { try await eventually { self.session.state.tag == phase } }
-    func record() async throws { session.start(apiKey: "fixture-key"); try await wait("recording") }
+    func record() async throws { session.start(prepare: { "fixture-key" }); try await wait("recording") }
 }
 
 @MainActor
@@ -134,13 +133,13 @@ enum DictationSessionChecks {
             let f = SessionFixture()
             let starting = PipelineGate()
             f.recorder.startGate = starting
-            let id = f.session.start(origin: .hotkeyHold, apiKey: "fixture-key")!
+            let id = f.session.start(origin: .hotkeyHold, prepare: { "fixture-key" })!
             try await eventually { starting.entered }
             f.session.holdReleased()
             if cancel { f.session.cancel() }
             f.session.stop() // cannot undo cancellation
             try unitEqual(f.session.state.tag, "starting")
-            try unitExpect(f.session.start(apiKey: "other-key") == nil)
+            try unitExpect(f.session.start(prepare: { "other-key" }) == nil)
             starting.open()
             try await f.wait("idle")
             try unitEqual(f.recorder.starts, [id])
@@ -155,23 +154,23 @@ enum DictationSessionChecks {
     static func originsAndBusyCommands() async throws {
         for origin in [RecordingOrigin.manual, .hotkeyToggle] {
             let f = SessionFixture()
-            f.session.start(origin: origin, apiKey: "fixture-key")
+            f.session.start(origin: origin, prepare: { "fixture-key" })
             try await f.wait("recording")
-            f.session.holdReleased(); f.session.holdPressed(apiKey: "other-key")
+            f.session.holdReleased(); f.session.start(origin: .hotkeyHold, prepare: { "other-key" })
             try unitEqual(f.session.state.tag, "recording")
             try unitEqual(f.recorder.starts.count, 1)
-            f.session.toggle(apiKey: "ignored")
+            f.session.toggle(prepare: { "ignored" })
             try await f.wait("idle")
             try unitEqual(f.recorder.stops.count, 1)
             await f.session.shutdown()
         }
         let f = SessionFixture()
-        f.session.toggle(apiKey: "fixture-key")
+        f.session.toggle(prepare: { "fixture-key" })
         try await f.wait("recording")
         try unitEqual(f.session.state.context?.origin, .hotkeyToggle)
         f.session.cancel()
         try await f.wait("idle")
-        f.session.holdPressed(apiKey: "fixture-key")
+        f.session.start(origin: .hotkeyHold, prepare: { "fixture-key" })
         try await f.wait("recording")
         f.session.holdReleased()
         try await f.wait("idle")
@@ -189,7 +188,7 @@ enum DictationSessionChecks {
         stopping.open()
         try await eventually { cleaning.entered }
         try unitEqual(f.session.state.tag, "finishing")
-        try unitExpect(f.session.start(apiKey: "fixture-key") == nil)
+        try unitExpect(f.session.start(prepare: { "fixture-key" }) == nil)
         try unitEqual(f.transcriber.calls.count, 0)
         cleaning.open()
         try await f.wait("idle")
@@ -201,7 +200,7 @@ enum DictationSessionChecks {
         let failedCleanup = PipelineGate()
         f.recorder.startError = AudioRecorderError.noAudio
         f.recorder.cancelGate = failedCleanup
-        f.session.start(apiKey: "fixture-key")
+        f.session.start(prepare: { "fixture-key" })
         try await eventually { failedCleanup.entered }
         f.session.cancel() // cancellation can arrive after the error but before cleanup finishes
         failedCleanup.open()
@@ -236,7 +235,7 @@ enum DictationSessionChecks {
     static func errorsAndRecovery() async throws {
         let f = SessionFixture()
         f.recorder.startError = AudioRecorderError.microphonePermission
-        f.session.start(apiKey: "fixture-key")
+        f.session.start(prepare: { "fixture-key" })
         try await f.wait("failed")
         try unitEqual(f.recorder.cancels.count, 1)
         f.recorder.startError = nil
@@ -273,12 +272,12 @@ enum DictationSessionChecks {
         f.transcriber.gate = network
         try await f.record(); f.session.stop()
         try await eventually { network.entered }
-        f.session.cancel(); f.session.toggle(apiKey: "other-key")
+        f.session.cancel(); f.session.toggle(prepare: { "other-key" })
         try unitEqual(f.session.state.tag, "transcribing")
         try unitEqual(f.recorder.starts.count, 1)
         let shutdown = Task { await f.session.shutdown() }
         try await f.wait("idle")
-        try unitExpect(f.session.start(apiKey: "fixture-key") == nil)
+        try unitExpect(f.session.start(prepare: { "fixture-key" }) == nil)
         network.open() // an uncooperative request returns after shutdown invalidated the ID
         await shutdown.value
         try unitEqual(f.output.calls.count, 0)
@@ -292,7 +291,7 @@ enum DictationSessionChecks {
             let gate = PipelineGate()
             if phase == "starting" { f.recorder.startGate = gate }
             else { f.output.gate = gate }
-            f.session.start(apiKey: "fixture-key")
+            f.session.start(prepare: { "fixture-key" })
             if phase == "delivering" { try await f.wait("recording"); f.session.stop() }
             try await eventually { gate.entered }
             var returned = false

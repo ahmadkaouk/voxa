@@ -21,21 +21,12 @@ enum AudioRecorderError: LocalizedError, Equatable {
     }
 }
 
-struct RecordedAudio {
-    let wav: Data
-    let duration: TimeInterval
-    let inputSampleRate: Double
-    let inputChannels: Int
-    let firstBufferLatency: TimeInterval
-}
-
 struct AudioRecorderSnapshot {
     enum Phase { case idle, starting, recording, finished, failed }
     var id: UUID?
     var phase: Phase = .idle
     var level = 0.0
     var duration: TimeInterval = 0
-    var firstBufferLatency: TimeInterval?
     var error: String?
 }
 
@@ -50,10 +41,8 @@ final class AudioRecorder: @unchecked Sendable {
         let inbox: AudioCaptureInbox
         let signal: DispatchSourceUserDataOr
         let timer: DispatchSourceTimer
-        let requestedAt: TimeInterval
         var lastBufferAt: TimeInterval
         var start: CheckedContinuation<Void, Error>?
-        var latency: TimeInterval?
 
         init(id: UUID, device: AudioCaptureDevice, encoder: AudioWAVEncoder, inbox: AudioCaptureInbox,
              signal: DispatchSourceUserDataOr, timer: DispatchSourceTimer,
@@ -64,7 +53,6 @@ final class AudioRecorder: @unchecked Sendable {
             self.inbox = inbox
             self.signal = signal
             self.timer = timer
-            self.requestedAt = requestedAt
             lastBufferAt = requestedAt
             self.start = start
         }
@@ -82,7 +70,7 @@ final class AudioRecorder: @unchecked Sendable {
     private let bufferTimeout: TimeInterval
     private var capture: Capture?
     private var state = AudioRecorderSnapshot()
-    private var completed: Result<RecordedAudio, Error>?
+    private var completed: Result<Data, Error>?
 
     init(bufferTimeout: TimeInterval = 3, makeDevice: @escaping () throws -> AudioCaptureDevice = { try EngineAudioCaptureDevice() }) {
         precondition(bufferTimeout.isFinite && bufferTimeout > 0)
@@ -130,7 +118,8 @@ final class AudioRecorder: @unchecked Sendable {
         }
     }
 
-    func stop(id: UUID) async throws -> RecordedAudio {
+    /// Returns the completed PCM WAV; repeated stops reuse it until cancellation or a new start.
+    func stop(id: UUID) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
             worker.async {
                 guard self.state.id == id else { continuation.resume(throwing: AudioRecorderError.staleSession); return }
@@ -175,11 +164,9 @@ final class AudioRecorder: @unchecked Sendable {
             defer { capture.inbox.release() }
             try capture.encoder.append(buffer)
             capture.lastBufferAt = ProcessInfo.processInfo.systemUptime
-            if capture.latency == nil {
-                capture.latency = (capture.inbox.firstBufferTime ?? capture.lastBufferAt) - capture.requestedAt
-                state.firstBufferLatency = capture.latency
+            if let start = capture.start {
                 state.phase = .recording
-                capture.start?.resume()
+                start.resume()
                 capture.start = nil
             }
         }
@@ -190,7 +177,7 @@ final class AudioRecorder: @unchecked Sendable {
     private func checkTimeout(id: UUID) {
         guard let capture, capture.id == id else { return }
         if ProcessInfo.processInfo.systemUptime - capture.lastBufferAt >= bufferTimeout {
-            finish(id: id, failure: capture.latency == nil ? AudioRecorderError.noAudio : AudioRecorderError.stalled)
+            finish(id: id, failure: capture.start != nil ? AudioRecorderError.noAudio : AudioRecorderError.stalled)
         }
     }
 
@@ -202,11 +189,7 @@ final class AudioRecorder: @unchecked Sendable {
             if let failure = capture.inbox.failure { throw failure }
             // Closed inbox rejects late callbacks; preserve all buffers accepted before Stop.
             try drain(capture)
-            let wav = try capture.encoder.finish()
-            completed = .success(RecordedAudio(wav: wav, duration: capture.encoder.duration,
-                                               inputSampleRate: capture.device.format.sampleRate,
-                                               inputChannels: Int(capture.device.format.channelCount),
-                                               firstBufferLatency: capture.latency ?? 0))
+            completed = .success(try capture.encoder.finish())
             state.phase = .finished
         } catch {
             completed = .failure(error)

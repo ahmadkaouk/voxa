@@ -49,7 +49,7 @@ if [ -e "$DESTINATION" ]; then
     echo 'The install destination is not a regular app directory; leaving it unchanged.' >&2
     exit 1
   fi
-  BACKUP="$DIST_DIR/apps.noindex/backups/pre-native-$(date -u +%Y%m%dT%H%M%SZ)-$$/Voxa.app"
+  BACKUP="$DIST_DIR/apps.noindex/backups/previous-$(date -u +%Y%m%dT%H%M%SZ)-$$/Voxa.app"
   mkdir -p "$(dirname "$BACKUP")"
   ditto "$DESTINATION" "$BACKUP"
   codesign --verify --deep --strict "$BACKUP"
@@ -60,4 +60,4 @@ fi
 mv "$STAGING/Voxa.app" "$DESTINATION"
 INSTALLED=1
 echo "Installed native app: $DESTINATION"
-echo 'Launch Voxa to finish retiring its old LaunchAgent. Preferences and Keychain are preserved.'
+echo "Launch $DESTINATION to start dictating."

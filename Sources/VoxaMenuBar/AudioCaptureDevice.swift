@@ -67,14 +67,7 @@ final class AudioCaptureInbox {
     private var readIndex = 0
     private var count = 0
     private var closed = false
-    private var firstBufferAt: TimeInterval?
     private var fault: AudioRecorderError?
-
-    var firstBufferTime: TimeInterval? {
-        lock.lock()
-        defer { lock.unlock() }
-        return firstBufferAt
-    }
 
     var failure: AudioRecorderError? {
         lock.lock()
@@ -107,7 +100,6 @@ final class AudioCaptureInbox {
             memcpy(destination.floatChannelData![channel], source[channel], Int(buffer.frameLength) * MemoryLayout<Float>.size)
         }
         destination.frameLength = buffer.frameLength
-        if firstBufferAt == nil { firstBufferAt = ProcessInfo.processInfo.systemUptime }
         count += 1
         signal.or(data: Self.audioReady)
     }

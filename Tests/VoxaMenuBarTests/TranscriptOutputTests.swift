@@ -29,36 +29,6 @@ private enum OutputChecks {
         }
     }
 
-    static func routing() throws {
-        for (text, mode) in [(" \n", OutputModeOption.clipboardAutopaste), ("hello", .none)] {
-            var effects = 0
-            _ = processTranscriptOutput(text: text, mode: mode, copyToClipboard: { _ in
-                effects += 1
-                return true
-            }, autopaste: { _ in
-                effects += 1
-                return "unexpected paste"
-            })
-            try expect(effects == 0, "Empty and disabled output must not touch clipboard")
-        }
-        for succeeds in [true, false] {
-            var copied: String?
-            let message = processTranscriptOutput(text: "hello", mode: .clipboardOnly, copyToClipboard: {
-                copied = $0
-                return succeeds
-            }, autopaste: { _ in "unexpected paste" })
-            try expect(copied == "hello", "Clipboard-only output must copy the transcript")
-            try expect(message == (succeeds ? "Transcript copied to clipboard" : "Transcript ready but clipboard copy failed"), "Copy status must match the result")
-        }
-        var copyCalls = 0
-        let message = processTranscriptOutput(text: "hello", mode: .clipboardAutopaste, copyToClipboard: { _ in
-            copyCalls += 1
-            return true
-        }, autopaste: { text in "paste operation received: \(text)" })
-        try expect(copyCalls == 0, "Routing must not overwrite the clipboard before the paste operation snapshots it")
-        try expect(message == "paste operation received: hello", "Paste operation owns its outcome")
-    }
-
     static func richClipboard() throws {
         try withPasteboard { board in
             let first = NSPasteboardItem()
@@ -155,7 +125,6 @@ private enum OutputChecks {
     }
 
     static let all: [(String, () throws -> Void)] = [
-        ("output routing", routing),
         ("rich clipboard with multiple items", richClipboard),
         ("empty clipboard", emptyClipboard),
         ("failed and unconfirmed paste", failedAndUnconfirmedPaste),

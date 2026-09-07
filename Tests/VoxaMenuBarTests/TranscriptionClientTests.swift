@@ -175,13 +175,12 @@ enum TranscriptionClientChecks {
             let output = TranscriptOutput(copy: { copied = $0; return true })
             let session = DictationSession(settings: .init(outputMode: .clipboardOnly), recorder: recorder,
                                            transcriber: client, output: output)
-            session.start(apiKey: "fixture-key")
+            session.start(prepare: { "fixture-key" })
             try await eventually { if case .recording = session.state { return true }; return false }
             session.stop()
             try await eventually { !session.state.isBusy }
             try unitEqual(session.state, .idle)
             try unitEqual(session.lastOutcome, .copied)
-            try unitEqual(session.duration, 0.1)
             try unitEqual(copied, "Fixture dictation")
             try unitEqual(fixture.requests.count, 1)
             let body = fixture.requests[0].1

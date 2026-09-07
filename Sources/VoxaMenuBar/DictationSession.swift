@@ -4,7 +4,7 @@ import Foundation
 // Small test boundaries for the three concrete components; no alternate backend or event bus.
 protocol DictationRecording: Sendable {
     func start(id: UUID, limit: TimeInterval) async throws
-    func stop(id: UUID) async throws -> RecordedAudio
+    func stop(id: UUID) async throws -> Data
     func cancel(id: UUID) async
     func snapshot() async -> AudioRecorderSnapshot
 }
@@ -78,7 +78,6 @@ final class DictationSession: ObservableObject {
     @Published private(set) var state: DictationState = .idle
     @Published private(set) var settings: DictationSettings
     @Published private(set) var level = 0.0
-    @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var lastTranscript: String?
     @Published private(set) var lastOutcome: TranscriptOutputOutcome?
 
@@ -108,20 +107,10 @@ final class DictationSession: ObservableObject {
         return true
     }
 
-    @discardableResult
-    func start(origin: RecordingOrigin = .manual, apiKey: String) -> UUID? {
-        begin(origin: origin, prepare: { apiKey }, hasPreparation: false)
-    }
-
     /// Enter starting before permission/credential work, so hotkey release cannot be lost.
     @discardableResult
     func start(origin: RecordingOrigin = .manual,
                prepare: @escaping @MainActor () async throws -> String) -> UUID? {
-        begin(origin: origin, prepare: prepare, hasPreparation: true)
-    }
-
-    private func begin(origin: RecordingOrigin, prepare: @escaping @MainActor () async throws -> String,
-                       hasPreparation: Bool) -> UUID? {
         guard !shuttingDown, !state.isBusy else { return nil }
         let id = UUID()
         lastOutcome = nil
@@ -131,18 +120,9 @@ final class DictationSession: ObservableObject {
         }
         let context = DictationContext(id: id, origin: origin, settings: settings)
         level = 0
-        duration = 0
         state = .starting(context, requested: nil)
-        workflow = Task { await self.run(context, prepare: prepare, hasPreparation: hasPreparation) }
+        workflow = Task { await self.run(context, prepare: prepare) }
         return id
-    }
-
-    func toggle(apiKey: String) {
-        switch state {
-        case .idle, .failed: start(origin: .hotkeyToggle, apiKey: apiKey)
-        case .starting, .recording: stop()
-        default: break
-        }
     }
 
     func toggle(prepare: @escaping @MainActor () async throws -> String) {
@@ -152,8 +132,6 @@ final class DictationSession: ObservableObject {
         default: break
         }
     }
-
-    func holdPressed(apiKey: String) { start(origin: .hotkeyHold, apiKey: apiKey) }
 
     func holdReleased() {
         guard state.context?.origin == .hotkeyHold else { return }
@@ -202,8 +180,7 @@ final class DictationSession: ObservableObject {
         guard !shuttingDown, state.context?.id == context.id else { throw CancellationError() }
     }
 
-    private func run(_ context: DictationContext, prepare: @MainActor () async throws -> String,
-                     hasPreparation: Bool) async {
+    private func run(_ context: DictationContext, prepare: @MainActor () async throws -> String) async {
         do {
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
@@ -211,7 +188,7 @@ final class DictationSession: ObservableObject {
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
             // A release during a permission prompt must not capture speech after the prompt closes.
-            if hasPreparation, case .starting(_, .stop) = state { throw CancellationError() }
+            if case .starting(_, .stop) = state { throw CancellationError() }
             guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw TranscriptionError.authentication
             }
@@ -233,7 +210,6 @@ final class DictationSession: ObservableObject {
                 if snapshot.phase == .failed { throw CaptureFailure(message: snapshot.error ?? "Audio capture failed.") }
                 guard snapshot.phase == .recording || snapshot.phase == .finished else { throw AudioRecorderError.noAudio }
                 level = snapshot.level
-                duration = snapshot.duration
                 if snapshot.phase == .finished || clock.now() >= deadline {
                     state = .finishing(context, discard: false)
                     break
@@ -246,9 +222,8 @@ final class DictationSession: ObservableObject {
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
             level = 0
-            duration = audio.duration
             state = .transcribing(context)
-            let response = try await transcriber.transcribe(audio.wav, model: context.settings.model, apiKey: apiKey)
+            let response = try await transcriber.transcribe(audio, model: context.settings.model, apiKey: apiKey)
             try ensureCurrent(context)
             guard case .transcribing = state else { throw CancellationError() }
             let text = response.trimmingCharacters(in: .whitespacesAndNewlines)
