@@ -71,6 +71,12 @@ and lifecycle checks; the full Swift check includes them. Build the local record
 preview with `./scripts/preview-recorder.sh`. See the [stage 2 report](../../docs/native-recording-proof.md)
 for stopping the legacy backend, using the preview, and the remaining hardware checks.
 
+Stage 3 adds the native `DictationSession`, URLSession transcription client, and
+serialized async output wrapper in this same target. Run `./scripts/test-native-pipeline.sh`
+for the session, HTTP, and output fixtures; the full check includes them. These
+components are ready for application integration and do not yet replace the running
+daemon workflow. See the [stage 3 report](../../docs/native-session-pipeline.md).
+
 Clipboard integration checks can also run with just Command Line Tools (no XCTest runner):
 
 ```bash

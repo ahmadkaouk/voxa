@@ -1,6 +1,6 @@
 **Voxa: migration to the minimal native Swift architecture**
 
-Implementation plan for the agreed minimal architecture, updated 2026-09-06. The stage 1 baseline and preceding Rust fixes are committed as `ab12cf0` on `codex/swift-native-migration`. The user accepted the usual microphone/shortcut/autopaste baseline and requested proceeding to stage 2; remaining live measurements stay listed in [the baseline report](migration-baseline.md). The native recorder and development preview are implemented; automated fixtures and built-in microphone checks passed, including user-confirmed speech playback. [The recording proof report](native-recording-proof.md) tracks the remaining device, permission, sleep/wake, and duration checks. The everyday app still uses the daemon.
+Implementation plan for the agreed minimal architecture, updated 2026-09-07. The stage 1 baseline is committed as `ab12cf0` and the native recorder checkpoint as `8278249` on `codex/swift-native-migration`. The user requested proceeding to stage 3 with the remaining [baseline measurements](migration-baseline.md) and [recording hardware checks](native-recording-proof.md) still open. The native session, transcription client, and serialized output wrapper are implemented and pass the full regression suite; see [the stage 3 report](native-session-pipeline.md). Application integration has not started; the everyday app still uses the daemon.
 
 The target is one macOS menu bar application, one process, and one Swift application target, with the existing test target alongside it. One observable object owns the dictation workflow and calls three concrete components directly. The expected benefit is reduced maintenance and lifecycle complexity. Performance improvements must be measured.
 
@@ -96,6 +96,8 @@ Add the URLSession client with fixture-based tests for request construction, suc
 Wrap the existing clipboard implementation in an asynchronous `TranscriptOutput` API while preserving its serial execution. Its blocking waits must remain off the main thread, and pasteboard operations must keep their existing main-thread routing. Serialize Copy Last Transcript with delivery. Return explicit outcomes for clipboard-only output, paste attempts, manual fallback, clipboard changes, and failures. A clipboard read remains a best-effort signal, not proof of text insertion.
 
 Test stop twice, hold release during startup, cancel during startup, stop/cancel races, stale transcription completions, exact duration-limit behavior with a fake clock, empty transcripts, and recovery after failure. Verify a completed transcript is delivered once. Cancelled recordings must neither upload nor deliver text. A success indicator must follow the output outcome rather than transcription completion alone.
+
+Implemented and validated on 2026-09-07: [native session pipeline](native-session-pipeline.md). `./scripts/test-native-pipeline.sh` runs the shared fixture assertions, and `./scripts/check.sh` includes them. Carry the outstanding stage 2 hardware checks forward before enabling native capture for daily use.
 
 **Stage 4: connect the existing application**
 

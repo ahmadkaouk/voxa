@@ -56,7 +56,9 @@ Click Start to request microphone access and capture from the current default in
 
 The preview shows captured duration, meter level, input format, start-call-to-first-buffer time, and stop-call-to-WAV-ready time. Cancel reports microphone-release time; automatic stop labels retrieval of the completed WAV separately. These are individual development observations, not a comparative performance result. Use repeated manual-stop samples for a later stop-overhead comparison.
 
-**Hardware gate before stage 3**
+**Outstanding hardware validation**
+
+On 2026-09-07, the user requested committing this checkpoint and proceeding to stage 3. The recorder is committed as `8278249`. Native workflow implementation continues with fixtures; the checks below remain open and must be completed before enabling native capture for daily use.
 
 | Scenario | Status / evidence required |
 | --- | --- |
