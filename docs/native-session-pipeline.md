@@ -1,5 +1,7 @@
 **Stage 3: native session pipeline**
 
+> Historical checkpoint report. Implementation status and retired tool commands below refer to this stage. See [stage 6](native-migration-completion.md) for the final native application; pre-removal source/tools are preserved at `881b78f`.
+
 Implemented on `codex/swift-native-migration` after the stage 2 checkpoint `8278249`, following the user's 2026-09-07 request to commit and continue. The remaining [recording hardware checks](native-recording-proof.md) stay open. This stage established the native workflow with fixtures and was committed as `cfefab6`. [Stage 4](native-application-integration.md) now connects it to the app; the preserved installed legacy app remains available for rollback.
 
 **What owns the workflow**

@@ -1,197 +1,102 @@
-# Voxa Architecture
+# Voxa architecture
 
-## Goals
-- Keep the product simple: one reliable dictation app for macOS.
-- Make the menu bar app the primary UX.
-- Keep backend behavior deterministic and testable.
-- Avoid duplicate logic across UI surfaces.
+Voxa is one macOS application process, with one Swift application target and one
+test target. The deployment target is macOS 13; building requires Swift 6.0+ for
+the pinned TOMLDecoder dependency.
 
-## Product Surfaces
-- `voxa-menubar` (primary): user-facing control and status UI.
-- `voxa-daemon` (core): always-on runtime for hotkeys, recording, transcription, output.
-- `voxactl` (optional/internal): thin troubleshooting client for support/dev/CI.
-
-`voxactl` is intentionally minimal and not the main user experience.
-
-## Current System Architecture
-Daemon-first, API-first architecture:
-
-1. One daemon process owns runtime state and executes all recording/transcription work.
-2. Clients (menu bar app, optional `voxactl`) communicate with daemon over local IPC.
-3. Logs are observability only, never an app control channel.
-4. Shared domain logic lives in backend core, not in clients.
-
-## Packaging Strategy
-Use module boundaries first, crate boundaries second.
-
-- Start with one backend library crate (`voxa-core`) that contains domain, app, infra, and IPC modules.
-- Add small binary crates for process entrypoints (`voxa-daemon`, optional `voxactl`).
-- Split `voxa-core` into multiple crates only when there is a concrete need:
-  - dependency isolation
-  - reuse outside this repo
-  - separate ownership/release cadence
-
-## Component Model
-### 1) Clients
-- `voxa-menubar`
-  - UI only.
-  - Sends commands over IPC.
-  - Subscribes to daemon events for live state.
-- `voxactl` (optional)
-  - Small commands like `status`, `config get/set`, `health`, `logs`.
-  - Uses the same IPC API as menu bar.
-
-### 2) Daemon App Layer
-- Request handlers:
-  - `get_state`
-  - `start_recording`
-  - `stop_recording`
-  - `set_hotkeys`
-  - `set_output_mode`
-  - `set_model`
-  - `health`
-- Event broadcaster:
-  - Pushes runtime events to subscribed clients.
-
-### 3) Domain Core
-- Explicit state machine and invariants.
-- Session lifecycle and transition rules.
-- Error taxonomy mapped to user-facing messages.
-
-### 4) Infrastructure Adapters
-- `audio` adapter (mic capture + WAV normalization).
-- `stt` adapter (OpenAI transcription).
-- `hotkey` adapter (global key listener).
-- `output` adapter (clipboard + autopaste).
-- `storage` adapter (config + state snapshots).
-- `launchd` adapter (install/uninstall/status).
-
-## Runtime State Model
-Primary states:
-- `idle`
-- `recording`
-- `transcribing`
-- `outputting`
-- `error`
-
-Core events:
-- `toggle_pressed`
-- `hold_pressed`
-- `hold_released`
-- `max_duration_reached`
-- `recording_failed`
-- `transcription_succeeded`
-- `transcription_failed`
-- `output_succeeded`
-- `output_failed`
-
-Required invariants:
-- Exactly one active session at a time.
-- Stop request is idempotent.
-- State transitions are serialized (single writer model).
-- UI state comes from daemon events/state snapshot, not local guesses.
-
-## IPC Contract (Local Only)
-Transport:
-- Unix domain socket at app-support runtime path (for example `~/Library/Application Support/voxa/run/daemon.sock`).
-
-Protocol:
-- JSON messages.
-- Request/response for commands.
-- Subscription stream for daemon events.
-
-Message types:
-- Requests: `get_state`, `command`, `set_config`, `health`.
-- Responses: `ok`, `error`.
-- Events: `state_changed`, `recording_started`, `recording_stopped`, `transcribing_started`, `transcription_ready`, `output_done`, `warning`, `error`.
-
-Versioning:
-- Include `api_version` in handshake.
-- Backward-compatible additive changes by default.
-
-## Data and Storage
-Config:
-- Path: `~/Library/Application Support/voxa/config.toml`.
-- Includes hotkeys, model, output behavior, limits.
-
-Secrets:
-- OpenAI API key in macOS Keychain (preferred).
-- Environment variable fallback for development.
-
-Runtime state:
-- In-memory in daemon.
-- Optional atomic state snapshot file only for crash recovery diagnostics, not primary UI sync.
-
-Logs:
-- Keep structured logs (`info`, `warn`, `error`) for observability.
-- Do not parse logs for product state.
-
-## Security and Privacy
-- IPC socket permissions restricted to current user.
-- No transcript/audio history persistence by default.
-- Temporary audio files avoided; if needed, delete immediately after request.
-- No telemetry by default.
-
-## Failure Strategy
-- Daemon remains alive after session-level failures.
-- Error reported as event + recoverable state transition back to `idle`.
-- Client reconnect strategy:
-  - exponential backoff
-  - re-issue `get_state` on reconnect
-  - resume event subscription
-
-## Testing Strategy
-- Domain tests:
-  - transition correctness
-  - invariants
-  - hold/toggle behavior
-- Adapter tests:
-  - provider mapping
-  - output failures
-  - config read/write
-- IPC integration tests:
-  - request/response contract
-  - event ordering and reconnect behavior
-- End-to-end smoke:
-  - launch daemon
-  - trigger start/stop
-  - assert state and expected output events
-
-## Repository Shape (Target)
 ```text
-apps/
-  voxa-menubar/
-crates/
-  voxa-core/                # library crate
-    src/
-      domain/                # state machine + domain types
-      app/                   # use-cases/orchestration
-      infra/                 # audio, stt, output, hotkey, storage, launchd
-      ipc/                   # protocol and server/client primitives
-  voxa-daemon/              # daemon binary crate
-  voxactl/                  # optional thin client binary crate
+Voxa.app
+  UI and hotkeys
+        │
+  DictationSession (@MainActor)
+        ├── AudioRecorder       serial capture/conversion worker
+        ├── TranscriptionClient async URLSession
+        └── TranscriptOutput    serial clipboard/paste worker
 ```
 
-Keep this flat and simple; prefer internal modules over many crates.
+## Ownership and concurrency
 
-## Migration Plan
-1. Introduce IPC server in current daemon process.
-2. Add `get_state` + event subscription endpoints.
-3. Move menu bar app from CLI subprocess calls to IPC client calls.
-4. Replace log-based UI status with event-driven status.
-5. Shrink CLI into optional `voxactl` thin client using IPC.
-6. Move API key storage from env-first to Keychain-first.
-7. Remove legacy code paths that rely on parsing stdout/logs for state.
-8. Re-evaluate crate splits only after real pressure appears.
+`DictationSession` is the sole observable owner of the dictation workflow. Views
+observe the same session instance and send it start, stop, and cancel actions.
+`AppController` connects setup, settings, hotkeys, permission recovery, sounds,
+overlay presentation, and shutdown. Local view state controls presentation only.
 
-## Non-Goals (For Now)
-- Multi-device sync.
-- Cloud transcript history.
-- Multi-user service mode.
-- Complex plugin systems.
+Each recording has an ID and settings snapshot. The session checks both its ID
+and expected state after suspension so a late callback cannot complete a newer
+recording. States are `idle`, `starting`, `recording`, `finishing`, `transcribing`,
+`delivering`, and `failed`. Stop or cancel during preparation is remembered;
+releasing a hold shortcut during a permission prompt cannot start capture later.
+Cancellation is limited to recording. Normal Quit invalidates pending work and
+awaits capture teardown and clipboard cleanup before the process exits.
 
-## Decision Summary
-- Keep daemon as the single runtime authority.
-- Keep menu bar app thin and reactive.
-- Keep CLI minimal and optional.
-- Prefer simple local IPC over layered indirection.
+The three workers are constructed directly. Small protocols and injected closures
+allow deterministic tests; there is no service container, event bus, backend
+selector, separate core package, daemon, socket, or external control CLI.
+
+## Recording, transcription, and delivery
+
+| Component | Behavior |
+| --- | --- |
+| `AudioRecorder` | Owns AVAudioEngine lifecycle on a serial worker. A four-slot bounded inbox copies tap buffers without resampling or allocating audio buffers in the callback. Stop drains accepted audio; cancellation discards it. Interruptions, overruns, and a stalled microphone fail the recording and clean up. |
+| `AudioWAVEncoder` | Downmixes and streams conversion to 16 kHz mono PCM16 WAV, bounded by the configured 1–3,600-second limit. Meter sensitivity and smoothing affect the display only. |
+| `TranscriptionClient` | Uploads WAV data with async URLSession, the configured model, and a Bearer credential. The request timeout is 60 seconds. Redirects and automatic retries are disabled; errors are typed and no transcript/key is logged. |
+| `TranscriptOutput` | Serializes delivery and Copy Last Transcript. Autopaste saves all clipboard items/formats, sends paste, waits for consumption, and restores only if the clipboard still belongs to the operation. Clipboard Only intentionally replaces it; None skips automatic delivery. Explicit outcomes distinguish success from manual recovery. |
+
+Audio and the latest transcript are held in memory. The app does not persist a
+recording/transcript history. A failed paste can be recovered with Copy Last
+Transcript while the app remains open. Clipboard reads are a best-effort delivery
+signal; macOS does not acknowledge universal paste success.
+
+## Settings, credentials, and permissions
+
+`PreferencesStore` saves one versioned UserDefaults value. On first use it parses
+the whole legacy TOML with TOMLDecoder 0.4.5, validates it, then marks import
+complete atomically with the saved settings. Invalid imports remain retryable.
+The original `~/Library/Application Support/voxa/config.toml` is preserved.
+
+`Keychain` uses native Security APIs for service `com.voxa`, account
+`OPENAI_API_KEY`. The environment source is read-only. Keychain mode retains the
+environment fallback for a missing/empty item; denied Keychain access is an error.
+Credentials are not written to preferences or diagnostic logs.
+
+`Permissions` handles microphone, Accessibility, and Input Monitoring checks and
+recovery. The app retains bundle ID `com.voxa.menubar` and a stable signing
+identity. Microphone access is requested before capture, and permission state and
+hotkeys refresh when returning to the app or waking the Mac.
+
+## Installation, upgrades, and recovery
+
+`scripts/package-macos.sh` builds and signs the Swift executable, icons, sounds,
+and license notices, then creates a DMG. `scripts/verify-native-bundle.sh` checks
+the signature, identity, resources, deployment target, and exactly one executable.
+`scripts/install.sh` verifies a staged copy and backs up the existing signed app
+before replacement. A failed final move restores the previous app. Replacing a
+running app is refused.
+
+`LegacyCaptureGuard` is retained for upgrades. It blocks capture if another Voxa
+copy, old Recorder Preview, or legacy recorder is running. During setup it
+validates and unregisters only the current user's recognized `com.voxa.daemon`
+LaunchAgent, then archives its unchanged plist under
+`~/Library/Application Support/voxa/migration/`. Unknown jobs fail with a retryable
+explanation. It does not launch a helper or modify TOML, credentials, or unrelated
+services.
+
+Signed backups stay under `dist/apps.noindex/backups/`; preserve that directory
+before cleaning build artifacts. To roll back, quit Voxa and restore the entire
+preserved signed app bundle to `/Applications/Voxa.app`. A legacy app can recreate
+its LaunchAgent and reuse the original TOML and Keychain. Settings changed only in
+the native app remain in UserDefaults and do not rewrite the legacy TOML. A later
+native launch retires the recreated registration again. Stage 6 removes source
+from the checkout, not these local recovery artifacts.
+
+## Validation and history
+
+`./scripts/check.sh` builds the app and runs Swift tests. XCTest is used when
+available; Command Line Tools run the same shared assertions through standalone
+harnesses. Discovery guards reject unregistered test files instead of silently
+skipping them. Fixtures cover capture/conversion, session ordering and cleanup,
+HTTP errors, output/clipboard recovery, settings/Keychain, and legacy upgrades.
+
+See the [completion report](native-migration-completion.md) for checked artifacts
+and validation limits. Earlier daemon architecture and protocol notes are in
+[archive/](archive/README.md); the last source revision before removal is `881b78f`.

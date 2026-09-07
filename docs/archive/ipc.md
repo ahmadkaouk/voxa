@@ -1,3 +1,5 @@
+> Historical document: the daemon/IPC implementation was retired in stage 6. See [the current architecture](../architecture.md). Source and tools are preserved in Git at `881b78f`; commands below describe that revision.
+
 # Voxa IPC Protocol (v1)
 
 ## Scope

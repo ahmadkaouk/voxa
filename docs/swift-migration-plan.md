@@ -1,10 +1,10 @@
 **Voxa: migration to the minimal native Swift architecture**
 
-Implementation plan for the agreed minimal architecture, updated 2026-09-07. Stage 1 is committed as `ab12cf0`, the native recorder as `8278249`, stage 3 as `cfefab6`, and stage 4 as `b054c4f` on `codex/swift-native-migration`. Stage 4 is complete: the UI and hotkeys use the native pipeline, settings import and native Keychain/permission handling are connected, the full regression suite and signed build pass, and the user confirmed live dictation works with the legacy daemon stopped. See [the stage 4 report](native-application-integration.md). Stage 5 packaging and upgrade implementation is complete: native-only packaging, safe LaunchAgent retirement, installer recovery checks, and exploratory fixture measurements pass. The user confirmed legacy rollback dictation; `/Applications/Voxa.app` now contains the signed native candidate, with real LaunchAgent retirement and idle quit/relaunch verified. Broader behavior/hardware checks and multi-day use remain acceptance gates; see [candidate validation](native-candidate-validation.md). Stage 6 removal has not started. Verified signed legacy rollback copies and the original TOML are preserved. Outstanding [baseline measurements](migration-baseline.md) and [recording hardware checks](native-recording-proof.md) carry forward into stage 5.
+Implementation plan for the agreed minimal architecture, updated 2026-09-07. Stages 1–4 are committed as `ab12cf0`, `8278249`, `cfefab6`, and `b054c4f`; native packaging/upgrade handling is `5c84791` and the meter correction is `881b78f` on `codex/swift-native-migration`. The user confirmed the corrected animation, expected application behavior, and permission recovery, and explicitly authorized stage 6. This accepts the candidate for removal without asserting that the original several-day/100-session exposure target or outstanding performance measurements were independently completed. Stage 6 is complete: Rust/IPC removal, fresh Swift-only build/tests, signed packaging, installation/recovery, and installed startup pass; the user also confirmed final dictation, paste, and animation behavior; see [the completion report](native-migration-completion.md). Signed rollback apps, original TOML, Keychain, and prior measurements remain preserved. Earlier sections below describe the migration checkpoints and their original acceptance targets.
 
 The target is one macOS menu bar application, one process, and one Swift application target, with the existing test target alongside it. One observable object owns the dictation workflow and calls three concrete components directly. The expected benefit is reduced maintenance and lifecycle complexity. Performance improvements must be measured.
 
-The completed Rust fixes beyond commit `fe3af80` were preserved on the migration branch and included in an immutable source snapshot. The baseline report identifies that snapshot and distinguishes it from the installed signed release. Preserve those fixes and their tests throughout migration.
+The completed Rust fixes beyond commit `fe3af80` were preserved on the migration branch and included in an immutable source snapshot. The baseline report identifies that snapshot and distinguishes it from the installed signed release. The final pre-removal revision `881b78f` preserves those fixes and tests in Git.
 
 **Scope and architecture decisions**
 
@@ -85,7 +85,7 @@ Test valid WAV output using fixtures, including mono/stereo input, differing inp
 
 Run native capture only when the legacy recorder is inactive. Do not run both backends against the microphone for a comparison. If native capture is unreliable, resolve it before undertaking the larger UI migration.
 
-Implementation and validation details: [native recording proof](native-recording-proof.md). Build its isolated development preview with `./scripts/preview-recorder.sh`; the full check script includes the recorder's shared assertions.
+Implementation and validation details: [native recording proof](native-recording-proof.md). The isolated development preview was built with `./scripts/preview-recorder.sh` at this checkpoint; stage 6 retires that temporary tool. The full check script retains the recorder's shared assertions.
 
 **Stage 3: implement the native workflow**
 
@@ -127,7 +127,7 @@ Use the candidate for several days, targeting at least 100 representative sessio
 
 Rehearse rollback: quit the native app, retain native preferences, restore the preserved signed legacy app, and confirm it can recreate its LaunchAgent, read its original configuration and credential, and complete a recording. Preferences changed only in the native version may revert to the preserved legacy values after rollback; document this explicitly.
 
-Stage 5 implementation and evidence: [native candidate validation](native-candidate-validation.md). The installer update moved into this stage so candidate validation exercises the same native install path users will run. Rust source, legacy IPC code, and their regression checks remain available.
+Stage 5 implementation and evidence: [native candidate validation](native-candidate-validation.md). The installer update moved into this stage so candidate validation exercises the same native install path users will run. Rust source, legacy IPC code, and their regression checks were retained through candidate validation and remain recoverable in Git at `881b78f`. The user accepted candidate behavior and permission recovery and requested stage 6 on 2026-09-07.
 
 **Stage 6: remove transitional infrastructure**
 

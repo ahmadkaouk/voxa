@@ -1,5 +1,7 @@
 **Swift migration: stage 1 baseline**
 
+> Historical checkpoint report. Implementation status and retired tool commands below refer to this stage. See [stage 6](native-migration-completion.md) for the final native application; pre-removal source/tools are preserved at `881b78f`.
+
 Recorded 2026-09-06 on branch `codex/swift-native-migration`.
 
 The automated baseline is established. The user confirmed that the installed application works normally with their usual microphone, hold/toggle shortcuts, and autopaste. Stage 1 remains open for actual capture/upload/startup timings and the live checks listed below. Native recording implementation has not started.

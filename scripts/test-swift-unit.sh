@@ -8,8 +8,7 @@ mkdir -p "$BUILD_DIR"
 swiftc -parse-as-library -warnings-as-errors \
   -D VOXA_STANDALONE_TESTS -D VOXA_UNIT_TEST_RUNNER \
   -module-cache-path "$BUILD_DIR/module-cache" \
-  "$SOURCE_DIR/Models.swift" "$SOURCE_DIR/Hotkeys.swift" "$SOURCE_DIR/IPCClient.swift" \
+  "$SOURCE_DIR/Hotkeys.swift" \
   "$TEST_DIR/UnitChecksSupport.swift" "$TEST_DIR/HotkeyOptionTests.swift" \
-  "$TEST_DIR/IPCClientTests.swift" "$TEST_DIR/PopoverPrimaryActionTests.swift" \
   -o "$BUILD_DIR/unit-checks"
 "$BUILD_DIR/unit-checks"

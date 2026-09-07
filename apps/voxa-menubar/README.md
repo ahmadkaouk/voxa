@@ -1,12 +1,12 @@
 # voxa-menubar
 
-`voxa-menubar` is the main Native SwiftUI menu bar application for Voxa. On the migration branch, the existing
-UI and global hotkeys drive one `DictationSession`, which directly calls the native
+`voxa-menubar` is Voxa's native SwiftUI menu bar application. The UI and global
+hotkeys drive one `DictationSession`, which directly calls the native
 recorder, transcription client, and serialized transcript output worker.
 
 `AppController` handles setup, preferences, presentation effects, and shutdown.
-It no longer connects to a daemon. Signed legacy application backups and Rust
-source remain available while the installed native candidate is validated.
+The application runs in one process. The retired Rust backend is preserved in Git
+at `881b78f`; signed legacy app backups remain available locally for rollback.
 
 ## Run
 
@@ -30,16 +30,16 @@ Depending on the features you use, macOS may ask for:
 ./scripts/package-macos.sh
 ```
 
-Packaging builds and signs one native executable with no Rust helper. Quit older
-Voxa copies and Recorder Preview before launching the candidate. Setup waits until
-the legacy daemon is stopped, unregisters the recognized Voxa LaunchAgent, and
+Packaging builds and signs one native executable. Quit other Voxa copies before
+launching it. When upgrading an older installation, setup waits until the legacy
+recorder is stopped, unregisters the recognized Voxa LaunchAgent, and
 archives its plist while preserving the original TOML and Keychain entry.
 
 `./scripts/install.sh` builds and installs the signed app; use `--app /path/to/Voxa.app`
 to install an existing candidate. It refuses to replace a running destination and
 preserves a verified backup. `VOXA_DIST_DIR` selects a separate build output, and
 `VOXA_INSTALL_DIR` supports test installs outside `/Applications`. See the
-[stage 5 validation report](../../docs/native-candidate-validation.md).
+[migration completion report](../../docs/native-migration-completion.md).
 
 Generated app bundles and installer staging live under `dist/apps.noindex/` so macOS app search does not list development copies alongside `/Applications/Voxa.app`. Keep local app backups in `dist/apps.noindex/backups/`. The distributable disk image remains `dist/Voxa.dmg`.
 
@@ -68,14 +68,15 @@ After switching from older ad-hoc builds to a stable signed build, macOS may ask
 
 Run all Swift checks, including the application build, with `./scripts/test-swift.sh`
 from the repository root. It uses XCTest when available and otherwise runs the same
-existing assertions through standalone unit, clipboard, and sound harnesses. A new
+existing assertions through standalone harnesses for hotkeys, clipboard, sounds,
+recording, and the native pipeline. A new
 test file without standalone coverage fails the fallback path instead of being skipped.
 
 The native recorder and pipeline are connected to the app. `./scripts/test-audio-recorder.sh`
 checks capture fixtures; `./scripts/test-native-pipeline.sh` checks session ordering,
 HTTP/output behavior, settings migration, and a disposable Keychain entry. These
-checks use no real microphone or external API. See the [stage 4 report](../../docs/native-application-integration.md)
-for signed-app validation and remaining hardware checks.
+checks use no real microphone or external API. See the [completion report](../../docs/native-migration-completion.md)
+for validation evidence and its limits.
 
 Clipboard integration checks can also run with just Command Line Tools (no XCTest runner):
 

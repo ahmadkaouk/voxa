@@ -1,5 +1,7 @@
 **Stage 2: native recording proof**
 
+> Historical checkpoint report. Implementation status and retired tool commands below refer to this stage. See [stage 6](native-migration-completion.md) for the final native application; pre-removal source/tools are preserved at `881b78f`.
+
 Started on `codex/swift-native-migration` after checkpoint `ab12cf0` (the hardened daemon and stage 1 baseline). The user accepted the usual microphone, hold/toggle, and autopaste baseline and explicitly requested proceeding to stage 2. Unmeasured stage 1 hardware/performance items remain open; they are not recorded as passing.
 
 The native recorder and development preview are implemented. Fixture validation and the built-in microphone checks below passed, including user-confirmed speech playback. External-device interruption, permission denial/recovery, sleep/wake, and long-duration validation remain pending before closing the hardware gate. The shipping app still uses its existing daemon.

@@ -1,5 +1,7 @@
 **Stage 4: native application integration**
 
+> Historical checkpoint report. Implementation status and retired tool commands below refer to this stage. See [stage 6](native-migration-completion.md) for the final native application; pre-removal source/tools are preserved at `881b78f`.
+
 Implemented on `codex/swift-native-migration` after committing stage 3 as `cfefab6` on 2026-09-07. The menu bar application now runs the native Swift pipeline. The installed `/Applications/Voxa.app` and the [stage 1 rollback copy](migration-baseline.md) remain the preserved legacy build.
 
 **Application wiring**

@@ -1,3 +1,5 @@
+> Historical document: the daemon/IPC implementation was retired in stage 6. See [the current architecture](../architecture.md). Source and tools are preserved in Git at `881b78f`; commands below describe that revision.
+
 # voxactl
 
 `voxactl` is a thin IPC client for controlling the daemon.

@@ -21,7 +21,7 @@ func unitEqual<T: Equatable>(_ actual: T, _ expected: T, file: StaticString = #f
 @main
 private enum UnitChecksRunner {
     static func main() {
-        let checks = HotkeyOptionChecks.all + IPCClientChecks.all + PopoverPrimaryActionChecks.all
+        let checks = HotkeyOptionChecks.all
         do {
             for (name, check) in checks {
                 try check()

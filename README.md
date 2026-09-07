@@ -1,11 +1,8 @@
 # Voxa
 
-Voxa is a macOS dictation application. The Swift migration branch now connects the menu bar UI to native recording, transcription, and output in one process.
+Voxa is a native macOS dictation application. Its SwiftUI menu bar UI, microphone recording, transcription, and output run in one process.
 
-Status: macOS-only, build-from-source, native migration in progress. See the [migration plan](docs/swift-migration-plan.md) and [native app report](docs/native-application-integration.md).
-
-Stage 5 validates the native candidate. Rust source and the signed legacy app remain
-available for rollback until the daily-use gate passes; see [candidate validation](docs/native-candidate-validation.md).
+Status: macOS-only, build-from-source. See the [architecture](docs/architecture.md) and [migration completion report](docs/native-migration-completion.md).
 
 ## Architecture
 
@@ -13,8 +10,8 @@ One SwiftUI application process contains the UI/hotkeys and one `DictationSessio
 The session directly calls `AudioRecorder`, `TranscriptionClient`, and `TranscriptOutput`.
 Small helpers handle preferences, Keychain, permissions, and retiring the old LaunchAgent.
 
-`apps/voxa-menubar` contains the application. The `crates` directory and IPC code are
-preserved legacy implementations and regression coverage; native dictation does not use them.
+`apps/voxa-menubar` contains one application target and its test target. The app has no
+Rust dependency, daemon, local IPC server, or external control CLI.
 
 ## What You Can Do Today
 
@@ -34,7 +31,6 @@ preferences. Native settings are saved in UserDefaults; the original TOML remain
 ### Requirements
 
 - macOS 13+
-- Rust toolchain only for the retained legacy regression suite; native packaging and installation do not require Rust
 - Xcode Command Line Tools / Swift 6.0+ (TOMLDecoder requires Swift 6; deployment still targets macOS 13)
 - OpenAI API key
 
@@ -63,12 +59,6 @@ Check the workspace:
 ./scripts/check.sh
 ```
 
-Run the Rust tests:
-
-```bash
-cargo test --workspace
-```
-
 Run the Swift tests:
 
 ```bash
@@ -78,14 +68,12 @@ Run the Swift tests:
 ## Repository Layout
 
 - `apps/voxa-menubar`: SwiftUI menu bar app
-- `crates/voxa-daemon`: daemon process and runtime state authority
-- `crates/voxactl`: CLI for testing, debugging, and support workflows
-- `crates/voxa-core`: shared domain, IPC, and infrastructure primitives
-- `docs/`: architecture, IPC contract, and CLI notes
+- `scripts/`: build, packaging, installation, tests, and development fixtures
+- `docs/`: native architecture and migration evidence
+- `docs/archive/`: historical daemon design and retired CLI/IPC documentation
 
 ## Documentation
 
-- `apps/voxa-menubar/README.md`
-- `crates/voxactl/README.md`
-- `docs/architecture.md`
-- `docs/ipc.md`
+- [Application usage and development](apps/voxa-menubar/README.md)
+- [Architecture](docs/architecture.md)
+- [Documentation index](docs/README.md)
