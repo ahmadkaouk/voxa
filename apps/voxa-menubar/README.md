@@ -65,6 +65,12 @@ from the repository root. It uses XCTest when available and otherwise runs the s
 existing assertions through standalone unit, clipboard, and sound harnesses. A new
 test file without standalone coverage fails the fallback path instead of being skipped.
 
+The native Swift migration's recorder is compiled in this target but is not connected
+to the everyday app yet. `./scripts/test-audio-recorder.sh` exercises its fixtures
+and lifecycle checks; the full Swift check includes them. Build the local recording
+preview with `./scripts/preview-recorder.sh`. See the [stage 2 report](../../docs/native-recording-proof.md)
+for stopping the legacy backend, using the preview, and the remaining hardware checks.
+
 Clipboard integration checks can also run with just Command Line Tools (no XCTest runner):
 
 ```bash

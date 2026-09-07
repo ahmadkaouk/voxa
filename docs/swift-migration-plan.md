@@ -1,6 +1,6 @@
 **Voxa: migration to the minimal native Swift architecture**
 
-Implementation plan for the agreed minimal architecture, updated 2026-09-06. Stage 1 is underway on `codex/swift-native-migration`; see [the baseline report](migration-baseline.md) for completed checks, measurements, and remaining live validation. Native backend implementation has not started.
+Implementation plan for the agreed minimal architecture, updated 2026-09-06. The stage 1 baseline and preceding Rust fixes are committed as `ab12cf0` on `codex/swift-native-migration`. The user accepted the usual microphone/shortcut/autopaste baseline and requested proceeding to stage 2; remaining live measurements stay listed in [the baseline report](migration-baseline.md). The native recorder and development preview are implemented; automated fixtures and built-in microphone checks passed, including user-confirmed speech playback. [The recording proof report](native-recording-proof.md) tracks the remaining device, permission, sleep/wake, and duration checks. The everyday app still uses the daemon.
 
 The target is one macOS menu bar application, one process, and one Swift application target, with the existing test target alongside it. One observable object owns the dictation workflow and calls three concrete components directly. The expected benefit is reduced maintenance and lifecycle complexity. Performance improvements must be measured.
 
@@ -84,6 +84,8 @@ Implement `AudioRecorder` in the existing Swift target and exercise it through a
 Test valid WAV output using fixtures, including mono/stereo input, differing input rates, silence, and clipping. Exercise rapid start/stop, cancel followed by a new recording, unavailable or denied microphone access, built-in and external microphones, device removal, and sleep/wake. Failed capture must release resources or prevent a conflicting second capture.
 
 Run native capture only when the legacy recorder is inactive. Do not run both backends against the microphone for a comparison. If native capture is unreliable, resolve it before undertaking the larger UI migration.
+
+Implementation and validation details: [native recording proof](native-recording-proof.md). Build its isolated development preview with `./scripts/preview-recorder.sh`; the full check script includes the recorder's shared assertions.
 
 **Stage 3: implement the native workflow**
 
