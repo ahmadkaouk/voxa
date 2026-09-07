@@ -17,15 +17,18 @@ private final class OutputTrace: @unchecked Sendable {
 enum AsyncTranscriptOutputChecks {
     static func outcomes() async throws {
         let trace = OutputTrace()
-        let output = TranscriptOutput(copy: { _ in trace.add("copy"); return false }, paste: { _, _ in
-            trace.add("paste"); return .snapshotFailed
+        let output = TranscriptOutput(copy: { text in trace.add("copy: \(text)"); return false }, paste: { text, _ in
+            trace.add("paste: \(text)"); return .snapshotFailed
         })
         try unitEqual(await output.deliver(" \n", mode: .clipboardAutopaste), .empty)
         try unitEqual(await output.deliver("hello", mode: .none), .disabled)
         try unitEqual(trace.events, [])
         try unitEqual(await output.copy("hello"), .copyFailed)
         try unitEqual(await output.deliver("hello", mode: .clipboardAutopaste), .paste(.snapshotFailed))
-        try unitEqual(trace.events, ["copy", "paste"])
+        try unitEqual(trace.events, ["copy: hello", "paste: hello"])
+        let copying = TranscriptOutput(copy: { text in trace.add("copy: \(text)"); return true })
+        try unitEqual(await copying.deliver(" hello\n", mode: .clipboardOnly), .copied)
+        try unitEqual(trace.events, ["copy: hello", "paste: hello", "copy:  hello\n"])
         for result: ClipboardPasteResult in [.restored, .manualPaste, .unconfirmed, .clipboardChanged, .snapshotFailed, .writeFailed, .restoreFailed] {
             let output = TranscriptOutput(paste: { _, _ in result })
             let outcome = await output.deliver("text", mode: .clipboardAutopaste)

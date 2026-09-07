@@ -1,71 +1,145 @@
 # Voxa
 
-Voxa is a native macOS dictation application. Its SwiftUI menu bar UI, microphone recording, transcription, and output run in one process.
+**Speak, transcribe, and paste into the app you're using.**
 
-Status: macOS-only, build-from-source. See the [architecture](docs/architecture.md).
+Voxa is a native macOS dictation app built with Swift and SwiftUI. It lives in
+your menu bar: start a recording with a shortcut, speak, and finish to turn your
+words into text. Transcription uses OpenAI with your own API key.
 
-## Architecture
+- **Two ways to record:** hold a shortcut while speaking, or press once to start
+  and again to finish. Both shortcuts are customizable.
+- **Clear recording feedback:** a floating dictation bar, live audio meter, and
+  sounds for recording and errors.
+- **Flexible output:** paste into the active app, copy to the clipboard, or keep
+  the result available for manual copying.
+- **Clipboard restoration:** autopaste restores your previous clipboard when
+  safe, preserving anything you copy while delivery is in progress.
 
-One SwiftUI application process contains the UI/hotkeys and one `DictationSession`.
-The session directly calls `AudioRecorder`, `TranscriptionClient`, and `TranscriptOutput`.
-Small helpers handle preferences, Keychain, permissions, and retiring the old LaunchAgent.
+## Get started
 
-`apps/voxa-menubar` contains one application target and its test target. The app has no
-Rust dependency, daemon, local IPC server, or external control CLI.
+Voxa is currently built from source. You'll need:
 
-## What You Can Do Today
+- **macOS 13 or later.**
+- **Swift 6.0 or later**, provided by Xcode or the Xcode Command Line Tools.
+- **An OpenAI API key and an internet connection** for transcription.
 
-- Use the SwiftUI menu bar app for push-to-talk dictation
-- Transcribe completed recordings with OpenAI's `gpt-transcribe` model
-- Send transcripts to the clipboard or directly into the active app
-- Build a packaged macOS app bundle and DMG
+Check your compiler with `swift --version`. If the developer tools are missing,
+install them with `xcode-select --install`.
 
-The app retires its recognized legacy LaunchAgent after the old recorder stops. It does not start a daemon.
-
-GPT-Transcribe is the default and supported transcription model. Saved GPT-4o Mini
-Transcribe and GPT-4o Transcribe settings migrate on startup while preserving other
-preferences. Native settings are saved in UserDefaults; the original TOML remains available for rollback.
-
-## Build From Source
-
-### Requirements
-
-- macOS 13+
-- Xcode Command Line Tools / Swift 6.0+ (TOMLDecoder requires Swift 6; deployment still targets macOS 13)
-- OpenAI API key
-
-For DMG packaging, macOS tools `sips`, `iconutil`, and `hdiutil` must also be available.
-
-### Run
-
-Build, sign, and install the native app (quit the installed Voxa first):
+### Install
 
 ```bash
+git clone https://github.com/ahmadkaouk/voxa.git
+cd voxa
 ./scripts/install.sh
+open /Applications/Voxa.app
 ```
 
-Launch `/Applications/Voxa.app`, allow any required Keychain/microphone permissions,
-and use the menu bar controls or configured shortcuts. Existing settings and the
-OpenAI key are reused. A fresh install can add its key from the menu bar UI.
+The installer builds and signs Voxa, installs it in `/Applications`, and creates
+`dist/Voxa.dmg`. When updating an existing installation, finish your dictation
+and quit Voxa first. The installer preserves a signed backup of the previous app.
 
-For a development run, `swift run --package-path apps/voxa-menubar voxa-menubar`
-remains available. Run only one Voxa copy at a time.
+### Set up Voxa
 
-## Common Tasks
+1. Open Voxa from the menu bar and choose **Add API Key…**. Save your OpenAI API
+   key; Voxa stores it in macOS Keychain.
+2. Allow the permissions needed for the features you use:
 
-Check the workspace:
+   | Permission | Used for |
+   | --- | --- |
+   | Microphone | Recording your voice |
+   | Accessibility | Pasting the transcript into another app |
+   | Input Monitoring | Recognizing global shortcuts |
+
+3. Focus a text field, hold **Option + G**, and speak. Release the shortcut to
+   transcribe and paste your words.
+
+If a permission is missing, use the **Enable…** actions in Voxa's menu to open
+the relevant System Settings page. Return to Voxa after granting access.
+
+## Using Voxa
+
+### Recording controls
+
+| Action | Default control |
+| --- | --- |
+| Hold to record | Hold **Option + G**; release to finish |
+| Toggle recording | Press **Option + F** to start; press again to finish |
+| Record with the mouse | Click the floating handle to start, then the checkmark to finish |
+| Discard a recording | Click **×** on the dictation bar while recording |
+
+Change shortcuts under **Hotkeys** in the menu. **Max Recording** sets the
+recording limit; the default is five minutes. Transcription begins after
+recording finishes. Discarding a recording skips transcription and output.
+
+### Choose where text goes
+
+Select a mode under **Output**:
+
+| Mode | Behavior |
+| --- | --- |
+| **Autopaste (Keep Clipboard)** | Pastes into the active app and restores the previous clipboard when safe. This is the default. |
+| **Clipboard Only** | Replaces the clipboard with the transcript for you to paste. |
+| **None** | Keeps the latest transcript in memory without automatically copying or pasting it. |
+
+If automatic pasting doesn't work in a particular app, use **Output → Copy Last
+Transcript** and paste manually. The latest transcript remains available until
+you replace it with another dictation or quit Voxa.
+
+## Audio and data
+
+Voxa records audio locally and sends the completed recording to OpenAI for
+transcription. **Transcription requires internet access.**
+
+The app holds recordings and the latest transcript in memory; it does not save
+an audio or transcript history to disk. API keys entered in the app are stored
+in macOS Keychain, and preferences are saved locally. See the
+[architecture guide](docs/architecture.md) for details about data handling and
+clipboard recovery.
+
+## Development
+
+The repository is a single Swift package with one application target and one test
+target. Run these commands from the repository root:
 
 ```bash
+# Build the application
+swift build
+
+# Run a development copy; quit other Voxa copies first
+swift run voxa-menubar
+
+# Build and run the regression checks
 ./scripts/check.sh
+
+# Create a signed app bundle and DMG without installing
+./scripts/package-macos.sh
 ```
 
-## Repository Layout
+The check script uses XCTest when available. With Command Line Tools, it runs
+the same assertions through standalone harnesses. Checks cover recording,
+session state, transcription, clipboard delivery, settings, and upgrade recovery.
 
-- `apps/voxa-menubar`: SwiftUI menu bar app
-- `scripts/`: build, packaging, installation, tests, and development fixtures
-- `docs/`: native architecture
+```text
+Package.swift           Swift package definition
+Sources/VoxaMenuBar/     Application code and bundled resources
+Tests/VoxaMenuBarTests/  Regression tests
+assets/                 App icon source
+scripts/                Build, install, test, and preview tools
+docs/                   Development and architecture guides
+```
 
-## Documentation
+Build outputs in `.build/` and `dist/` are ignored by Git. Preserve
+`dist/apps.noindex/backups/` before cleaning generated files.
 
-- [Application usage and development](apps/voxa-menubar/README.md)
-- [Architecture](docs/architecture.md)
+- [Development guide](docs/development.md): signing, packaging, focused checks,
+  previews, and environment overrides.
+- [Architecture](docs/architecture.md): session ownership, audio capture,
+  transcription, clipboard delivery, and upgrades from older versions.
+
+## License
+
+Voxa is available under the [MIT License](LICENSE). Bundled sounds have their
+own [CC0 license](Sources/VoxaMenuBar/Resources/Sounds/Zen/LICENSE-AUDIO);
+dependency notices are included in
+[ThirdPartyNotices.txt](Sources/VoxaMenuBar/Resources/ThirdPartyNotices.txt).

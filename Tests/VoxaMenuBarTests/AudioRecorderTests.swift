@@ -258,12 +258,10 @@ enum AudioRecorderChecks {
             let snapshot = await recorder.snapshot()
             try unitEqual(snapshot.phase, .recording)
             try unitExpect(snapshot.level > 0)
-            try unitExpect(snapshot.firstBufferLatency != nil)
             let recording = try await recorder.stop(id: id)
-            try unitEqual(recording.duration, 0.1)
-            try unitEqual(recording.wav.count, 3244)
+            try unitEqual(recording.count, 3244)
             let repeated = try await recorder.stop(id: id)
-            try unitEqual(recording.wav, repeated.wav)
+            try unitEqual(recording, repeated)
         }
         try unitEqual(device.stopCount, 12)
     }
@@ -355,8 +353,7 @@ enum AudioRecorderChecks {
         try await waitFor(recorder, phase: .finished)
         try unitEqual(device.stopCount, 1)
         let recording = try await recorder.stop(id: id)
-        try unitEqual(recording.duration, 1)
-        try unitEqual(recording.wav.count, 32_044)
+        try unitEqual(recording.count, 32_044)
     }
 
     static func teardownBeforeSuccessor() async throws {

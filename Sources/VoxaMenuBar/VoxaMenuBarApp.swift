@@ -233,8 +233,7 @@ struct VoxaPopoverView: View {
 
             menuActionRow(
                 controller.isAPIKeySet ? "Update API Key…" : "Add API Key…",
-                systemImage: "key",
-                tint: .primary
+                systemImage: "key"
             ) {
                 showsAPIKeyEditor.toggle()
             }
@@ -429,35 +428,31 @@ struct VoxaPopoverView: View {
     private func expandableRow<Content: View>(
         _ menu: ExpandedMenu,
         title: String,
-        systemImage: String? = nil,
-        value: String? = nil,
+        systemImage: String,
+        value: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 toggleExpandedMenu(menu)
             } label: {
-                MenuRowChrome { _ in
+                MenuRowChrome {
                     HStack(alignment: .center, spacing: 8) {
-                        if let systemImage {
-                            Image(systemName: systemImage)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 14)
-                        }
+                        Image(systemName: systemImage)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 14)
 
                         Text(title)
                             .font(.system(size: 13))
 
                         Spacer(minLength: 8)
 
-                        if let value {
-                            Text(value)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
+                        Text(value)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
 
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .semibold))
@@ -470,7 +465,6 @@ struct VoxaPopoverView: View {
             .accessibilityLabel(title)
             .accessibilityValue(
                 [value, expandedMenu == menu ? "Expanded" : "Collapsed"]
-                    .compactMap { $0 }
                     .joined(separator: ", ")
             )
             .accessibilityHint("Shows available \(title.lowercased()) options")
@@ -516,17 +510,13 @@ struct VoxaPopoverView: View {
     private func menuValueRow(
         _ title: String,
         value: String,
-        systemImage: String? = nil,
-        tint: Color = .secondary,
-        monospaced: Bool = false
+        systemImage: String
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(tint)
-                    .frame(width: 14)
-            }
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
 
             Text(title)
                 .font(.system(size: 13))
@@ -534,7 +524,7 @@ struct VoxaPopoverView: View {
             Spacer(minLength: 8)
 
             Text(value)
-                .font(monospaced ? .caption.monospaced() : .system(size: 12))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -621,23 +611,20 @@ struct VoxaPopoverView: View {
 
     private func menuActionRow(
         _ title: String,
-        systemImage: String? = nil,
-        tint: Color = .primary,
+        systemImage: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            MenuRowChrome { _ in
+            MenuRowChrome {
                 HStack(alignment: .center, spacing: 8) {
-                    if let systemImage {
-                        Image(systemName: systemImage)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(tint)
-                            .frame(width: 14)
-                    }
+                    Image(systemName: systemImage)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 14)
 
                     Text(title)
                         .font(.system(size: 13))
-                        .foregroundStyle(tint)
+                        .foregroundStyle(.primary)
 
                     Spacer(minLength: 12)
                 }
@@ -651,7 +638,7 @@ struct VoxaPopoverView: View {
             action()
             expandedMenu = nil
         } label: {
-            MenuRowChrome { _ in
+            MenuRowChrome {
                 HStack(spacing: 8) {
                     Text(title)
                         .font(.system(size: 12.5))
@@ -811,7 +798,7 @@ private final class HotkeyRecorder: ObservableObject {
             keyDisplayOverrides[keyCode] ?? HotkeyOption.displayName(forKeyCode: keyCode, characters: nil)
         }
 
-        let hotkey = HotkeyOption.recorded(
+        let hotkey = HotkeyOption(
             keyCodes: sortedKeyCodes,
             modifiers: recordedModifiers,
             keyDisplays: keyDisplays
@@ -843,13 +830,13 @@ private struct MenuRowChrome<Content: View>: View {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
 
-    let content: (Bool) -> Content
+    let content: () -> Content
     @State private var isHovered = false
 
     var body: some View {
         let isHighlighted = isEnabled && isHovered
 
-        content(isHighlighted)
+        content()
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .background(

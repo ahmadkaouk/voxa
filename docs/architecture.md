@@ -98,5 +98,5 @@ HTTP errors, output/clipboard recovery, settings/Keychain, and legacy upgrades.
 
 `scripts/test-install.sh` exercises clean installation, signed updates/backups,
 failure recovery, and the running-app guard in temporary directories. See the
-[application README](../apps/voxa-menubar/README.md) for development commands and
+[development guide](development.md) for development commands and
 the optional live clipboard and overlay checks.

@@ -139,14 +139,6 @@ struct HotkeyOption: Identifiable, Equatable {
         }
     }
 
-    init(keyCode: UInt16?, modifiers: HotkeyModifiers, keyDisplay: String?) {
-        self.init(
-            keyCodes: keyCode.map { [$0] } ?? [],
-            modifiers: modifiers,
-            keyDisplays: keyDisplay.map { [$0] } ?? []
-        )
-    }
-
     static let rightOption = HotkeyOption(modifiers: [.option])
     static let functionKey = HotkeyOption(modifiers: [.function])
     static let optionF = HotkeyOption(
@@ -194,7 +186,7 @@ struct HotkeyOption: Identifiable, Equatable {
             break
         }
 
-        let parts = modifiers.displayParts + resolvedKeyDisplays
+        let parts = modifiers.displayParts + keyDisplays
         if parts.isEmpty {
             return "Unassigned"
         }
@@ -242,10 +234,6 @@ struct HotkeyOption: Identifiable, Equatable {
         return encoded
     }
 
-    var isModifierOnly: Bool {
-        keyCodes.isEmpty
-    }
-
     fileprivate var inputTokens: Set<HotkeyInputToken> {
         var tokens: Set<HotkeyInputToken> = []
         if modifiers.contains(.control) {
@@ -267,14 +255,6 @@ struct HotkeyOption: Identifiable, Equatable {
             tokens.insert(.keyCode(keyCode))
         }
         return tokens
-    }
-
-    var resolvedKeyDisplays: [String] {
-        if keyDisplays.count == keyCodes.count {
-            return keyDisplays
-        }
-
-        return keyCodes.map { Self.displayName(forKeyCode: $0, characters: nil) }
     }
 
     func matches(modifiers activeModifiers: HotkeyModifiers, pressedKeys: Set<UInt16>) -> Bool {
@@ -356,18 +336,6 @@ struct HotkeyOption: Identifiable, Equatable {
         )
     }
 
-    static func recorded(
-        keyCodes: [UInt16],
-        modifiers: HotkeyModifiers,
-        keyDisplays: [String]
-    ) -> HotkeyOption {
-        HotkeyOption(
-            keyCodes: keyCodes,
-            modifiers: modifiers,
-            keyDisplays: keyDisplays
-        )
-    }
-
     static func modifierOnly(_ modifiers: HotkeyModifiers) -> HotkeyOption? {
         guard !modifiers.isEmpty else {
             return nil
@@ -400,9 +368,6 @@ struct HotkeyOption: Identifiable, Equatable {
 
         if let characters {
             let trimmed = characters.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed == " " {
-                return "Space"
-            }
             if !trimmed.isEmpty {
                 return trimmed.uppercased()
             }
