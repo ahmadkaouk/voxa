@@ -307,7 +307,42 @@ enum DictationSessionChecks {
         }
     }
 
+    static func preparationCommandsAndRecovery() async throws {
+        for command in ["stop", "cancel", "shutdown"] {
+            let f = SessionFixture()
+            let gate = PipelineGate()
+            f.session.start(origin: .hotkeyHold, prepare: { await gate.wait(); return "fixture-key" })
+            try unitEqual(f.session.state.tag, "starting")
+            try await eventually { gate.entered }
+            var shutdown: Task<Void, Never>?
+            switch command {
+            case "stop": f.session.holdReleased()
+            case "cancel": f.session.cancel()
+            default:
+                shutdown = Task { await f.session.shutdown() }
+                try await f.wait("idle")
+            }
+            gate.open()
+            await shutdown?.value
+            try await f.wait("idle")
+            try unitExpect(f.recorder.starts.isEmpty)
+            try unitExpect(f.transcriber.calls.isEmpty)
+            try unitExpect(f.output.calls.isEmpty)
+            if command != "shutdown" { try await f.record(); f.session.cancel(); try await f.wait("idle") }
+        }
+        let f = SessionFixture()
+        f.session.start(prepare: { throw TranscriptionError.authentication })
+        try await f.wait("failed")
+        try unitExpect(f.recorder.starts.isEmpty)
+        f.session.start(prepare: { "fixture-key" })
+        try await f.wait("recording")
+        f.session.stop()
+        try await f.wait("idle")
+        try unitEqual(f.output.calls.count, 1)
+    }
+
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("session: preparation release, cancellation, shutdown and recovery", preparationCommandsAndRecovery),
         ("session: one ordered workflow and output completion", workflowAndOutputCompletion),
         ("session: hold release and cancellation during startup", startupStopAndCancel),
         ("session: hold/toggle origins and busy commands", originsAndBusyCommands),
@@ -321,6 +356,7 @@ enum DictationSessionChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class DictationSessionTests: XCTestCase {
+    func testPreparationCommandsAndRecovery() async throws { try await DictationSessionChecks.preparationCommandsAndRecovery() }
     func testWorkflowAndOutputCompletion() async throws { try await DictationSessionChecks.workflowAndOutputCompletion() }
     func testStartupStopAndCancel() async throws { try await DictationSessionChecks.startupStopAndCancel() }
     func testOriginsAndBusyCommands() async throws { try await DictationSessionChecks.originsAndBusyCommands() }

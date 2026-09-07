@@ -72,7 +72,7 @@ struct DictationClock {
     }
 }
 
-/// The sole owner of native workflow state. The existing AppController is not connected yet.
+/// The sole owner of native workflow state, including asynchronous recording preparation.
 @MainActor
 final class DictationSession: ObservableObject {
     @Published private(set) var state: DictationState = .idle
@@ -108,9 +108,20 @@ final class DictationSession: ObservableObject {
         return true
     }
 
-    /// Permission and Keychain UI belong to application setup. Pass a key snapshot, not a store.
     @discardableResult
     func start(origin: RecordingOrigin = .manual, apiKey: String) -> UUID? {
+        begin(origin: origin, prepare: { apiKey }, hasPreparation: false)
+    }
+
+    /// Enter starting before permission/credential work, so hotkey release cannot be lost.
+    @discardableResult
+    func start(origin: RecordingOrigin = .manual,
+               prepare: @escaping @MainActor () async throws -> String) -> UUID? {
+        begin(origin: origin, prepare: prepare, hasPreparation: true)
+    }
+
+    private func begin(origin: RecordingOrigin, prepare: @escaping @MainActor () async throws -> String,
+                       hasPreparation: Bool) -> UUID? {
         guard !shuttingDown, !state.isBusy else { return nil }
         let id = UUID()
         lastOutcome = nil
@@ -118,21 +129,25 @@ final class DictationSession: ObservableObject {
             state = .failed(id: id, message: AudioRecorderError.invalidLimit.localizedDescription)
             return nil
         }
-        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            state = .failed(id: id, message: TranscriptionError.authentication.localizedDescription)
-            return nil
-        }
         let context = DictationContext(id: id, origin: origin, settings: settings)
         level = 0
         duration = 0
         state = .starting(context, requested: nil)
-        workflow = Task { await self.run(context, apiKey: apiKey) }
+        workflow = Task { await self.run(context, prepare: prepare, hasPreparation: hasPreparation) }
         return id
     }
 
     func toggle(apiKey: String) {
         switch state {
         case .idle, .failed: start(origin: .hotkeyToggle, apiKey: apiKey)
+        case .starting, .recording: stop()
+        default: break
+        }
+    }
+
+    func toggle(prepare: @escaping @MainActor () async throws -> String) {
+        switch state {
+        case .idle, .failed: start(origin: .hotkeyToggle, prepare: prepare)
         case .starting, .recording: stop()
         default: break
         }
@@ -187,10 +202,19 @@ final class DictationSession: ObservableObject {
         guard !shuttingDown, state.context?.id == context.id else { throw CancellationError() }
     }
 
-    private func run(_ context: DictationContext, apiKey: String) async {
+    private func run(_ context: DictationContext, prepare: @MainActor () async throws -> String,
+                     hasPreparation: Bool) async {
         do {
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
+            let apiKey = try await prepare()
+            try ensureCurrent(context)
+            if state.isDiscarding { throw CancellationError() }
+            // A release during a permission prompt must not capture speech after the prompt closes.
+            if hasPreparation, case .starting(_, .stop) = state { throw CancellationError() }
+            guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw TranscriptionError.authentication
+            }
             try await recorder.start(id: context.id, limit: context.settings.maxRecordingSeconds)
             try ensureCurrent(context)
             switch state {

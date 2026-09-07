@@ -24,12 +24,18 @@ enum TranscriptionError: LocalizedError, Equatable {
 struct TranscriptionClient: Sendable {
     static let defaultEndpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
     static let timeout: TimeInterval = 60
-    private let endpoint: URL
+    private let endpoint: URL?
     private let session: URLSession
 
-    init(endpoint: URL = Self.defaultEndpoint, session: URLSession? = nil) {
+    init(endpoint: URL? = Self.defaultEndpoint, session: URLSession? = nil) {
         self.endpoint = endpoint
         self.session = session ?? URLSession(configuration: Self.configuration())
+    }
+
+    static func configuredEndpoint(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
+        guard let raw = environment["VOXA_OPENAI_TRANSCRIPTIONS_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return defaultEndpoint }
+        return URL(string: raw)
     }
 
     static func configuration() -> URLSessionConfiguration {
@@ -48,7 +54,7 @@ struct TranscriptionClient: Sendable {
         guard !audio.isEmpty else { throw TranscriptionError.invalidAudio }
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty, !key.utf8.contains(13), !key.utf8.contains(10) else { throw TranscriptionError.authentication }
-        guard ["https", "http"].contains(endpoint.scheme), endpoint.host != nil else {
+        guard let endpoint, ["https", "http"].contains(endpoint.scheme), endpoint.host != nil else {
             throw TranscriptionError.invalidEndpoint
         }
         let boundary = "Voxa-\(UUID().uuidString)"

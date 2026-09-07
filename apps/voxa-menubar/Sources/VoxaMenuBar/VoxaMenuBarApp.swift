@@ -2,23 +2,39 @@ import AppKit
 import SwiftUI
 
 @main
+@MainActor
 struct VoxaMenuBarApp: App {
-    @StateObject private var controller = AppController()
+    @NSApplicationDelegateAdaptor(VoxaAppDelegate.self) private var appDelegate
 
     init() {
         NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     var body: some Scene {
-        MenuBarExtra("Voxa", systemImage: controller.menuBarSymbol) {
-            VoxaPopoverView(controller: controller)
+        MenuBarExtra {
+            VoxaPopoverView(controller: appDelegate.controller)
+        } label: {
+            VoxaMenuBarLabel(controller: appDelegate.controller)
         }
         .menuBarExtraStyle(.window)
     }
 }
 
+@MainActor
+private struct VoxaMenuBarLabel: View {
+    @ObservedObject var controller: AppController
+    var body: some View { Label("Voxa", systemImage: controller.menuBarSymbol) }
+}
+
+@MainActor
 struct VoxaPopoverView: View {
     @ObservedObject var controller: AppController
+    @ObservedObject var session: DictationSession
+
+    init(controller: AppController) {
+        self.controller = controller
+        self.session = controller.session
+    }
     @State private var expandedMenu: ExpandedMenu?
     @State private var showsAPIKeyEditor = false
     @StateObject private var hotkeyRecorder = HotkeyRecorder()
@@ -35,12 +51,12 @@ struct VoxaPopoverView: View {
         VStack(alignment: .leading, spacing: 0) {
             statusSection
 
-            if let lastError = controller.lastErrorCode, !lastError.isEmpty {
+            if let lastError = controller.errorMessage, !lastError.isEmpty {
                 Divider()
                 sectionGroup {
                     statusMessageRow(
                         title: "Last error",
-                        value: humanizeErrorCode(lastError),
+                        value: lastError,
                         systemImage: "exclamationmark.triangle.fill"
                     )
                 }
@@ -168,7 +184,7 @@ struct VoxaPopoverView: View {
                 Button("Copy Last Transcript") {
                     controller.copyLastTranscript()
                 }
-                .disabled(controller.lastTranscript == nil)
+                .disabled(session.lastTranscript == nil)
             }
 
             expandableRow(
@@ -187,7 +203,7 @@ struct VoxaPopoverView: View {
                 }
             }
         }
-        .disabled(controller.isBusy || controller.runtimeState != .idle)
+        .disabled(controller.isBusy || !controller.isReady)
     }
 
     private var hotkeysSection: some View {
@@ -208,7 +224,7 @@ struct VoxaPopoverView: View {
                 target: .hold
             )
         }
-        .disabled(controller.isBusy || controller.runtimeState != .idle)
+        .disabled(controller.isBusy || !controller.isReady)
     }
 
     private var accountSection: some View {
@@ -231,216 +247,114 @@ struct VoxaPopoverView: View {
 
     private var footerActions: some View {
         sectionGroup {
-            if !controller.hasAccessibilityPermission {
-                menuActionRow("Enable Input Permissions…", systemImage: "hand.raised.fill") {
-                    controller.requestInputPermissions()
+            if controller.permissions.microphone == .denied || controller.permissions.microphone == .restricted {
+                menuActionRow("Enable Microphone…", systemImage: "mic.fill") {
+                    Permissions.openSettings("Microphone")
                 }
             }
-
-            menuActionRow("Reconnect", systemImage: "arrow.clockwise") {
-                controller.reconnectNow()
+            if !controller.permissions.accessibility {
+                menuActionRow("Enable Accessibility…", systemImage: "hand.raised.fill") {
+                    Permissions.openSettings("Accessibility")
+                }
             }
-            .disabled(controller.isBusy)
-
-            menuActionRow("Quit", systemImage: "power") {
-                controller.quit()
+            if !controller.permissions.inputMonitoring {
+                menuActionRow("Enable Input Monitoring…", systemImage: "keyboard") {
+                    Permissions.openSettings("ListenEvent")
+                }
             }
-        }
-    }
-
-    private var statusTitle: String {
-        switch controller.connectionStatus {
-        case .disconnected:
-            return "Needs Attention"
-        case .connecting:
-            return "Starting"
-        case .connected:
-            switch controller.runtimeState {
-            case .idle:
-                return "Connected"
-            case .recording:
-                return "Recording"
-            case .transcribing:
-                return "Transcribing"
-            case .outputting:
-                return "Outputting"
-            case .error:
-                return "Error"
-            }
+            menuActionRow("Retry Setup", systemImage: "arrow.clockwise") { controller.retrySetup() }
+                .disabled(controller.isBusy)
+            menuActionRow("Quit", systemImage: "power") { controller.quit() }
         }
     }
 
     private var statusMenuTitle: String {
-        switch controller.connectionStatus {
-        case .disconnected:
-            return "Voxa needs attention"
-        case .connecting:
-            return "Voxa is starting"
-        case .connected:
-            switch controller.runtimeState {
-            case .idle:
-                return "Voxa is ready"
-            case .recording:
-                return "Voxa is recording"
-            case .transcribing:
-                return "Voxa is transcribing"
-            case .outputting:
-                return "Voxa is outputting"
-            case .error:
-                return "Voxa has an error"
-            }
+        if controller.isSettingUp { return "Voxa is starting" }
+        if !controller.isReady { return "Voxa needs attention" }
+        switch session.state {
+        case .idle: return controller.isAPIKeySet ? "Voxa is ready" : "Set up Voxa"
+        case .starting: return "Preparing microphone"
+        case .recording: return "Voxa is recording"
+        case .finishing: return "Finishing recording"
+        case .transcribing: return "Voxa is transcribing"
+        case .delivering: return "Delivering transcript"
+        case .failed: return "Voxa needs attention"
         }
     }
 
     private var statusTint: Color {
-        switch controller.connectionStatus {
-        case .disconnected:
-            return Color(nsColor: .systemRed)
-        case .connecting:
-            return Color(nsColor: .systemOrange)
-        case .connected:
-            switch controller.runtimeState {
-            case .idle:
-                return Color(nsColor: .systemGreen)
-            case .recording, .transcribing:
-                return Color(nsColor: .controlAccentColor)
-            case .outputting:
-                return Color(nsColor: .systemBlue)
-            case .error:
-                return Color(nsColor: .systemRed)
-            }
-        }
+        if controller.errorMessage != nil { return Color(nsColor: .systemRed) }
+        if controller.isSettingUp { return Color(nsColor: .systemOrange) }
+        return session.state.isBusy ? Color(nsColor: .controlAccentColor) : Color(nsColor: .systemGreen)
     }
 
     private var statusSubtitle: String {
-        switch controller.connectionStatus {
-        case .disconnected:
-            return controller.statusMessage
-        case .connecting:
-            return controller.statusMessage
-        case .connected:
-            switch controller.runtimeState {
-            case .idle:
-                if !controller.hasAccessibilityPermission {
-                    return "Enable input permissions for hotkeys and autopaste"
-                }
-                return controller.isAPIKeySet ? "Ready when you are" : "Add an API key to start transcribing"
-            case .recording:
-                return "Listening for your transcript"
-            case .transcribing:
-                return "Turning speech into text"
-            case .outputting:
-                return "Sending transcript to the selected output"
-            case .error:
-                return controller.statusMessage
+        if let error = controller.setupError { return error }
+        if controller.isSettingUp { return "Loading settings and checking access…" }
+        switch session.state {
+        case .idle:
+            if !controller.isAPIKeySet { return "Add an API key to start transcribing" }
+            if controller.permissions.microphone == .denied { return "Enable Microphone access in System Settings" }
+            if !controller.permissions.accessibility || !controller.permissions.inputMonitoring {
+                return "Enable input permissions for hotkeys and autopaste"
             }
+            return controller.statusMessage
+        case .starting: return "Checking microphone and Keychain access"
+        case .recording: return "Listening for your transcript"
+        case .finishing: return "Closing the microphone"
+        case .transcribing: return "Turning speech into text"
+        case .delivering: return "Sending transcript to the selected output"
+        case .failed(_, let message): return message
         }
     }
 
+    private enum PrimaryAction { case addAPIKey, setup, start, stop, retry, working }
+    private var primaryActionKind: PrimaryAction {
+        if controller.isSettingUp || controller.isSavingKey { return .working }
+        if !controller.isReady { return .setup }
+        switch session.state {
+        case .starting(_, nil), .recording: return .stop
+        case .starting, .finishing, .transcribing, .delivering: return .working
+        case .idle: return controller.isAPIKeySet ? .start : .addAPIKey
+        case .failed: return controller.isAPIKeySet ? .retry : .addAPIKey
+        }
+    }
     private var primaryActionTitle: String {
         switch primaryActionKind {
-        case .addAPIKey:
-            return "Add API Key"
-        case .reconnect:
-            return "Reconnect to Voxa"
-        case .connecting:
-            return "Starting…"
-        case .startRecording:
-            return "Start Recording"
-        case .stopRecording:
-            return "Stop Recording"
-        case .retry:
-            return "Try Again"
-        case .working:
-            return "Working…"
+        case .addAPIKey: return "Add API Key"
+        case .setup: return "Retry Setup"
+        case .start: return "Start Recording"
+        case .stop: return "Stop Recording"
+        case .retry: return "Try Again"
+        case .working: return "Working…"
         }
     }
-
     private var primaryActionSymbol: String {
         switch primaryActionKind {
-        case .addAPIKey:
-            return "key.fill"
-        case .reconnect, .retry:
-            return "arrow.clockwise"
-        case .connecting:
-            return "bolt.horizontal.circle"
-        case .startRecording:
-            return "mic.fill"
-        case .stopRecording:
-            return "stop.fill"
-        case .working:
-            return "hourglass"
+        case .addAPIKey: return "key.fill"
+        case .setup, .retry: return "arrow.clockwise"
+        case .start: return "mic.fill"
+        case .stop: return "stop.fill"
+        case .working: return "hourglass"
         }
     }
-
     private var primaryActionTint: Color {
-        switch primaryActionKind {
-        case .stopRecording:
-            return Color(nsColor: .systemRed)
-        case .reconnect, .retry:
-            return Color(nsColor: .systemOrange)
-        case .connecting, .working:
-            return Color(nsColor: .systemGray)
-        case .addAPIKey, .startRecording:
-            return Color(nsColor: .controlAccentColor)
-        }
+        primaryActionKind == .stop ? Color(nsColor: .systemRed) : Color(nsColor: .controlAccentColor)
     }
-
-    private var primaryActionDisabled: Bool {
-        controller.isBusy || primaryActionKind == .connecting || primaryActionKind == .working
-    }
-
+    private var primaryActionDisabled: Bool { primaryActionKind == .working }
     private var primaryActionAccessibilityHint: String {
         switch primaryActionKind {
-        case .addAPIKey:
-            return "Opens the secure API key editor"
-        case .reconnect:
-            return "Attempts to reconnect to the local Voxa service"
-        case .connecting:
-            return "Voxa is connecting to its local service"
-        case .startRecording, .retry:
-            return "Starts a new dictation"
-        case .stopRecording:
-            return "Stops recording and begins transcription"
-        case .working:
-            return "Voxa is processing the current dictation"
+        case .addAPIKey: return "Opens the secure API key editor"
+        case .setup: return "Retries settings import and access checks"
+        case .start, .retry: return "Starts a new dictation"
+        case .stop: return "Stops recording and begins transcription"
+        case .working: return "Voxa is processing the current operation"
         }
     }
 
-    private var primaryActionKind: PopoverPrimaryAction {
-        PopoverPrimaryAction.resolve(
-            isAPIKeySet: controller.isAPIKeySet,
-            connectionStatus: controller.connectionStatus,
-            runtimeState: controller.runtimeState
-        )
-    }
-
-    private var apiKeyStatusText: String {
-        guard controller.isAPIKeySet else {
-            return "Not set"
-        }
-
-        if let hint = controller.apiKeyHint, !hint.isEmpty {
-            return "\(hint) · \(controller.apiKeySource)"
-        }
-
-        return "Set · \(controller.apiKeySource)"
-    }
-
-    private var apiKeyStatusTitle: String {
-        controller.isAPIKeySet ? "Configured" : "Missing"
-    }
-
+    private var apiKeyStatusTitle: String { controller.isAPIKeySet ? "Configured" : "Missing" }
     private var apiKeyStatusDetail: String {
-        guard controller.isAPIKeySet else {
-            return "Add an OpenAI API key to enable transcription"
-        }
-
-        if let hint = controller.apiKeyHint, !hint.isEmpty {
-            return "Using \(hint)"
-        }
-
-        return "Stored and ready to use"
+        controller.isAPIKeySet ? "Ready to use" : "Add an OpenAI API key to enable transcription"
     }
 
     private var apiKeySourceLabel: String {
@@ -449,26 +363,12 @@ struct VoxaPopoverView: View {
 
     private func performPrimaryAction() {
         switch primaryActionKind {
-        case .addAPIKey:
-            showsAPIKeyEditor = true
-        case .reconnect:
-            controller.reconnectNow()
-        case .stopRecording:
-            controller.stopRecording()
-        case .startRecording, .retry:
-            controller.startRecording()
-        case .connecting, .working:
-            break
+        case .addAPIKey: showsAPIKeyEditor = true
+        case .setup: controller.retrySetup()
+        case .stop: session.stop()
+        case .start, .retry: controller.startRecording()
+        case .working: break
         }
-    }
-
-    private func humanizeErrorCode(_ code: String) -> String {
-        code
-            .split(separator: "_")
-            .map { segment in
-                segment.prefix(1).uppercased() + segment.dropFirst().lowercased()
-            }
-            .joined(separator: " ")
     }
 
     private var maxRecordingOptions: [UInt64] {

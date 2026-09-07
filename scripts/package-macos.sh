@@ -260,6 +260,7 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_PATH"
 cp "$MENU_BAR_BIN" "$APP_EXECUTABLE"
 cp "$DAEMON_BIN" "$DAEMON_BUNDLE_PATH"
 cp -R "$APP_PACKAGE_DIR/Sources/VoxaMenuBar/Resources/Sounds" "$APP_RESOURCES_DIR/Sounds"
+cp "$APP_PACKAGE_DIR/Sources/VoxaMenuBar/Resources/ThirdPartyNotices.txt" "$APP_RESOURCES_DIR/ThirdPartyNotices.txt"
 chmod +x "$APP_EXECUTABLE" "$DAEMON_BUNDLE_PATH"
 
 cat > "$INFO_PLIST_PATH" <<'EOF'

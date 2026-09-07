@@ -1,21 +1,17 @@
 # voxa-menubar
 
-`voxa-menubar` is the main SwiftUI client for Voxa.
+`voxa-menubar` is the main Native SwiftUI menu bar application for Voxa. On the migration branch, the existing
+UI and global hotkeys drive one `DictationSession`, which directly calls the native
+recorder, transcription client, and serialized transcript output worker.
 
-It provides the day-to-day user experience: it lives in the macOS menu bar, captures hotkeys, talks to `voxa-daemon` over local IPC, and handles transcript output.
-
-## Responsibilities
-
-- Connect to `voxa-daemon` over IPC
-- Keep UI state in sync with daemon state and config
-- Capture global hotkeys and forward start/stop commands
-- Save API keys and expose daemon lifecycle controls
-- Output transcripts to the clipboard, clipboard plus autopaste, or nowhere
-- Install or update the per-user LaunchAgent for `voxa-daemon`
+`AppController` handles setup, preferences, presentation effects, and shutdown.
+It no longer connects to a daemon. The preserved installed legacy application and
+Rust source remain available while the native candidate is validated.
 
 ## Run
 
 ```bash
+# Requires Swift 6.0+ (the pinned TOMLDecoder dependency)
 cd apps/voxa-menubar
 swift run voxa-menubar
 ```
@@ -34,7 +30,11 @@ Depending on the features you use, macOS may ask for:
 ./scripts/package-macos.sh
 ```
 
-The packaged `Voxa.app` embeds `voxa-daemon` at `Contents/Resources/bin/voxa-daemon`, and the menu bar app prefers that bundled daemon when installing the LaunchAgent.
+Stage 4 packaging still includes the unused legacy daemon. The native app never
+starts it. Stage 5 will remove the helper from the bundle and retire the owned
+LaunchAgent after the signed native test. Quit the older Voxa app and Recorder
+Preview before launching the native candidate; capture is blocked if another
+Voxa capture process is detected.
 
 Generated app bundles and installer staging live under `dist/apps.noindex/` so macOS app search does not list development copies alongside `/Applications/Voxa.app`. Keep local app backups in `dist/apps.noindex/backups/`. The distributable disk image remains `dist/Voxa.dmg`.
 
@@ -51,31 +51,26 @@ After switching from older ad-hoc builds to a stable signed build, macOS may ask
 - Autopaste temporarily borrows the clipboard, waits for a text read, then restores all saved items and formats. Restoration is skipped if the clipboard changed in the meantime. Clipboard reads are a best-effort delivery signal; macOS does not provide a universal paste-success acknowledgement.
 - If the paste shortcut cannot be sent or the clipboard is not read within two seconds, the transcript remains available for manual paste. If the original clipboard cannot be fully saved, autopaste leaves it untouched. Output → Copy Last Transcript can recover the latest dictation in either case; it is kept only in memory while Voxa is running.
 - Clipboard Only intentionally replaces the clipboard. All output operations are serialized so overlapping transcripts and explicit copies cannot restore over each other.
-- The dictation bar rests as a small handle when Voxa is connected and an API key is configured. Click it to start, use the checkmark to finish, or X to discard the recording without transcription or paste.
+- The dictation bar rests as a small handle when Voxa is ready and an API key is configured. Click it to start, use the checkmark to finish, or X to discard the recording without transcription or paste.
 - Recording uses a compact dark pill with a live white meter, followed by processing dots and a brief completion check. Reduced Motion disables continuous animation.
 - Bundled [UI SFX Zen](https://uisfx.com/) sounds distinguish start, stop, and errors, with playback levels about 3 dB above the upstream defaults. The MP3 assets and CC0 license are in `Sources/VoxaMenuBar/Resources/Sounds/Zen`; playback works offline.
 - To inspect the real overlay and sounds without microphone access, run `./scripts/preview-overlay.sh` from the repository root, then open `dist/apps.noindex/Voxa Overlay Preview.app`. Its meter and state transitions are simulated.
-- The app resyncs state and config after reconnecting to the daemon.
-- Automatic reconnect backoff: `200ms`, `500ms`, `1s`, `2s`, `5s`.
-- The app does not shell out to `voxactl` for runtime state.
-- The app does not parse daemon logs.
+- Settings import reads the old `~/Library/Application Support/voxa/config.toml` once using TOMLDecoder 0.4.5. A validated, versioned UserDefaults value records completion. Failed imports can be retried; the original file is never changed.
+- Native Security APIs read/update the existing `com.voxa` / `OPENAI_API_KEY` item. Keychain authorization may be requested because the app now accesses the key itself. Secrets are never saved in preferences or logs.
+- `api_key_source = "env"` stays read-only. Keychain mode retains the `OPENAI_API_KEY` fallback for a missing/empty entry. `VOXA_CONFIG_PATH` overrides the initial import source; `VOXA_OPENAI_TRANSCRIPTIONS_URL` retains the development endpoint override.
+- Permission recovery actions open Microphone, Accessibility, and Input Monitoring settings. Returning to the app or waking the Mac refreshes access and re-registers hotkeys.
+- Normal Quit waits for microphone release and clipboard cleanup.
 
 Run all Swift checks, including the application build, with `./scripts/test-swift.sh`
 from the repository root. It uses XCTest when available and otherwise runs the same
 existing assertions through standalone unit, clipboard, and sound harnesses. A new
 test file without standalone coverage fails the fallback path instead of being skipped.
 
-The native Swift migration's recorder is compiled in this target but is not connected
-to the everyday app yet. `./scripts/test-audio-recorder.sh` exercises its fixtures
-and lifecycle checks; the full Swift check includes them. Build the local recording
-preview with `./scripts/preview-recorder.sh`. See the [stage 2 report](../../docs/native-recording-proof.md)
-for stopping the legacy backend, using the preview, and the remaining hardware checks.
-
-Stage 3 adds the native `DictationSession`, URLSession transcription client, and
-serialized async output wrapper in this same target. Run `./scripts/test-native-pipeline.sh`
-for the session, HTTP, and output fixtures; the full check includes them. These
-components are ready for application integration and do not yet replace the running
-daemon workflow. See the [stage 3 report](../../docs/native-session-pipeline.md).
+The native recorder and pipeline are connected to the app. `./scripts/test-audio-recorder.sh`
+checks capture fixtures; `./scripts/test-native-pipeline.sh` checks session ordering,
+HTTP/output behavior, settings migration, and a disposable Keychain entry. These
+checks use no real microphone or external API. See the [stage 4 report](../../docs/native-application-integration.md)
+for signed-app validation and remaining hardware checks.
 
 Clipboard integration checks can also run with just Command Line Tools (no XCTest runner):
 

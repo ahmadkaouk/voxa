@@ -1,8 +1,10 @@
 # Voxa
 
-Voxa is a macOS dictation system built around a local daemon and thin clients.
+Voxa is a macOS dictation application. The Swift migration branch now connects the menu bar UI to native recording, transcription, and output in one process.
 
-Status: macOS-only, build-from-source, early-stage.
+Status: macOS-only, build-from-source, native migration in progress. See the [migration plan](docs/swift-migration-plan.md) and [native app report](docs/native-application-integration.md).
+
+The daemon architecture documented below describes the preserved legacy implementation. The installed legacy app remains available until signed native validation is complete.
 
 The core idea is simple: `voxa-daemon` runs as a separate local server, owns recording, transcription, config, and runtime state, and exposes a local IPC API. Clients stay lightweight and talk to the daemon instead of re-implementing that logic. That keeps the architecture flexible and makes it easier to add or experiment with different clients over time.
 
@@ -39,7 +41,7 @@ preferences; the new model is written to disk on the next configuration save.
 
 - macOS 13+
 - Rust toolchain (stable)
-- Xcode Command Line Tools / Swift 5.9+
+- Xcode Command Line Tools / Swift 6.0+ (TOMLDecoder requires Swift 6; deployment still targets macOS 13)
 - OpenAI API key
 
 For DMG packaging, macOS tools `sips`, `iconutil`, and `hdiutil` must also be available.

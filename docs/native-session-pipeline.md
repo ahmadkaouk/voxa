@@ -1,6 +1,6 @@
 **Stage 3: native session pipeline**
 
-Implemented on `codex/swift-native-migration` after the stage 2 checkpoint `8278249`, following the user's 2026-09-07 request to commit and continue. The remaining [recording hardware checks](native-recording-proof.md) stay open. This stage establishes the native workflow with fixtures; the everyday app still runs through its existing daemon.
+Implemented on `codex/swift-native-migration` after the stage 2 checkpoint `8278249`, following the user's 2026-09-07 request to commit and continue. The remaining [recording hardware checks](native-recording-proof.md) stay open. This stage established the native workflow with fixtures and was committed as `cfefab6`. [Stage 4](native-application-integration.md) now connects it to the app; the preserved installed legacy app remains available for rollback.
 
 **What owns the workflow**
 
@@ -33,13 +33,13 @@ The recorder caches a completed WAV for repeatable Stop calls. The session relea
 
 The default endpoint is `https://api.openai.com/v1/audio/transcriptions`. Endpoint and URLSession constructor injection support local fixtures and the existing development override when application wiring moves in stage 4. Both request and resource timeout defaults are 60 seconds. Multipart assembly and response decoding happen outside the main actor. The client uses an ephemeral session with no cookie, credential, or response-cache storage, adds no upload retries, and refuses HTTP redirects. It distinguishes authentication, rate limiting, request status, network, timeout, invalid response, and empty transcript errors. Errors exclude API keys, server response bodies, and transcript contents. Task cancellation propagates to URLSession.
 
-Credential lookup, permission prompts, preferences import, and selection of a development endpoint remain application integration responsibilities. This stage neither reads Keychain nor changes the configured model/provider.
+Credential lookup, permission prompts, preferences import, and the development endpoint are connected by stage 4 application wiring. The model/provider remain unchanged.
 
 **Output and clipboard ownership**
 
 `TranscriptOutput` wraps the existing `ClipboardAutopaster` on one serial background queue. Its main-actor entry points enqueue delivery and explicit copies in command order. Clipboard access retains the existing main-thread routing; paste waits and settling remain off the main thread. A drain operation waits for queued output, including clipboard restoration, before normal termination.
 
-Outcomes distinguish disabled output, copied text, manual-paste fallback, unconfirmed paste, a newer clipboard, and snapshot/write/restore failures. The session publishes completion only after output and cache cleanup finish. Fallbacks and a newer clipboard do not qualify for a success checkmark. Clipboard consumption remains a best-effort signal, not proof of insertion into another app. The legacy string-returning helper is retained for the current AppController until stage 4 connects the native session.
+Outcomes distinguish disabled output, copied text, manual-paste fallback, unconfirmed paste, a newer clipboard, and snapshot/write/restore failures. The session publishes completion only after output and cache cleanup finish. Fallbacks and a newer clipboard do not qualify for a success checkmark. Clipboard consumption remains a best-effort signal, not proof of insertion into another app. The legacy string-returning helper remains only for legacy test coverage until stage 6 removal. The native AppController uses the session output API.
 
 **Validation recorded on 2026-09-07**
 
@@ -59,4 +59,4 @@ All HTTP requests were intercepted locally and used dummy keys. Audio input was 
 
 **Next integration boundary**
 
-Stage 4 connects the current UI, hotkeys, overlay, and sounds to this session, then adds preferences/Keychain/permission wiring and configuration import. Preserve the signed legacy rollback app and source checkpoints. Complete the outstanding real-device, permission recovery, sleep/wake, and long-duration checks before enabling native capture for daily use. Signed-app end-to-end transcription, real paste, performance comparisons, and upgrade/rollback validation remain later gates.
+Stage 4 connected the current UI, hotkeys, overlay, and sounds to this session, with preferences/Keychain/permission wiring and configuration import. The user confirmed successful live dictation through the signed native app on 2026-09-07; see the [stage 4 report](native-application-integration.md). Preserve the signed legacy rollback app and source checkpoints. Stage 5 retains the outstanding real-device, permission recovery, sleep/wake, long-duration, daily-use, performance, and upgrade/rollback checks.
