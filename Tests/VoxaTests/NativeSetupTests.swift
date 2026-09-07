@@ -3,7 +3,7 @@ import Foundation
 import Security
 #if !VOXA_STANDALONE_TESTS
 import XCTest
-@testable import VoxaMenuBar
+@testable import Voxa
 #endif
 
 @MainActor

@@ -13,10 +13,10 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 PLIST
-ditto "$ROOT_DIR/Sources/VoxaMenuBar/Resources/Sounds" "$APP_DIR/Contents/Resources/Sounds"
+ditto "$ROOT_DIR/Sources/Voxa/Resources/Sounds" "$APP_DIR/Contents/Resources/Sounds"
 swiftc -parse-as-library -warnings-as-errors -D VOXA_STANDALONE_TESTS \
   -module-cache-path "$BUILD_DIR/module-cache" \
-  "$ROOT_DIR/Sources/VoxaMenuBar/DictationSounds.swift" \
-  "$ROOT_DIR/Tests/VoxaMenuBarTests/DictationSoundTests.swift" \
+  "$ROOT_DIR/Sources/Voxa/DictationSounds.swift" \
+  "$ROOT_DIR/Tests/VoxaTests/DictationSoundTests.swift" \
   -o "$APP_DIR/Contents/MacOS/SoundChecks"
 "$APP_DIR/Contents/MacOS/SoundChecks"

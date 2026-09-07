@@ -1,8 +1,9 @@
 # Voxa architecture
 
-Voxa is one macOS application process, with one Swift application target and one
-test target. The deployment target is macOS 13; building requires Swift 6.0+ for
-the pinned TOMLDecoder dependency.
+Voxa is one macOS application process. The root `voxa` Swift package contains the
+`Voxa` application target in `Sources/Voxa` and the `VoxaTests` target in
+`Tests/VoxaTests`, with `voxa` as the development executable. The deployment
+target is macOS 13; building requires Swift 6.0+ for the pinned TOMLDecoder dependency.
 
 ```text
 Voxa.app
@@ -60,9 +61,11 @@ environment fallback for a missing/empty item; denied Keychain access is an erro
 Credentials are not written to preferences or diagnostic logs.
 
 `Permissions` handles microphone, Accessibility, and Input Monitoring checks and
-recovery. The app retains bundle ID `com.voxa.menubar` and a stable signing
-identity. Microphone access is requested before capture, and permission state and
-hotkeys refresh when returning to the app or waking the Mac.
+recovery. The installed app keeps bundle ID `com.voxa.menubar` and a stable signing
+identity independently of the Swift target and executable names, so existing
+permissions and UserDefaults remain associated with Voxa. Microphone access is
+requested before capture. Permission state and hotkeys refresh when returning to
+the app or waking the Mac.
 
 ## Installation, upgrades, and recovery
 

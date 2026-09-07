@@ -231,12 +231,12 @@ rm -rf "$BUILD_DIR" "$STAGE_DIR" "$APP_DIR"
 mkdir -p "$BUILD_DIR" "$STAGE_DIR"
 
 echo "Building native release app..."
-swift build --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --product voxa-menubar
-MENU_BAR_BIN_DIR="$(swift build --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --show-bin-path)"
-MENU_BAR_BIN="$MENU_BAR_BIN_DIR/voxa-menubar"
+swift build --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --product voxa
+SWIFT_BIN_DIR="$(swift build --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --show-bin-path)"
+BUILT_EXECUTABLE="$SWIFT_BIN_DIR/voxa"
 
-if [ ! -x "$MENU_BAR_BIN" ]; then
-  echo "Missing built app executable: $MENU_BAR_BIN" >&2
+if [ ! -x "$BUILT_EXECUTABLE" ]; then
+  echo "Missing built app executable: $BUILT_EXECUTABLE" >&2
   exit 1
 fi
 
@@ -258,9 +258,9 @@ done
 cp "$BUILD_DIR/icon_1024x1024.png" "$ICONSET_DIR/icon_512x512@2x.png"
 iconutil -c icns "$ICONSET_DIR" -o "$ICON_PATH"
 
-cp "$MENU_BAR_BIN" "$APP_EXECUTABLE"
-cp -R "$ROOT_DIR/Sources/VoxaMenuBar/Resources/Sounds" "$APP_RESOURCES_DIR/Sounds"
-cp "$ROOT_DIR/Sources/VoxaMenuBar/Resources/ThirdPartyNotices.txt" "$APP_RESOURCES_DIR/ThirdPartyNotices.txt"
+cp "$BUILT_EXECUTABLE" "$APP_EXECUTABLE"
+cp -R "$ROOT_DIR/Sources/Voxa/Resources/Sounds" "$APP_RESOURCES_DIR/Sounds"
+cp "$ROOT_DIR/Sources/Voxa/Resources/ThirdPartyNotices.txt" "$APP_RESOURCES_DIR/ThirdPartyNotices.txt"
 chmod +x "$APP_EXECUTABLE"
 
 cat > "$INFO_PLIST_PATH" <<'EOF'

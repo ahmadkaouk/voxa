@@ -2,8 +2,8 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/.build/unit-checks"
-SOURCE_DIR="$ROOT_DIR/Sources/VoxaMenuBar"
-TEST_DIR="$ROOT_DIR/Tests/VoxaMenuBarTests"
+SOURCE_DIR="$ROOT_DIR/Sources/Voxa"
+TEST_DIR="$ROOT_DIR/Tests/VoxaTests"
 mkdir -p "$BUILD_DIR"
 swiftc -parse-as-library -warnings-as-errors \
   -D VOXA_STANDALONE_TESTS -D VOXA_UNIT_TEST_RUNNER \

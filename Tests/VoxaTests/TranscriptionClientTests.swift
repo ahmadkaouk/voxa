@@ -3,7 +3,7 @@ import Foundation
 import AVFoundation
 #if !VOXA_STANDALONE_TESTS
 import XCTest
-@testable import VoxaMenuBar
+@testable import Voxa
 #endif
 
 private final class HTTPFixture: @unchecked Sendable {

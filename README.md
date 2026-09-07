@@ -107,7 +107,7 @@ target. Run these commands from the repository root:
 swift build
 
 # Run a development copy; quit other Voxa copies first
-swift run voxa-menubar
+swift run voxa
 
 # Build and run the regression checks
 ./scripts/check.sh
@@ -122,8 +122,8 @@ session state, transcription, clipboard delivery, settings, and upgrade recovery
 
 ```text
 Package.swift           Swift package definition
-Sources/VoxaMenuBar/     Application code and bundled resources
-Tests/VoxaMenuBarTests/  Regression tests
+Sources/Voxa/           Application code and bundled resources
+Tests/VoxaTests/        Regression tests
 assets/                 App icon source
 scripts/                Build, install, test, and preview tools
 docs/                   Development and architecture guides
@@ -140,6 +140,6 @@ Build outputs in `.build/` and `dist/` are ignored by Git. Preserve
 ## License
 
 Voxa is available under the [MIT License](LICENSE). Bundled sounds have their
-own [CC0 license](Sources/VoxaMenuBar/Resources/Sounds/Zen/LICENSE-AUDIO);
+own [CC0 license](Sources/Voxa/Resources/Sounds/Zen/LICENSE-AUDIO);
 dependency notices are included in
-[ThirdPartyNotices.txt](Sources/VoxaMenuBar/Resources/ThirdPartyNotices.txt).
+[ThirdPartyNotices.txt](Sources/Voxa/Resources/ThirdPartyNotices.txt).

@@ -2,25 +2,25 @@
 import PackageDescription
 
 let package = Package(
-    name: "voxa-menubar",
+    name: "voxa",
     platforms: [
         .macOS(.v13),
     ],
     products: [
-        .executable(name: "voxa-menubar", targets: ["VoxaMenuBar"]),
+        .executable(name: "voxa", targets: ["Voxa"]),
     ],
     dependencies: [
         .package(url: "https://github.com/dduan/TOMLDecoder", exact: "0.4.5"),
     ],
     targets: [
         .executableTarget(
-            name: "VoxaMenuBar",
+            name: "Voxa",
             dependencies: [.product(name: "TOMLDecoder", package: "TOMLDecoder")],
             resources: [.copy("Resources/Sounds"), .copy("Resources/ThirdPartyNotices.txt")]
         ),
         .testTarget(
-            name: "VoxaMenuBarTests",
-            dependencies: ["VoxaMenuBar"]
+            name: "VoxaTests",
+            dependencies: ["Voxa"]
         ),
     ]
 )
