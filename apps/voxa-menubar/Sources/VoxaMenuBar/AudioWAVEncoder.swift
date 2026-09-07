@@ -51,17 +51,27 @@ final class AudioWAVEncoder {
         guard count > 0 else { return }
         let channelCount = Int(inputFormat.channelCount)
         var energy = 0.0
+        var peak = 0.0
         for frame in 0..<count {
             var value = 0.0
             for channel in 0..<channelCount {
                 let sample = channels[channel][frame]
-                value += sample.isFinite ? Double(sample) : 0
+                let finite = sample.isFinite ? Double(sample) : 0
+                value += finite
+                let metered = max(-1, min(1, finite))
+                energy += metered * metered
+                peak = max(peak, abs(metered))
             }
             let mixed = Float(max(-1, min(1, value / Double(channelCount))))
             destination[frame] = mixed
-            energy += Double(mixed * mixed)
         }
-        level = sqrt(energy / Double(count))
+        // Preserve the legacy display response: gate noise, boost speech/peaks, then
+        // rise quickly and fall gently. Metering never changes the PCM sent to conversion.
+        let rms = sqrt(energy / Double(count * channelCount))
+        let rmsLevel = sqrt(max(0, rms - 0.003) * 20)
+        let peakLevel = sqrt(max(0, peak - 0.015) * 6) * 0.8
+        let target = min(1, max(rmsLevel, peakLevel))
+        level += (target - level) * (target > level ? 0.55 : 0.18)
         mono.frameLength = AVAudioFrameCount(count)
         inputFrames += count
         try convert(input: mono, ending: false)

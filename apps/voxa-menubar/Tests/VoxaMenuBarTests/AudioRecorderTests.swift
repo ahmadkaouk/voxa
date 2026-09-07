@@ -135,8 +135,55 @@ enum AudioRecorderChecks {
             let expected: Int16 = pair.0 == 2 ? 32767 : pair.0 == -2 ? -32767 : 0
             let encoded = samples(try encoder.finish())
             try unitExpect(encoded.allSatisfy { $0 == expected })
-            try unitEqual(encoder.level, expected == 0 ? 0 : 1)
+            try unitExpect(encoder.level.isFinite && (0...1).contains(encoder.level))
         }
+    }
+
+    static func legacyMeterResponse() async throws {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 2)!
+        func input(_ pattern: [Float], opposed: Bool = false) -> AVAudioPCMBuffer {
+            let input = buffer(format: format, offset: 0, count: 1600)
+            for frame in 0..<1600 {
+                let sample = pattern[frame % pattern.count]
+                input.floatChannelData![0][frame] = sample
+                input.floatChannelData![1][frame] = opposed ? -sample : sample
+            }
+            return input
+        }
+
+        let encoder = try AudioWAVEncoder(format: format, limit: 1)
+        let speech: [Float] = [0, 0.018, -0.016, 0.022, -0.021, 0.014, -0.012, 0.02]
+        // Reference levels captured from the legacy Rust meter for these buffers.
+        // They cover the noise gate, speech sensitivity, attack, and slower release.
+        let sequence: [([Float], Double)] = [
+            ([0.001, -0.0015, 0.002, -0.002], 0),
+            (speech, 0.288442791),
+            (speech, 0.418242037),
+            ([0], 0.342958450),
+            ([0], 0.281225920),
+        ]
+        var expectedPCM: [Int16] = []
+        for (pattern, reference) in sequence {
+            try encoder.append(input(pattern))
+            try unitExpect(abs(encoder.level - reference) < 0.000002)
+            expectedPCM += (0..<1600).map { Int16((pattern[$0 % pattern.count] * Float(Int16.max)).rounded()) }
+        }
+        // Visual gain must never amplify or smooth the captured audio itself.
+        try unitEqual(samples(try encoder.finish()), expectedPCM)
+
+        let peakEncoder = try AudioWAVEncoder(format: format, limit: 1)
+        try unitEqual(peakEncoder.level, 0) // New recordings start with a fresh envelope.
+        var transient = [Float](repeating: 0, count: 1600)
+        transient[0] = 0.08 // RMS is below the noise gate; the peak still moves the meter.
+        try peakEncoder.append(input(transient))
+        try unitExpect(abs(peakEncoder.level - 0.274779916) < 0.000002)
+
+        let stereoEncoder = try AudioWAVEncoder(format: format, limit: 1)
+        try stereoEncoder.append(input([0.5], opposed: true))
+        // The legacy meter measures input channels before mono downmix.
+        try unitExpect(abs(stereoEncoder.level - 0.550000012) < 0.000002)
+        let stereoPCM = samples(try stereoEncoder.finish())
+        try unitExpect(stereoPCM.allSatisfy { $0 == 0 })
     }
 
     static func limitsAndInvalidInput() async throws {
@@ -352,6 +399,7 @@ enum AudioRecorderChecks {
         ("recorder: input rates, channels and independent WAV decoding", formatsAndWAV),
         ("recorder: resampler continuity across arbitrary chunks", chunkContinuity),
         ("recorder: silence, clipping, downmix and non-finite samples", silenceClippingAndDownmix),
+        ("recorder: legacy meter sensitivity, peaks and smoothing without audio gain", legacyMeterResponse),
         ("recorder: bounded duration and invalid input", limitsAndInvalidInput),
         ("recorder: bounded handoff, copied samples and overrun", boundedInbox),
         ("recorder: rapid stop, repeated stop and restart", stopAndRestart),
@@ -385,6 +433,7 @@ final class AudioRecorderTests: XCTestCase {
     func testFormatsAndWAV() async throws { try await AudioRecorderChecks.formatsAndWAV() }
     func testChunkContinuity() async throws { try await AudioRecorderChecks.chunkContinuity() }
     func testSilenceClippingAndDownmix() async throws { try await AudioRecorderChecks.silenceClippingAndDownmix() }
+    func testLegacyMeterResponse() async throws { try await AudioRecorderChecks.legacyMeterResponse() }
     func testLimitsAndInvalidInput() async throws { try await AudioRecorderChecks.limitsAndInvalidInput() }
     func testBoundedInbox() async throws { try await AudioRecorderChecks.boundedInbox() }
     func testStopAndRestart() async throws { try await AudioRecorderChecks.stopAndRestart() }
