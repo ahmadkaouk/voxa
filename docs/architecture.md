@@ -86,10 +86,9 @@ before cleaning build artifacts. To roll back, quit Voxa and restore the entire
 preserved signed app bundle to `/Applications/Voxa.app`. A legacy app can recreate
 its LaunchAgent and reuse the original TOML and Keychain. Settings changed only in
 the native app remain in UserDefaults and do not rewrite the legacy TOML. A later
-native launch retires the recreated registration again. Stage 6 removes source
-from the checkout, not these local recovery artifacts.
+native launch retires the recreated registration again.
 
-## Validation and history
+## Validation
 
 `./scripts/check.sh` builds the app and runs Swift tests. XCTest is used when
 available; Command Line Tools run the same shared assertions through standalone
@@ -97,6 +96,7 @@ harnesses. Discovery guards reject unregistered test files instead of silently
 skipping them. Fixtures cover capture/conversion, session ordering and cleanup,
 HTTP errors, output/clipboard recovery, settings/Keychain, and legacy upgrades.
 
-See the [completion report](native-migration-completion.md) for checked artifacts
-and validation limits. Earlier daemon architecture and protocol notes are in
-[archive/](archive/README.md); the last source revision before removal is `881b78f`.
+`scripts/test-install.sh` exercises clean installation, signed updates/backups,
+failure recovery, and the running-app guard in temporary directories. See the
+[application README](../apps/voxa-menubar/README.md) for development commands and
+the optional live clipboard and overlay checks.

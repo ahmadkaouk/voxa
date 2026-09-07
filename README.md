@@ -2,7 +2,7 @@
 
 Voxa is a native macOS dictation application. Its SwiftUI menu bar UI, microphone recording, transcription, and output run in one process.
 
-Status: macOS-only, build-from-source. See the [architecture](docs/architecture.md) and [migration completion report](docs/native-migration-completion.md).
+Status: macOS-only, build-from-source. See the [architecture](docs/architecture.md).
 
 ## Architecture
 
@@ -59,21 +59,13 @@ Check the workspace:
 ./scripts/check.sh
 ```
 
-Run the Swift tests:
-
-```bash
-./scripts/test-swift.sh
-```
-
 ## Repository Layout
 
 - `apps/voxa-menubar`: SwiftUI menu bar app
 - `scripts/`: build, packaging, installation, tests, and development fixtures
-- `docs/`: native architecture and migration evidence
-- `docs/archive/`: historical daemon design and retired CLI/IPC documentation
+- `docs/`: native architecture
 
 ## Documentation
 
 - [Application usage and development](apps/voxa-menubar/README.md)
 - [Architecture](docs/architecture.md)
-- [Documentation index](docs/README.md)

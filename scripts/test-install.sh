@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CANDIDATE="${1:?Usage: test-install.sh /path/to/native/Voxa.app /path/to/legacy/Voxa.app}"
-LEGACY="${2:?Pass the preserved signed legacy app for upgrade/rollback checks}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CANDIDATE="${1:?Usage: test-install.sh /path/to/new/Voxa.app /path/to/previous/Voxa.app}"
+PREVIOUS="${2:?Pass a previous signed app for update/backup checks}"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/Voxa install checks.XXXXXX")"
 TEST_DIR="$(cd "$TEST_DIR" && pwd -P)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 export VOXA_INSTALL_DIR="$TEST_DIR/Applications"
 export VOXA_DIST_DIR="$TEST_DIR/artifacts"
-ORIGINAL_HASH="$(shasum -a 256 "$LEGACY/Contents/MacOS/Voxa")"
+ORIGINAL_HASH="$(shasum -a 256 "$PREVIOUS/Contents/MacOS/Voxa")"
 ORIGINAL_HASH="${ORIGINAL_HASH%% *}"
 NATIVE_HASH="$(shasum -a 256 "$CANDIDATE/Contents/MacOS/Voxa")"
 NATIVE_HASH="${NATIVE_HASH%% *}"
 
-# Clean install, then replacement of a signed legacy installation with a verified backup.
+# Clean install, then replacement of a signed installation with a verified backup.
 "$ROOT_DIR/scripts/install.sh" --app "$CANDIDATE"
 "$ROOT_DIR/scripts/verify-native-bundle.sh" "$VOXA_INSTALL_DIR/Voxa.app"
 rm -rf "$VOXA_INSTALL_DIR/Voxa.app"
-ditto "$LEGACY" "$VOXA_INSTALL_DIR/Voxa.app"
+ditto "$PREVIOUS" "$VOXA_INSTALL_DIR/Voxa.app"
 "$ROOT_DIR/scripts/install.sh" --app "$CANDIDATE"
 ACTUAL_HASH="$(shasum -a 256 "$VOXA_INSTALL_DIR/Voxa.app/Contents/MacOS/Voxa")"
 [ "${ACTUAL_HASH%% *}" = "$NATIVE_HASH" ]
@@ -29,7 +29,7 @@ codesign --verify --deep --strict "${BACKUPS[0]}"
 
 # Simulate the final rename failing, then verify that the previous app was restored intact.
 rm -rf "$VOXA_INSTALL_DIR/Voxa.app"
-ditto "$LEGACY" "$VOXA_INSTALL_DIR/Voxa.app"
+ditto "$PREVIOUS" "$VOXA_INSTALL_DIR/Voxa.app"
 mkdir -p "$TEST_DIR/tools"
 cat > "$TEST_DIR/tools/mv" <<'STUB'
 #!/bin/sh
@@ -59,4 +59,4 @@ if env PATH="$TEST_DIR/tools:$PATH" "$ROOT_DIR/scripts/install.sh" --app "$CANDI
 fi
 ACTUAL_HASH="$(shasum -a 256 "$VOXA_INSTALL_DIR/Voxa.app/Contents/MacOS/Voxa")"
 [ "${ACTUAL_HASH%% *}" = "$ORIGINAL_HASH" ]
-echo 'PASS: clean install, signed legacy upgrade/backup, failed replacement rollback and running-app guard.'
+echo 'PASS: clean install, signed update/backup, failed replacement rollback and running-app guard.'

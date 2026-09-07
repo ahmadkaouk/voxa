@@ -5,8 +5,7 @@ hotkeys drive one `DictationSession`, which directly calls the native
 recorder, transcription client, and serialized transcript output worker.
 
 `AppController` handles setup, preferences, presentation effects, and shutdown.
-The application runs in one process. The retired Rust backend is preserved in Git
-at `881b78f`; signed legacy app backups remain available locally for rollback.
+The application runs in one process.
 
 ## Run
 
@@ -38,8 +37,7 @@ archives its plist while preserving the original TOML and Keychain entry.
 `./scripts/install.sh` builds and installs the signed app; use `--app /path/to/Voxa.app`
 to install an existing candidate. It refuses to replace a running destination and
 preserves a verified backup. `VOXA_DIST_DIR` selects a separate build output, and
-`VOXA_INSTALL_DIR` supports test installs outside `/Applications`. See the
-[migration completion report](../../docs/native-migration-completion.md).
+`VOXA_INSTALL_DIR` supports test installs outside `/Applications`.
 
 Generated app bundles and installer staging live under `dist/apps.noindex/` so macOS app search does not list development copies alongside `/Applications/Voxa.app`. Keep local app backups in `dist/apps.noindex/backups/`. The distributable disk image remains `dist/Voxa.dmg`.
 
@@ -69,14 +67,24 @@ After switching from older ad-hoc builds to a stable signed build, macOS may ask
 Run all Swift checks, including the application build, with `./scripts/test-swift.sh`
 from the repository root. It uses XCTest when available and otherwise runs the same
 existing assertions through standalone harnesses for hotkeys, clipboard, sounds,
-recording, and the native pipeline. A new
-test file without standalone coverage fails the fallback path instead of being skipped.
+recording, and the native pipeline. A new test file without standalone coverage
+fails the fallback path instead of being skipped.
 
 The native recorder and pipeline are connected to the app. `./scripts/test-audio-recorder.sh`
 checks capture fixtures; `./scripts/test-native-pipeline.sh` checks session ordering,
 HTTP/output behavior, settings migration, and a disposable Keychain entry. These
-checks use no real microphone or external API. See the [completion report](../../docs/native-migration-completion.md)
-for validation evidence and its limits.
+checks use no real microphone or external API.
+
+To check installation and update recovery, pass a newly packaged app and a previous
+signed app to `./scripts/test-install.sh`. For example, from the repository root:
+
+```bash
+./scripts/test-install.sh dist/apps.noindex/Voxa.app /Applications/Voxa.app
+```
+
+This tests clean installation, update/backup, failed-replacement restoration, and
+refusal to replace a running destination using temporary copies. It does not
+replace or launch either supplied app.
 
 Clipboard integration checks can also run with just Command Line Tools (no XCTest runner):
 
