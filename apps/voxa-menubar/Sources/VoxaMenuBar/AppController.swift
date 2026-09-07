@@ -1,1538 +1,283 @@
 import AppKit
-import ApplicationServices
-import AVFoundation
-import CoreGraphics
-import Foundation
+import Combine
 import SwiftUI
 
+/// Application setup, presentation effects, and OS lifecycle wiring. DictationSession owns all
+/// recording state; there is no connection state, command queue, or second workflow here.
+@MainActor
 final class AppController: ObservableObject {
-    private let daemonLabel = "com.voxa.daemon"
-    @Published private(set) var connectionStatus: ConnectionStatus = .connecting
-    @Published private(set) var runtimeState: RuntimeStateKind = .idle
-    @Published private(set) var lastEventName: String = "none"
-    @Published private(set) var lastErrorCode: String?
-    @Published private(set) var statusMessage: String = "Starting daemon connection..."
-    @Published private(set) var isBusy = false
-    @Published private(set) var eventSequence: UInt64 = 0
-    @Published private(set) var socketPath: String
-    @Published private(set) var recordingLevel: Double = 0
-    @Published private(set) var recordingOrigin: RecordingOrigin?
-
-    @Published private(set) var configRevision: UInt64 = 0
-    @Published private(set) var toggleHotkey: HotkeyOption = .defaultToggle
-    @Published private(set) var holdHotkey: HotkeyOption = .defaultHold
-    @Published private(set) var model: ModelOption = .gpt4oMiniTranscribe
-    @Published private(set) var outputMode: OutputModeOption = .clipboardAutopaste
-    @Published private(set) var maxRecordingSeconds: UInt64 = 300
-    @Published private(set) var apiKeySource: String = "keychain"
+    let session: DictationSession
+    @Published private(set) var preferences = Preferences()
+    @Published private(set) var isSettingUp = false
+    @Published private(set) var isSavingKey = false
+    @Published private(set) var isReady = false
+    @Published private(set) var setupError: String?
+    @Published private(set) var settingsError: String?
+    @Published private(set) var permissions = Permissions.current()
     @Published private(set) var isAPIKeySet = false
-    @Published private(set) var apiKeyHint: String?
-    @Published private(set) var apiKeySaveCount: UInt64 = 0
+    @Published private(set) var apiKeySaveCount = 0
     @Published private(set) var apiKeyError: String?
-    @Published private(set) var hasAccessibilityPermission = true
+    @Published private(set) var statusMessage = "Preparing Voxa…"
     @Published var apiKeyInput = ""
 
-    private let transport: IPCTransport
-    private let hotkeyBridge = GlobalHotkeyBridge()
-    private let activityOverlay = ActivityOverlayController()
-    private let soundCues = SoundCueController()
-    private let eventQueue = DispatchQueue(label: "voxa.menubar.events", qos: .userInitiated)
-    private let requestQueue = DispatchQueue(label: "voxa.menubar.requests", qos: .userInitiated)
-
-    private let lifecycleLock = NSLock()
-    private var shouldStop = false
-    private var lastSeenSeq: UInt64 = 0
-    private var eventConnection: IPCConnection?
-    private var terminationObserver: NSObjectProtocol?
-    private var becameActiveObserver: NSObjectProtocol?
-    private var workspaceObservers: [NSObjectProtocol] = []
-    private var shutdownHandled = false
-    private var overlayDismissedForCurrentRecording = false
-    private var hasObservedRuntimeState = false
-    private var activityOverlayPhaseOverride: ActivityOverlayPhase?
-    private var activityOverlayPhaseResetWorkItem: DispatchWorkItem?
-    private var hasPromptedForInputPermissions = false
+    private let store: PreferencesStore
+    private let keychain: Keychain
+    private let hotkeys = GlobalHotkeyBridge()
+    private let overlay = ActivityOverlayController()
+    private let sounds = DictationSoundController()
+    private var subscriptions = Set<AnyCancellable>()
+    private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+    private var setupTask: Task<Void, Never>?
+    private var keyTask: Task<Void, Never>?
+    private var completionPresentation: Task<Void, Never>?
+    private var closing = false
+    private var capturingHotkey = false
 
     init() {
-        let path: String
-        do {
-            path = try IPCTransport.defaultSocketPath()
-        } catch {
-            path = "/tmp/voxa-daemon.sock"
+        session = DictationSession(transcriber: TranscriptionClient(endpoint: TranscriptionClient.configuredEndpoint()))
+        store = PreferencesStore()
+        keychain = Keychain()
+        hotkeys.onToggleActivated = { [weak self] in
+            guard let self, self.canStart else { return }
+            self.session.toggle(prepare: self.recordingPreparation())
         }
-
-        socketPath = path
-        transport = IPCTransport(socketPath: path)
-        hotkeyBridge.onToggleActivated = { [weak self] in
-            self?.handleToggleHotkeyActivated()
+        hotkeys.onHoldActivated = { [weak self] in
+            guard let self, self.canStart else { return }
+            self.session.start(origin: .hotkeyHold, prepare: self.recordingPreparation())
         }
-        hotkeyBridge.onHoldActivated = { [weak self] in
-            self?.handleHoldHotkeyActivated()
+        hotkeys.onHoldDeactivated = { [weak self] in self?.session.holdReleased() }
+        session.$state.removeDuplicates().scan((DictationState.idle, DictationState.idle)) { ($0.1, $1) }
+            .sink { [weak self] previous, next in
+                guard let self else { return }
+                self.objectWillChange.send() // MenuBarExtra's symbol also observes this controller.
+                if case .recording = next { self.sounds.playListeningStarted() }
+                if case .transcribing = next { self.sounds.playRecordingEnded() }
+                if case .failed = next { self.sounds.playError() }
+                if case .idle = next, previous.isDiscarding { self.sounds.playRecordingEnded() }
+                self.present(next, level: self.session.level)
+            }.store(in: &subscriptions)
+        session.$level.removeDuplicates().sink { [weak self] level in
+            guard let self else { return }
+            if case .recording = self.session.state { self.show(.listening, title: "Listening", level: level) }
+        }.store(in: &subscriptions)
+        observe(.default, NSApplication.didBecomeActiveNotification) { $0.refreshPermissions() }
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.sessionDidBecomeActiveNotification, NSWorkspace.didWakeNotification,
+                     NSWorkspace.screensDidWakeNotification] {
+            observe(workspace, name) { $0.refreshPermissions() }
         }
-        hotkeyBridge.onHoldDeactivated = { [weak self] in
-            self?.handleHoldHotkeyDeactivated()
+        for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willSleepNotification,
+                     NSWorkspace.screensDidSleepNotification] {
+            observe(workspace, name) { controller in
+                controller.hotkeys.resetForSystemInterruption()
+                controller.session.cancel()
+            }
         }
-        hotkeyBridge.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
-        hotkeyBridge.start()
-        refreshAccessibilityPermission(prompt: false)
-        if !hasAccessibilityPermission {
-            _ = refreshAccessibilityPermission(prompt: true)
-        }
-        terminationObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: nil
-        ) { [weak self] _ in
-            self?.handleAppTermination()
-        }
-        becameActiveObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: nil
-        ) { [weak self] _ in
-            self?.recoverHotkeyBridgeAfterSystemResume()
-        }
-        registerWorkspaceObservers()
-        startEventLoop()
+        retrySetup()
     }
 
-    deinit {
-        if let terminationObserver {
-            NotificationCenter.default.removeObserver(terminationObserver)
-        }
-        if let becameActiveObserver {
-            NotificationCenter.default.removeObserver(becameActiveObserver)
-        }
-        let workspaceNotificationCenter = NSWorkspace.shared.notificationCenter
-        for observer in workspaceObservers {
-            workspaceNotificationCenter.removeObserver(observer)
-        }
-        workspaceObservers.removeAll()
-        handleAppTermination()
+    var isBusy: Bool { session.state.isBusy || isSettingUp || isSavingKey }
+    private var canStart: Bool { isReady && !isSettingUp && !isSavingKey && !closing && !capturingHotkey }
+    var toggleHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.toggleHotkey) }
+    var holdHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.holdHotkey, fallback: .defaultHold) }
+    var model: ModelOption { session.settings.model }
+    var outputMode: OutputModeOption { session.settings.outputMode }
+    var maxRecordingSeconds: UInt64 { preferences.maxRecordingSeconds }
+    var apiKeySource: String { preferences.apiKeySource }
+    var hasAccessibilityPermission: Bool { permissions.accessibility }
+    var errorMessage: String? {
+        if case .failed(_, let message) = session.state { return message }
+        return setupError ?? settingsError
     }
-
     var menuBarSymbol: String {
-        switch connectionStatus {
-        case .connected:
-            return runtimeState.menuBarSymbol
-        case .connecting:
-            return "bolt.horizontal.circle"
-        case .disconnected:
-            return "wifi.exclamationmark"
+        if setupError != nil { return "exclamationmark.triangle" }
+        switch session.state {
+        case .idle, .starting, .recording: return "waveform"
+        case .finishing, .transcribing: return "waveform.and.mic"
+        case .delivering: return "square.and.arrow.up"
+        case .failed: return "exclamationmark.triangle"
         }
     }
 
-    private func handleAppTermination() {
-        lifecycleLock.lock()
-        if shutdownHandled {
-            lifecycleLock.unlock()
-            return
+    func retrySetup() {
+        guard !isBusy, !closing else { return }
+        isSettingUp = true; isReady = false; setupError = nil; settingsError = nil
+        hotkeys.stop()
+        setupTask = Task {
+            defer { isSettingUp = false }
+            do {
+                let loaded = try store.load()
+                preferences = loaded
+                _ = session.updateSettings(loaded.dictation)
+                try await LegacyCaptureGuard.retireLaunchAgent()
+                let key = try await keychain.value(source: loaded.apiKeySource)
+                try Task.checkCancellation()
+                guard !closing else { return }
+                isAPIKeySet = key != nil
+                isReady = true
+                statusMessage = key == nil ? "Add an API key to start transcribing" : "Ready when you are"
+                hotkeys.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
+                refreshPermissions()
+                present(session.state, level: session.level)
+            } catch {
+                guard !closing else { return }
+                setupError = error.localizedDescription
+                overlay.hide()
+            }
         }
-        shutdownHandled = true
-        lifecycleLock.unlock()
-
-        hotkeyBridge.stop()
-        stopEventLoop()
-        activityOverlay.hide()
-        _ = stopLaunchAgentIfNeeded()
     }
 
-    private func registerWorkspaceObservers() {
-        let workspaceNotificationCenter = NSWorkspace.shared.notificationCenter
-        let activeNotifications: [Notification.Name] = [
-            NSWorkspace.sessionDidBecomeActiveNotification,
-            NSWorkspace.didWakeNotification,
-            NSWorkspace.screensDidWakeNotification,
-        ]
-        let inactiveNotifications: [Notification.Name] = [
-            NSWorkspace.sessionDidResignActiveNotification,
-            NSWorkspace.willSleepNotification,
-            NSWorkspace.screensDidSleepNotification,
-        ]
-
-        workspaceObservers.append(
-            contentsOf: activeNotifications.map { name in
-                workspaceNotificationCenter.addObserver(
-                    forName: name,
-                    object: nil,
-                    queue: .main
-                ) { [weak self] _ in
-                    self?.recoverHotkeyBridgeAfterSystemResume()
-                }
+    private func recordingPreparation() -> @MainActor () async throws -> String {
+        let source = preferences.apiKeySource
+        return { [weak self] in
+            guard let self, !self.closing else { throw CancellationError() }
+            try await LegacyCaptureGuard.check()
+            defer { self.permissions = Permissions.current() }
+            try await Permissions.requestMicrophone()
+            try Task.checkCancellation()
+            guard let key = try await self.keychain.value(source: source) else {
+                self.isAPIKeySet = false
+                throw TranscriptionError.authentication
             }
-        )
-
-        workspaceObservers.append(
-            contentsOf: inactiveNotifications.map { name in
-                workspaceNotificationCenter.addObserver(
-                    forName: name,
-                    object: nil,
-                    queue: .main
-                ) { [weak self] _ in
-                    self?.hotkeyBridge.resetForSystemInterruption()
-                }
-            }
-        )
-    }
-
-    private func recoverHotkeyBridgeAfterSystemResume() {
-        _ = refreshAccessibilityPermission(prompt: false)
-        hotkeyBridge.restart()
+            try Task.checkCancellation()
+            try await LegacyCaptureGuard.check() // An older app may have launched during a prompt.
+            return key
+        }
     }
 
     func startRecording() {
-        clearActivityOverlayPhaseOverride()
-        sendCommand(
-            method: "start_recording",
-            params: ["origin": "manual"],
-            pendingMessage: "Requesting recording start...",
-            successMessage: "Recording request accepted"
-        )
+        guard canStart else { return }
+        statusMessage = "Ready when you are"
+        session.start(prepare: recordingPreparation())
     }
-
-    func stopRecording() {
-        if runtimeState == .recording {
-            transitionOverlayToProcessing()
-        }
-        sendCommand(
-            method: "stop_recording",
-            params: ["reason": "manual"],
-            pendingMessage: "Requesting recording stop...",
-            successMessage: "Recording stop request accepted"
-        )
-    }
-
-    func dismissActivityOverlay() {
-        if runtimeState == .recording {
-            stopRecordingFromOverlay()
-            return
-        }
-
-        overlayDismissedForCurrentRecording = true
-        activityOverlay.hide()
-    }
-
-    func stopRecordingFromOverlay() {
-        overlayDismissedForCurrentRecording = false
-        stopRecording()
-    }
-
-    func requestInputPermissions() {
-        _ = refreshAccessibilityPermission(prompt: true)
-        openInputMonitoringSettings()
-    }
-
-    func refreshState() {
-        sendCommand(
-            method: "get_state",
-            params: [:],
-            pendingMessage: "Refreshing daemon state...",
-            successMessage: "State refreshed"
-        )
-    }
-
-    func refreshConfig() {
-        DispatchQueue.main.async {
-            self.isBusy = true
-            self.statusMessage = "Refreshing daemon config..."
-        }
-
-        requestQueue.async { [weak self] in
-            guard let self else { return }
-
-            do {
-                let config = try self.transport.getConfig()
-                let apiKeyStatus = try self.transport.getAPIKeyStatus()
-                DispatchQueue.main.async {
-                    self.publishConfig(config)
-                    self.publishAPIKeyStatus(apiKeyStatus)
-                    self.statusMessage = "Config refreshed"
-                    self.isBusy = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.statusMessage = error.localizedDescription
-                    self.isBusy = false
-                }
-            }
-        }
-    }
-
-    func setToggleHotkey(_ value: HotkeyOption) {
-        if value == toggleHotkey {
-            return
-        }
-
-        updateConfig(
-            params: ["toggle_hotkey": value.persistedValue],
-            pendingMessage: "Updating toggle hotkey...",
-            successMessage: "Toggle hotkey updated"
-        )
-    }
-
-    func setHoldHotkey(_ value: HotkeyOption) {
-        if value == holdHotkey {
-            return
-        }
-
-        updateConfig(
-            params: ["hold_hotkey": value.persistedValue],
-            pendingMessage: "Updating hold hotkey...",
-            successMessage: "Hold hotkey updated"
-        )
-    }
-
+    func stopRecording() { session.stop() }
     func setHotkeyCaptureEnabled(_ enabled: Bool) {
-        hotkeyBridge.setEnabled(!enabled)
+        capturingHotkey = enabled
+        hotkeys.setEnabled(!enabled)
     }
 
-    func setModel(_ value: ModelOption) {
-        if value == model {
-            return
-        }
-
-        updateConfig(
-            params: ["model": value.rawValue],
-            pendingMessage: "Updating model...",
-            successMessage: "Model updated"
-        )
+    private func update(_ change: (inout Preferences) -> Void) {
+        guard !isBusy, isReady, !closing else { return }
+        var next = preferences
+        change(&next)
+        do {
+            try store.save(next)
+            _ = session.updateSettings(next.dictation)
+            preferences = next
+            settingsError = nil
+            hotkeys.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
+            present(session.state, level: session.level)
+        } catch { settingsError = error.localizedDescription }
     }
-
-    func setOutputMode(_ value: OutputModeOption) {
-        if value == outputMode {
-            return
-        }
-
-        updateConfig(
-            params: ["output_mode": value.rawValue],
-            pendingMessage: "Updating output mode...",
-            successMessage: "Output mode updated"
-        )
-    }
-
-    func setMaxRecordingSeconds(_ value: UInt64) {
-        let clamped = max(1, min(value, 3600))
-        if clamped == maxRecordingSeconds {
-            return
-        }
-
-        updateConfig(
-            params: ["max_recording_seconds": clamped],
-            pendingMessage: "Updating max recording duration...",
-            successMessage: "Max recording duration updated"
-        )
-    }
+    func setToggleHotkey(_ value: HotkeyOption) { update { $0.toggleHotkey = value.persistedValue } }
+    func setHoldHotkey(_ value: HotkeyOption) { update { $0.holdHotkey = value.persistedValue } }
+    func setModel(_ value: ModelOption) { update { $0.model = value.rawValue } }
+    func setOutputMode(_ value: OutputModeOption) { update { $0.outputMode = value.rawValue } }
+    func setMaxRecordingSeconds(_ value: UInt64) { update { $0.maxRecordingSeconds = value } }
 
     func saveAPIKey() {
-        let trimmed = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            apiKeyError = "API key cannot be empty"
-            statusMessage = "API key cannot be empty"
-            return
-        }
-
-        DispatchQueue.main.async {
-            self.apiKeyError = nil
-            self.isBusy = true
-            self.statusMessage = "Saving API key..."
-        }
-
-        requestQueue.async { [weak self] in
-            guard let self else { return }
-
+        guard !isBusy, !closing else { return }
+        let key = apiKeyInput
+        let source = preferences.apiKeySource
+        isSavingKey = true; apiKeyError = nil
+        keyTask = Task {
             do {
-                try self.transport.setAPIKey(trimmed)
-                let status = try self.transport.getAPIKeyStatus()
-                DispatchQueue.main.async {
-                    self.publishAPIKeyStatus(status)
-                    self.apiKeyError = nil
-                    self.statusMessage = "API key saved"
-                    self.apiKeySaveCount += 1
-                    self.apiKeyInput = ""
-                    self.isBusy = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.apiKeyError = error.localizedDescription
-                    self.statusMessage = error.localizedDescription
-                    self.isBusy = false
-                }
-            }
+                try await keychain.save(key, source: source)
+                guard !closing else { return }
+                apiKeyInput = ""; isAPIKeySet = true; apiKeySaveCount += 1
+                statusMessage = "API key saved in Keychain"
+            } catch { if !closing { apiKeyError = error.localizedDescription } }
+            isSavingKey = false
+            if !closing, apiKeyError == nil { retrySetup() }
         }
     }
 
-    func reconnectNow() {
-        lifecycleLock.lock()
-        eventConnection?.close()
-        eventConnection = nil
-        lifecycleLock.unlock()
+    func copyLastTranscript() {
+        Task { if let result = await session.copyLastTranscript() { statusMessage = result.message } }
     }
 
-    func startDaemon() {
-        DispatchQueue.main.async {
-            self.isBusy = true
-            self.statusMessage = "Starting daemon..."
-        }
-
-        requestQueue.async { [weak self] in
-            guard let self else { return }
-
-            do {
-                try self.ensureDaemonRunning()
-                DispatchQueue.main.async {
-                    self.statusMessage = "Daemon ready"
-                    self.isBusy = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.statusMessage = error.localizedDescription
-                    self.isBusy = false
-                }
-            }
+    func refreshPermissions() {
+        guard !closing else { return }
+        permissions = Permissions.current()
+        if isReady {
+            hotkeys.restart()
+            hotkeys.setEnabled(!capturingHotkey)
         }
     }
 
-    func stopDaemon() {
-        DispatchQueue.main.async {
-            self.isBusy = true
-            self.statusMessage = "Stopping daemon..."
+    private func observe(_ center: NotificationCenter, _ name: Notification.Name,
+                         action: @escaping @MainActor (AppController) -> Void) {
+        let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in if let self, !self.closing { action(self) } }
         }
-
-        requestQueue.async { [weak self] in
-            guard let self else { return }
-
-            let stopped = self.stopLaunchAgentIfNeeded()
-
-            DispatchQueue.main.async {
-                self.statusMessage = stopped
-                    ? "Daemon stop requested"
-                    : "LaunchAgent service not loaded"
-                self.isBusy = false
-            }
-        }
+        observers.append((center, token))
     }
 
-    func quit() {
-        handleAppTermination()
-        DispatchQueue.main.async {
-            NSApplication.shared.terminate(nil)
-        }
+    private func show(_ phase: ActivityOverlayPhase, title: String, level: Double = 0) {
+        guard !closing, isReady else { return }
+        overlay.show(phase, content: ActivityOverlayContent(title: title, subtitle: phase == .idle ? toggleHotkey.label : nil),
+                     level: level, onStart: { [weak self] in self?.startRecording() },
+                     onCancel: { [weak self] in self?.session.cancel() },
+                     onStop: { [weak self] in self?.session.stop() })
     }
 
-    private func startEventLoop() {
-        eventQueue.async { [weak self] in
-            self?.runEventLoop()
-        }
-    }
-
-    private func stopEventLoop() {
-        lifecycleLock.lock()
-        shouldStop = true
-        eventConnection?.close()
-        eventConnection = nil
-        lifecycleLock.unlock()
-    }
-
-    private func runEventLoop() {
-        let backoffSchedule: [TimeInterval] = [0.2, 0.5, 1.0, 2.0, 5.0]
-        var backoffIndex = 0
-
-        while true {
-            if isStopping() {
-                return
-            }
-
-            publishConnectionStatus(.connecting, message: "Starting daemon...")
-
-            do {
-                try ensureDaemonRunning()
-                publishConnectionStatus(.connecting, message: "Connecting to daemon...")
-                let state = try transport.getState()
-                let config = try transport.getConfig()
-                let apiKeyStatus = try transport.getAPIKeyStatus()
-                publishState(state)
-                publishConfig(config)
-                publishAPIKeyStatus(apiKeyStatus)
-
-                let subscribeFrom = currentLastSeenSeq()
-                let connection = try transport.subscribe(
-                    fromSeq: subscribeFrom == 0 ? nil : subscribeFrom
-                )
-
-                lifecycleLock.lock()
-                eventConnection = connection
-                lifecycleLock.unlock()
-
-                publishConnectionStatus(.connected, message: "Connected")
-                backoffIndex = 0
-
-                while true {
-                    if isStopping() {
-                        connection.close()
-                        return
+    private func present(_ state: DictationState, level: Double) {
+        completionPresentation?.cancel()
+        guard isReady, !closing else { overlay.hide(); return }
+        switch state {
+        case .starting(_, let requested):
+            if requested == nil { show(.listening, title: "Preparing microphone…") }
+            else { show(.transcribing, title: "Finishing recording…") }
+        case .recording: show(.listening, title: "Listening", level: level)
+        case .finishing: show(.transcribing, title: "Finishing recording…")
+        case .transcribing: show(.transcribing, title: "Transcribing")
+        case .delivering: show(.transcribing, title: "Delivering transcript…")
+        case .failed: overlay.hide()
+        case .idle:
+            if let outcome = session.lastOutcome {
+                statusMessage = outcome.message
+                if outcome.showsSuccess {
+                    show(.outputting, title: outcome.message)
+                    completionPresentation = Task {
+                        do { try await Task.sleep(nanoseconds: 900_000_000) } catch { return }
+                        guard !closing, case .idle = session.state else { return }
+                        show(.idle, title: "Start dictation")
                     }
-
-                    let envelope = try connection.readEnvelope()
-                    switch envelope {
-                    case let .event(event):
-                        handleEvent(event)
-                    default:
-                        continue
-                    }
-                }
-            } catch {
-                lifecycleLock.lock()
-                eventConnection?.close()
-                eventConnection = nil
-                lifecycleLock.unlock()
-
-                if isStopping() {
                     return
                 }
-
-                publishConnectionStatus(
-                    .disconnected(message: error.localizedDescription),
-                    message: "Disconnected: \(error.localizedDescription). Reconnecting..."
-                )
-
-                let sleepDuration = backoffSchedule[min(backoffIndex, backoffSchedule.count - 1)]
-                Thread.sleep(forTimeInterval: sleepDuration)
-                backoffIndex += 1
             }
+            if isAPIKeySet { show(.idle, title: "Start dictation") } else { overlay.hide() }
         }
     }
 
-    private func handleEvent(_ event: DaemonEventSnapshot) {
-        updateLastSeenSeq(event.seq)
-
-        DispatchQueue.main.async {
-            self.lastEventName = event.name
-            self.eventSequence = event.seq
-
-            if event.name == "state_changed",
-               let stateRaw = event.data["state"] as? String,
-               let state = RuntimeStateKind(rawValue: stateRaw)
-            {
-                self.applyRuntimeState(state)
-                self.recordingOrigin = state == .recording
-                    ? (RecordingOrigin.fromRaw(event.data["recording_origin"] as? String)
-                        ?? self.recordingOrigin
-                        ?? .manual)
-                    : nil
-                self.lastErrorCode = event.data["last_error"] as? String
-                if state != .recording {
-                    self.recordingLevel = 0
-                }
-                if state == .idle {
-                    self.overlayDismissedForCurrentRecording = false
-                    if self.activityOverlayPhaseOverride != .outputting {
-                        self.clearActivityOverlayPhaseOverride()
-                    }
-                } else if state == .error {
-                    self.clearActivityOverlayPhaseOverride()
-                }
-                self.syncActivityOverlay()
-            } else if event.name == "audio_level",
-                      let level = event.data["level"] as? NSNumber
-            {
-                self.recordingLevel = max(0, min(level.doubleValue, 1))
-                self.syncActivityOverlay()
-            } else if event.name == "transcription_ready",
-                      let text = event.data["text"] as? String
-            {
-                self.handleTranscriptionReady(text)
-            }
-        }
+    func shutdown() async {
+        guard !closing else { return }
+        closing = true
+        hotkeys.stop()
+        for (center, token) in observers { center.removeObserver(token) }
+        observers.removeAll()
+        completionPresentation?.cancel(); setupTask?.cancel(); keyTask?.cancel()
+        overlay.hide()
+        await session.shutdown()
+        await setupTask?.value
+        await keyTask?.value
+        apiKeyInput = ""
     }
-
-    private func sendCommand(
-        method: String,
-        params: [String: Any],
-        pendingMessage: String,
-        successMessage: String
-    ) {
-        DispatchQueue.main.async {
-            self.isBusy = true
-            self.statusMessage = pendingMessage
-        }
-
-        requestQueue.async { [weak self] in
-            guard let self else { return }
-
-            do {
-                _ = try self.transport.request(method: method, params: params)
-                let state = try self.transport.getState()
-                let config = try self.transport.getConfig()
-                let apiKeyStatus = try self.transport.getAPIKeyStatus()
-
-                DispatchQueue.main.async {
-                    self.publishState(state)
-                    self.publishConfig(config)
-                    self.publishAPIKeyStatus(apiKeyStatus)
-                    self.statusMessage = successMessage
-                    self.isBusy = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.statusMessage = error.localizedDescription
-                    self.isBusy = false
-                }
-            }
-        }
-    }
-
-    private func updateConfig(
-        params: [String: Any],
-        pendingMessage: String,
-        successMessage: String
-    ) {
-        DispatchQueue.main.async {
-            self.isBusy = true
-            self.statusMessage = pendingMessage
-        }
-
-        requestQueue.async { [weak self] in
-            guard let self else { return }
-
-            do {
-                _ = try self.transport.request(method: "set_config", params: params)
-                let config = try self.transport.getConfig()
-                let apiKeyStatus = try self.transport.getAPIKeyStatus()
-                DispatchQueue.main.async {
-                    self.publishConfig(config)
-                    self.publishAPIKeyStatus(apiKeyStatus)
-                    self.statusMessage = successMessage
-                    self.isBusy = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.statusMessage = error.localizedDescription
-                    self.isBusy = false
-                }
-            }
-        }
-    }
-
-    private func handleToggleHotkeyActivated() {
-        DispatchQueue.main.async {
-            if self.runtimeState == .recording {
-                self.overlayDismissedForCurrentRecording = false
-                self.transitionOverlayToProcessing()
-            } else {
-                self.recordingOrigin = .hotkeyToggle
-                self.overlayDismissedForCurrentRecording = false
-                self.clearActivityOverlayPhaseOverride()
-                self.syncActivityOverlay()
-            }
-        }
-
-        requestQueue.async { [weak self] in
-            guard let self else { return }
-
-            do {
-                let state = try self.transport.getState()
-                if state.state == .recording {
-                    _ = try self.transport.request(
-                        method: "stop_recording",
-                        params: ["reason": "hotkey_toggle"]
-                    )
-                } else {
-                    _ = try self.transport.request(
-                        method: "start_recording",
-                        params: ["origin": "hotkey_toggle"]
-                    )
-                }
-                let refreshedState = try self.transport.getState()
-                DispatchQueue.main.async {
-                    self.publishState(refreshedState)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.statusMessage = error.localizedDescription
-                }
-                self.refreshOverlayStateAfterHotkeyError()
-            }
-        }
-    }
-
-    private func handleHoldHotkeyActivated() {
-        DispatchQueue.main.async {
-            self.recordingOrigin = .hotkeyHold
-            self.overlayDismissedForCurrentRecording = false
-            self.clearActivityOverlayPhaseOverride()
-            self.syncActivityOverlay()
-        }
-
-        sendHotkeyCommand(
-            method: "start_recording",
-            params: ["origin": "hotkey_hold"]
-        )
-    }
-
-    private func handleHoldHotkeyDeactivated() {
-        DispatchQueue.main.async {
-            self.overlayDismissedForCurrentRecording = false
-            self.transitionOverlayToProcessing()
-        }
-
-        sendHotkeyCommand(
-            method: "stop_recording",
-            params: ["reason": "hotkey_hold_release"]
-        )
-    }
-
-    private func sendHotkeyCommand(method: String, params: [String: Any]) {
-        requestQueue.async { [weak self] in
-            guard let self else { return }
-
-            do {
-                _ = try self.transport.request(method: method, params: params)
-                let state = try self.transport.getState()
-                DispatchQueue.main.async {
-                    self.publishState(state)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.statusMessage = error.localizedDescription
-                }
-                self.refreshOverlayStateAfterHotkeyError()
-            }
-        }
-    }
-
-    private func handleTranscriptionReady(_ text: String) {
-        setActivityOverlayPhaseOverride(.outputting, autoClearAfter: 0.45)
-        syncActivityOverlay()
-        statusMessage = processTranscriptOutput(
-            text: text,
-            mode: outputMode,
-            copyToClipboard: { [weak self] value in
-                self?.writeTextToClipboard(value) ?? false
-            },
-            sendAutopaste: { [weak self] in
-                self?.sendCommandVShortcut() ?? false
-            }
-        )
-    }
-
-    private func writeTextToClipboard(_ text: String) -> Bool {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        return pasteboard.setString(text, forType: .string)
-    }
-
-    private func sendCommandVShortcut() -> Bool {
-        guard refreshAccessibilityPermission(prompt: true) else {
-            return false
-        }
-
-        let commandKey: CGKeyCode = 55
-        let vKey: CGKeyCode = 9
-        let delay = 0.02
-
-        guard let source = CGEventSource(stateID: .hidSystemState) else {
-            return false
-        }
-
-        guard postKeyEvent(source: source, keyCode: commandKey, keyDown: true) else {
-            return false
-        }
-        Thread.sleep(forTimeInterval: delay)
-        guard postKeyEvent(source: source, keyCode: vKey, keyDown: true, flags: .maskCommand)
-        else {
-            return false
-        }
-
-        Thread.sleep(forTimeInterval: delay)
-        guard postKeyEvent(source: source, keyCode: vKey, keyDown: false, flags: .maskCommand)
-        else {
-            return false
-        }
-
-        Thread.sleep(forTimeInterval: delay)
-        return postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
-    }
-
-    private func postKeyEvent(
-        source: CGEventSource,
-        keyCode: CGKeyCode,
-        keyDown: Bool,
-        flags: CGEventFlags = []
-    ) -> Bool {
-        guard let event = CGEvent(
-            keyboardEventSource: source,
-            virtualKey: keyCode,
-            keyDown: keyDown
-        ) else {
-            return false
-        }
-
-        event.flags = flags
-        event.post(tap: .cghidEventTap)
-        return true
-    }
-
-    @discardableResult
-    private func refreshAccessibilityPermission(prompt: Bool) -> Bool {
-        let shouldPrompt = prompt && !hasPromptedForInputPermissions
-        if shouldPrompt {
-            hasPromptedForInputPermissions = true
-        }
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: shouldPrompt]
-            as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        hasAccessibilityPermission = trusted
-        if !trusted {
-            statusMessage = "Grant Accessibility/Input Monitoring for hotkeys and autopaste"
-        }
-        return trusted
-    }
-
-    private func openInputMonitoringSettings() {
-        let urls = [
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-        ]
-        for raw in urls {
-            if let url = URL(string: raw) {
-                NSWorkspace.shared.open(url)
-            }
-        }
-    }
-
-    private func publishState(_ snapshot: DaemonStateSnapshot) {
-        DispatchQueue.main.async {
-            self.applyRuntimeState(snapshot.state)
-            self.recordingOrigin = snapshot.state == .recording
-                ? (RecordingOrigin.fromRaw(snapshot.recordingOrigin) ?? .manual)
-                : nil
-            self.lastErrorCode = snapshot.lastError
-            self.eventSequence = max(self.eventSequence, snapshot.eventSeq)
-            self.updateLastSeenSeq(snapshot.eventSeq)
-            if snapshot.state != .recording {
-                self.recordingLevel = 0
-            }
-            if snapshot.state == .idle {
-                self.overlayDismissedForCurrentRecording = false
-                if self.activityOverlayPhaseOverride != .outputting {
-                    self.clearActivityOverlayPhaseOverride()
-                }
-            } else if snapshot.state == .error {
-                self.clearActivityOverlayPhaseOverride()
-            }
-            self.syncActivityOverlay()
-        }
-    }
-
-    private func applyRuntimeState(_ state: RuntimeStateKind) {
-        let previousState = runtimeState
-        runtimeState = state
-
-        guard hasObservedRuntimeState else {
-            hasObservedRuntimeState = true
-            return
-        }
-
-        guard previousState != state else {
-            return
-        }
-
-        if state == .recording {
-            soundCues.playListeningStarted()
-        } else if previousState == .recording {
-            soundCues.playRecordingEnded()
-        }
-    }
-
-    private func publishConfig(_ snapshot: DaemonConfigSnapshot) {
-        DispatchQueue.main.async {
-            self.toggleHotkey = HotkeyOption.fromRawOrDefault(
-                snapshot.toggleHotkey,
-                fallback: .defaultToggle
-            )
-            self.holdHotkey = HotkeyOption.fromRawOrDefault(
-                snapshot.holdHotkey,
-                fallback: .defaultHold
-            )
-            self.model = ModelOption.fromRawOrDefault(snapshot.model)
-            self.outputMode = OutputModeOption.fromRawOrDefault(snapshot.outputMode)
-            self.maxRecordingSeconds = snapshot.maxRecordingSeconds
-            self.configRevision = snapshot.revision
-            self.hotkeyBridge.updateBindings(toggle: self.toggleHotkey, hold: self.holdHotkey)
-        }
-    }
-
-    private func publishAPIKeyStatus(_ snapshot: ApiKeyStatusSnapshot) {
-        DispatchQueue.main.async {
-            self.apiKeySource = snapshot.source
-            self.isAPIKeySet = snapshot.isSet
-            self.apiKeyHint = snapshot.hint
-        }
-    }
-
-    private func publishConnectionStatus(_ status: ConnectionStatus, message: String) {
-        DispatchQueue.main.async {
-            self.connectionStatus = status
-            if !status.isConnected {
-                self.recordingLevel = 0
-                self.recordingOrigin = nil
-                self.clearActivityOverlayPhaseOverride()
-            }
-            self.statusMessage = message
-            self.syncActivityOverlay()
-        }
-    }
-
-    private func syncActivityOverlay() {
-        switch connectionStatus {
-        case .connected:
-            if let phase = currentActivityOverlayPhase(), !overlayDismissedForCurrentRecording {
-                showActivityOverlay(phase)
-            } else {
-                activityOverlay.hide()
-            }
-        case .connecting, .disconnected:
-            self.activityOverlay.hide()
-        }
-    }
-
-    private func refreshOverlayStateAfterHotkeyError() {
-        let state = try? transport.getState()
-
-        DispatchQueue.main.async {
-            if let state {
-                self.publishState(state)
-            } else {
-                self.recordingOrigin = nil
-                self.clearActivityOverlayPhaseOverride()
-                self.activityOverlay.hide()
-            }
-        }
-    }
-
-    private func transitionOverlayToProcessing() {
-        setActivityOverlayPhaseOverride(.transcribing)
-        syncActivityOverlay()
-    }
-
-    private func showActivityOverlay(_ phase: ActivityOverlayPhase) {
-        activityOverlay.show(
-            phase,
-            content: currentActivityOverlayContent(for: phase),
-            level: recordingLevel,
-            onDismiss: { [weak self] in
-                self?.dismissActivityOverlay()
-            },
-            onStop: { [weak self] in
-                self?.stopRecordingFromOverlay()
-            }
-        )
-    }
-
-    private func currentActivityOverlayPhase() -> ActivityOverlayPhase? {
-        if let activityOverlayPhaseOverride {
-            return activityOverlayPhaseOverride
-        }
-
-        switch runtimeState {
-        case .recording:
-            return .listening
-        case .transcribing:
-            return .transcribing
-        case .outputting:
-            return .outputting
-        case .idle, .error:
-            return nil
-        }
-    }
-
-    private func currentActivityOverlayContent(for phase: ActivityOverlayPhase) -> ActivityOverlayContent {
-        switch phase {
-        case .listening:
-            return ActivityOverlayContent(title: "Listening", subtitle: nil)
-        case .transcribing:
-            return ActivityOverlayContent(title: "Transcribing", subtitle: nil)
-        case .outputting:
-            let title: String
-            switch outputMode {
-            case .clipboardAutopaste:
-                title = "Sending Text"
-            case .clipboardOnly:
-                title = "Copying Text"
-            case .none:
-                title = "Transcript Ready"
-            }
-            return ActivityOverlayContent(title: title, subtitle: nil)
-        }
-    }
-
-    private func setActivityOverlayPhaseOverride(
-        _ phase: ActivityOverlayPhase?,
-        autoClearAfter delay: TimeInterval? = nil
-    ) {
-        activityOverlayPhaseResetWorkItem?.cancel()
-        activityOverlayPhaseResetWorkItem = nil
-        activityOverlayPhaseOverride = phase
-
-        guard let delay, phase != nil else {
-            return
-        }
-
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.activityOverlayPhaseOverride = nil
-            self.syncActivityOverlay()
-        }
-        activityOverlayPhaseResetWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
-    }
-
-    private func clearActivityOverlayPhaseOverride() {
-        setActivityOverlayPhaseOverride(nil)
-    }
-
-    private func isStopping() -> Bool {
-        lifecycleLock.lock()
-        defer { lifecycleLock.unlock() }
-        return shouldStop
-    }
-
-    private func currentLastSeenSeq() -> UInt64 {
-        lifecycleLock.lock()
-        defer { lifecycleLock.unlock() }
-        return lastSeenSeq
-    }
-
-    private func updateLastSeenSeq(_ value: UInt64) {
-        lifecycleLock.lock()
-        if value > lastSeenSeq {
-            lastSeenSeq = value
-        }
-        lifecycleLock.unlock()
-    }
-
-    private var launchDomain: String {
-        "gui/\(getuid())"
-    }
-
-    private var launchTarget: String {
-        "\(launchDomain)/\(daemonLabel)"
-    }
-
-    private var launchAgentPlistPath: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/LaunchAgents/\(daemonLabel).plist"
-    }
-
-    private var daemonLogsDirectory: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Logs/voxa"
-    }
-
-    private func ensureDaemonRunning() throws {
-        if daemonIsReachable() {
-            return
-        }
-
-        guard let daemonPath = resolveDaemonExecutablePath() else {
-            throw NSError(
-                domain: "voxa.daemon",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Could not resolve voxa-daemon executable path for LaunchAgent installation"]
-            )
-        }
-
-        try ensureLaunchAgentInstalled(daemonPath: daemonPath)
-        if waitForDaemonAvailability(timeout: 0.3) {
-            return
-        }
-
-        launchDaemonWithLaunchctl()
-        if waitForDaemonAvailability(timeout: 1.2) {
-            return
-        }
-
-        throw NSError(
-            domain: "voxa.daemon",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "Failed to start voxa-daemon via launchd"]
-        )
-    }
-
-    private func daemonIsReachable() -> Bool {
-        transport.isReachable()
-    }
-
-    private func waitForDaemonAvailability(timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if daemonIsReachable() {
-                return true
-            }
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-        return false
-    }
-
-    private func launchDaemonWithLaunchctl() {
-        _ = try? runProcess(executable: "/bin/launchctl", arguments: ["kickstart", launchTarget])
-    }
-
-    private func ensureLaunchAgentInstalled(daemonPath: String) throws {
-        let fileManager = FileManager.default
-        let launchAgentsDirectory = NSString(string: launchAgentPlistPath).deletingLastPathComponent
-        try fileManager.createDirectory(atPath: launchAgentsDirectory, withIntermediateDirectories: true)
-        try fileManager.createDirectory(atPath: daemonLogsDirectory, withIntermediateDirectories: true)
-
-        let stdoutPath = "\(daemonLogsDirectory)/daemon.out.log"
-        let stderrPath = "\(daemonLogsDirectory)/daemon.err.log"
-        if !fileManager.fileExists(atPath: stdoutPath) {
-            _ = fileManager.createFile(atPath: stdoutPath, contents: nil)
-        }
-        if !fileManager.fileExists(atPath: stderrPath) {
-            _ = fileManager.createFile(atPath: stderrPath, contents: nil)
-        }
-
-        let plist = buildLaunchAgentPlist(
-            daemonPath: daemonPath,
-            stdoutPath: stdoutPath,
-            stderrPath: stderrPath
-        )
-        let currentPlist = try? String(contentsOfFile: launchAgentPlistPath, encoding: .utf8)
-        if currentPlist == plist {
-            if !isLaunchAgentLoaded() {
-                try bootstrapLaunchAgent()
-            }
-            return
-        }
-
-        try plist.write(toFile: launchAgentPlistPath, atomically: true, encoding: .utf8)
-        _ = try? runProcess(
-            executable: "/bin/launchctl",
-            arguments: ["bootout", launchDomain, launchAgentPlistPath]
-        )
-        try bootstrapLaunchAgent()
-    }
-
-    private func isLaunchAgentLoaded() -> Bool {
-        (try? runProcess(executable: "/bin/launchctl", arguments: ["print", launchTarget])) != nil
-    }
-
-    private func bootstrapLaunchAgent() throws {
-        do {
-            _ = try runProcess(
-                executable: "/bin/launchctl",
-                arguments: ["bootstrap", launchDomain, launchAgentPlistPath]
-            )
-        } catch {
-            if isServiceAlreadyLoadedError(error) {
-                return
-            }
-            throw error
-        }
-    }
-
-    private func isServiceAlreadyLoadedError(_ error: Error) -> Bool {
-        let message = (error as NSError).localizedDescription.lowercased()
-        return message.contains("already loaded")
-    }
-
-    private func buildLaunchAgentPlist(
-        daemonPath: String,
-        stdoutPath: String,
-        stderrPath: String
-    ) -> String {
-        let escapedLabel = xmlEscape(daemonLabel)
-        let escapedDaemonPath = xmlEscape(daemonPath)
-        let escapedStdoutPath = xmlEscape(stdoutPath)
-        let escapedStderrPath = xmlEscape(stderrPath)
-
-        return """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-          <key>Label</key>
-          <string>\(escapedLabel)</string>
-          <key>ProgramArguments</key>
-          <array>
-            <string>\(escapedDaemonPath)</string>
-          </array>
-          <key>RunAtLoad</key>
-          <true/>
-          <key>ProcessType</key>
-          <string>Interactive</string>
-          <key>LimitLoadToSessionType</key>
-          <string>Aqua</string>
-          <key>StandardOutPath</key>
-          <string>\(escapedStdoutPath)</string>
-          <key>StandardErrorPath</key>
-          <string>\(escapedStderrPath)</string>
-        </dict>
-        </plist>
-        """
-    }
-
-    private func xmlEscape(_ raw: String) -> String {
-        raw
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&apos;")
-    }
-
-    private func stopLaunchAgentIfNeeded() -> Bool {
-        let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: launchAgentPlistPath),
-           (try? runProcess(
-               executable: "/bin/launchctl",
-               arguments: ["bootout", launchDomain, launchAgentPlistPath]
-           )) != nil
-        {
-            return true
-        }
-
-        return (try? runProcess(executable: "/bin/launchctl", arguments: ["bootout", launchTarget])) != nil
-    }
-
-    private func resolveDaemonExecutablePath() -> String? {
-        let env = ProcessInfo.processInfo.environment
-        var candidates: [String] = []
-
-        if let bundledResourceURL = Bundle.main.resourceURL {
-            candidates.append(
-                bundledResourceURL
-                    .appendingPathComponent("bin/voxa-daemon")
-                    .standardizedFileURL
-                    .path
-            )
-        }
-
-        if let override = env["VOXA_DAEMON_BIN"], !override.isEmpty {
-            candidates.append(override)
-        }
-
-        if let pathEnv = env["PATH"] {
-            for entry in pathEnv.split(separator: ":") {
-                candidates.append("\(entry)/voxa-daemon")
-            }
-        }
-
-        candidates.append("~/.cargo/bin/voxa-daemon")
-        candidates.append("/opt/homebrew/bin/voxa-daemon")
-        candidates.append("/usr/local/bin/voxa-daemon")
-
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        candidates.append(
-            cwd
-                .appendingPathComponent("../../target/debug/voxa-daemon")
-                .standardizedFileURL
-                .path
-        )
-        candidates.append(
-            cwd
-                .appendingPathComponent("../target/debug/voxa-daemon")
-                .standardizedFileURL
-                .path
-        )
-
-        for candidate in candidates {
-            let expanded = NSString(string: candidate).expandingTildeInPath
-            if FileManager.default.isExecutableFile(atPath: expanded) {
-                return expanded
-            }
-        }
-
-        return nil
-    }
+    func quit() { NSApplication.shared.terminate(nil) }
 }
 
-private func runProcess(executable: String, arguments: [String]) throws -> String {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
-
-    let stdout = Pipe()
-    let stderr = Pipe()
-    process.standardOutput = stdout
-    process.standardError = stderr
-
-    try process.run()
-    process.waitUntilExit()
-
-    let stderrText = String(
-        data: stderr.fileHandleForReading.readDataToEndOfFile(),
-        encoding: .utf8
-    ) ?? ""
-    let stdoutText = String(
-        data: stdout.fileHandleForReading.readDataToEndOfFile(),
-        encoding: .utf8
-    ) ?? ""
-
-    guard process.terminationStatus == 0 else {
-        let message = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let command = ([executable] + arguments).joined(separator: " ")
-        if message.isEmpty {
-            throw NSError(
-                domain: "voxa.process",
-                code: Int(process.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: "Command failed (\(process.terminationStatus)): \(command)"]
-            )
-        }
-
-        throw NSError(
-            domain: "voxa.process",
-            code: Int(process.terminationStatus),
-            userInfo: [NSLocalizedDescriptionKey: message]
-        )
-    }
-
-    return stdoutText
-}
-
-private final class SoundCueController {
-    private enum Cue {
-        case listeningStarted
-        case recordingEnded
-
-        var duration: TimeInterval {
-            switch self {
-            case .listeningStarted:
-                return 0.19
-            case .recordingEnded:
-                return 0.17
+@MainActor
+final class VoxaAppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+    let controller = AppController()
+    private var terminationRequested = false
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if !terminationRequested {
+            terminationRequested = true
+            Task {
+                await controller.shutdown()
+                sender.reply(toApplicationShouldTerminate: true)
             }
         }
-
-        var gain: Double {
-            switch self {
-            case .listeningStarted:
-                return 0.18
-            case .recordingEnded:
-                return 0.16
-            }
-        }
-    }
-
-    private let sampleRate: Double = 44_100
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
-    private let format: AVAudioFormat
-
-    init() {
-        format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
-        try? engine.start()
-    }
-
-    func playListeningStarted() {
-        play(.listeningStarted)
-    }
-
-    func playRecordingEnded() {
-        play(.recordingEnded)
-    }
-
-    private func play(_ cue: Cue) {
-        if !engine.isRunning {
-            do {
-                try engine.start()
-            } catch {
-                NSSound.beep()
-                return
-            }
-        }
-
-        guard let buffer = makeBuffer(for: cue) else {
-            NSSound.beep()
-            return
-        }
-
-        player.stop()
-        player.scheduleBuffer(buffer, at: nil, options: .interrupts)
-        player.play()
-    }
-
-    private func makeBuffer(for cue: Cue) -> AVAudioPCMBuffer? {
-        let frameCount = AVAudioFrameCount(sampleRate * cue.duration)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
-              let channelData = buffer.floatChannelData
-        else {
-            return nil
-        }
-
-        buffer.frameLength = frameCount
-        for frame in 0..<Int(frameCount) {
-            let time = Double(frame) / sampleRate
-            let value = Float(clamp(sample(for: cue, at: time) * cue.gain, min: -1, max: 1))
-            for channel in 0..<Int(format.channelCount) {
-                channelData[channel][frame] = value
-            }
-        }
-
-        return buffer
-    }
-
-    private func sample(for cue: Cue, at time: TimeInterval) -> Double {
-        switch cue {
-        case .listeningStarted:
-            return bellTone(time: time, start: 0.00, duration: 0.12, frequency: 659.25, amplitude: 0.72)
-                + bellTone(time: time, start: 0.055, duration: 0.13, frequency: 987.77, amplitude: 0.55)
-        case .recordingEnded:
-            return bellTone(time: time, start: 0.00, duration: 0.10, frequency: 987.77, amplitude: 0.50)
-                + bellTone(time: time, start: 0.045, duration: 0.12, frequency: 587.33, amplitude: 0.58)
-        }
-    }
-
-    private func bellTone(
-        time: TimeInterval,
-        start: TimeInterval,
-        duration: TimeInterval,
-        frequency: Double,
-        amplitude: Double
-    ) -> Double {
-        let localTime = time - start
-        guard localTime >= 0, localTime <= duration else {
-            return 0
-        }
-
-        let envelope = noteEnvelope(time: localTime, duration: duration)
-        let fundamental = sin(2 * .pi * frequency * localTime)
-        let shimmer = sin(2 * .pi * frequency * 2.01 * localTime) * 0.22
-        return (fundamental + shimmer) * envelope * amplitude
-    }
-
-    private func noteEnvelope(time: TimeInterval, duration: TimeInterval) -> Double {
-        let attack = min(0.012, duration * 0.25)
-        let release = min(0.075, duration * 0.55)
-        let releaseStart = max(attack, duration - release)
-
-        let attackLevel = time < attack ? smoothstep(time / attack) : 1
-        let releaseLevel = time > releaseStart
-            ? 1 - smoothstep((time - releaseStart) / release)
-            : 1
-
-        return attackLevel * releaseLevel
-    }
-
-    private func smoothstep(_ value: Double) -> Double {
-        let x = clamp(value, min: 0, max: 1)
-        return x * x * (3 - 2 * x)
-    }
-
-    private func clamp(_ value: Double, min minimum: Double, max maximum: Double) -> Double {
-        Swift.max(minimum, Swift.min(maximum, value))
-    }
-}
-
-private final class ActivityOverlayController {
-    private let panelSize = NSSize(width: 236, height: 68)
-    private var panel: NSPanel?
-    private var hostingView: TransparentHostingView<ActivityOverlayView>?
-
-    func show(
-        _ phase: ActivityOverlayPhase,
-        content: ActivityOverlayContent,
-        level: Double,
-        onDismiss: @escaping () -> Void,
-        onStop: @escaping () -> Void
-    ) {
-        let panel = ensurePanel()
-        if let hostingView {
-            hostingView.rootView = ActivityOverlayView(
-                phase: phase,
-                content: content,
-                level: level,
-                onDismiss: onDismiss,
-                onStop: onStop
-            )
-        }
-        position(panel)
-        panel.orderFrontRegardless()
-    }
-
-    func hide() {
-        panel?.orderOut(nil)
-    }
-
-    @discardableResult
-    private func ensurePanel() -> NSPanel {
-        if let panel {
-            return panel
-        }
-
-        let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: panelSize),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: true
-        )
-        panel.isFloatingPanel = true
-        panel.level = .statusBar
-        panel.backgroundColor = .clear
-        panel.isOpaque = false
-        panel.hasShadow = false
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        panel.ignoresMouseEvents = false
-        panel.isMovable = false
-        panel.isReleasedWhenClosed = false
-
-        let hostingView = TransparentHostingView(
-            rootView: ActivityOverlayView(
-                phase: .listening,
-                content: ActivityOverlayContent(
-                    title: "Listening",
-                    subtitle: nil
-                ),
-                level: 0,
-                onDismiss: {},
-                onStop: {}
-            )
-        )
-        hostingView.frame = NSRect(origin: .zero, size: panelSize)
-        hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
-        panel.contentView = hostingView
-
-        self.hostingView = hostingView
-        self.panel = panel
-        return panel
-    }
-
-    private func position(_ panel: NSPanel) {
-        let screen = currentScreen() ?? NSScreen.main ?? NSScreen.screens.first
-        guard let screen else { return }
-
-        let visibleFrame = screen.visibleFrame
-        let origin = CGPoint(
-            x: round(visibleFrame.midX - (panelSize.width / 2)),
-            y: visibleFrame.minY + 20
-        )
-        panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
-    }
-
-    private func currentScreen() -> NSScreen? {
-        let mouseLocation = NSEvent.mouseLocation
-        return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
-    }
-}
-
-private final class TransparentHostingView<Content: View>: NSHostingView<Content> {
-    override var isOpaque: Bool {
-        false
-    }
-
-    required init(rootView: Content) {
-        super.init(rootView: rootView)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+        return .terminateLater
     }
 }

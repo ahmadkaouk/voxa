@@ -1,60 +1,55 @@
 # Voxa
 
-Voxa is a macOS dictation system built around a local daemon and thin clients.
+Voxa is a native macOS dictation application. Its SwiftUI menu bar UI, microphone recording, transcription, and output run in one process.
 
-Status: macOS-only, build-from-source, early-stage.
-
-The core idea is simple: `voxa-daemon` runs as a separate local server, owns recording, transcription, config, and runtime state, and exposes a local IPC API. Clients stay lightweight and talk to the daemon instead of re-implementing that logic. That keeps the architecture flexible and makes it easier to add or experiment with different clients over time.
+Status: macOS-only, build-from-source. See the [architecture](docs/architecture.md).
 
 ## Architecture
 
-- `voxa-daemon` is the server boundary. It records audio, calls OpenAI for transcription, stores config and secrets, and publishes runtime state over IPC.
-- Clients connect over IPC, send commands, subscribe to events, and provide their own UX.
-- `voxa-core` holds shared domain types and protocol primitives used across the workspace.
+One SwiftUI application process contains the UI/hotkeys and one `DictationSession`.
+The session directly calls `AudioRecorder`, `TranscriptionClient`, and `TranscriptOutput`.
+Small helpers handle preferences, Keychain, permissions, and retiring the old LaunchAgent.
 
-## Included Components
-
-- `apps/voxa-menubar`: the main SwiftUI menu bar client for everyday use
-- `crates/voxactl`: a small CLI used mainly for testing, debugging, and development
-- `crates/voxa-daemon`: the local daemon and IPC server
-- `crates/voxa-core`: shared domain, IPC, and infrastructure primitives
+`apps/voxa-menubar` contains one application target and its test target. The app has no
+Rust dependency, daemon, local IPC server, or external control CLI.
 
 ## What You Can Do Today
 
 - Use the SwiftUI menu bar app for push-to-talk dictation
+- Transcribe completed recordings with OpenAI's `gpt-transcribe` model
 - Send transcripts to the clipboard or directly into the active app
-- Control and inspect the daemon from `voxactl`
 - Build a packaged macOS app bundle and DMG
 
-The menu bar app installs or updates a per-user LaunchAgent for `voxa-daemon` and starts it automatically.
+The app retires its recognized legacy LaunchAgent after the old recorder stops. It does not start a daemon.
+
+GPT-Transcribe is the default and supported transcription model. Saved GPT-4o Mini
+Transcribe and GPT-4o Transcribe settings migrate on startup while preserving other
+preferences. Native settings are saved in UserDefaults; the original TOML remains available for rollback.
 
 ## Build From Source
 
 ### Requirements
 
 - macOS 13+
-- Rust toolchain (stable)
-- Xcode Command Line Tools / Swift 5.9+
+- Xcode Command Line Tools / Swift 6.0+ (TOMLDecoder requires Swift 6; deployment still targets macOS 13)
 - OpenAI API key
 
 For DMG packaging, macOS tools `sips`, `iconutil`, and `hdiutil` must also be available.
 
 ### Run
 
-1. Install the Rust binaries:
+Build, sign, and install the native app (quit the installed Voxa first):
 
 ```bash
 ./scripts/install.sh
 ```
 
-2. Run the menu bar app:
+Launch `/Applications/Voxa.app`, allow any required Keychain/microphone permissions,
+and use the menu bar controls or configured shortcuts. Existing settings and the
+OpenAI key are reused. A fresh install can add its key from the menu bar UI.
 
-```bash
-cd apps/voxa-menubar
-swift run voxa-menubar
-```
-
-3. Add your OpenAI API key from the menu bar UI.
+For a development run, `swift run --package-path apps/voxa-menubar voxa-menubar`
+remains available. Run only one Voxa copy at a time.
 
 ## Common Tasks
 
@@ -64,29 +59,13 @@ Check the workspace:
 ./scripts/check.sh
 ```
 
-Run the Rust tests:
-
-```bash
-cargo test --workspace
-```
-
-Run the Swift tests:
-
-```bash
-swift test --package-path apps/voxa-menubar
-```
-
 ## Repository Layout
 
 - `apps/voxa-menubar`: SwiftUI menu bar app
-- `crates/voxa-daemon`: daemon process and runtime state authority
-- `crates/voxactl`: CLI for testing, debugging, and support workflows
-- `crates/voxa-core`: shared domain, IPC, and infrastructure primitives
-- `docs/`: architecture, IPC contract, and CLI notes
+- `scripts/`: build, packaging, installation, tests, and development fixtures
+- `docs/`: native architecture
 
 ## Documentation
 
-- `apps/voxa-menubar/README.md`
-- `crates/voxactl/README.md`
-- `docs/architecture.md`
-- `docs/ipc.md`
+- [Application usage and development](apps/voxa-menubar/README.md)
+- [Architecture](docs/architecture.md)

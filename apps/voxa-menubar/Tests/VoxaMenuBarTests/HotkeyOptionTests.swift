@@ -1,34 +1,37 @@
-#if canImport(XCTest)
+#if canImport(XCTest) || VOXA_STANDALONE_TESTS
+import Foundation
+#if !VOXA_STANDALONE_TESTS
 import XCTest
 @testable import VoxaMenuBar
+#endif
 
-final class HotkeyOptionTests: XCTestCase {
-    func testDefaultHotkeysRoundTrip() {
-        XCTAssertEqual(HotkeyOption.defaultToggle, .optionF)
-        XCTAssertEqual(HotkeyOption.defaultHold, .optionG)
-        XCTAssertEqual(HotkeyOption.fromRawOrDefault("option_f"), .optionF)
-        XCTAssertEqual(HotkeyOption.fromRawOrDefault("option_g"), .optionG)
-        XCTAssertEqual(HotkeyOption.fromRawOrDefault("invalid"), .optionF)
-        XCTAssertEqual(HotkeyOption.fromRawOrDefault("invalid", fallback: .optionG), .optionG)
-        XCTAssertEqual(HotkeyOption.optionF.persistedValue, "option_f")
-        XCTAssertEqual(HotkeyOption.optionG.persistedValue, "option_g")
-        XCTAssertEqual(HotkeyOption.optionF.label, "Opt+F")
-        XCTAssertEqual(HotkeyOption.optionG.label, "Opt+G")
+enum HotkeyOptionChecks {
+    static func testDefaultHotkeysRoundTrip() throws {
+        try unitEqual(HotkeyOption.defaultToggle, .optionF)
+        try unitEqual(HotkeyOption.defaultHold, .optionG)
+        try unitEqual(HotkeyOption.fromRawOrDefault("option_f"), .optionF)
+        try unitEqual(HotkeyOption.fromRawOrDefault("option_g"), .optionG)
+        try unitEqual(HotkeyOption.fromRawOrDefault("invalid"), .optionF)
+        try unitEqual(HotkeyOption.fromRawOrDefault("invalid", fallback: .optionG), .optionG)
+        try unitEqual(HotkeyOption.optionF.persistedValue, "option_f")
+        try unitEqual(HotkeyOption.optionG.persistedValue, "option_g")
+        try unitEqual(HotkeyOption.optionF.label, "Opt+F")
+        try unitEqual(HotkeyOption.optionG.label, "Opt+G")
     }
 
-    func testLegacyHotkeysRoundTrip() {
-        XCTAssertEqual(HotkeyOption.fromRawOrDefault("right_option"), .rightOption)
-        XCTAssertEqual(HotkeyOption.fromRawOrDefault("fn"), .functionKey)
-        XCTAssertEqual(HotkeyOption.fromRawOrDefault("fn_space"), .functionSpace)
-        XCTAssertEqual(HotkeyOption.fromRawOrDefault("cmd_space"), .commandSpace)
+    static func testLegacyHotkeysRoundTrip() throws {
+        try unitEqual(HotkeyOption.fromRawOrDefault("right_option"), .rightOption)
+        try unitEqual(HotkeyOption.fromRawOrDefault("fn"), .functionKey)
+        try unitEqual(HotkeyOption.fromRawOrDefault("fn_space"), .functionSpace)
+        try unitEqual(HotkeyOption.fromRawOrDefault("cmd_space"), .commandSpace)
 
-        XCTAssertEqual(HotkeyOption.rightOption.persistedValue, "right_option")
-        XCTAssertEqual(HotkeyOption.functionKey.persistedValue, "fn")
-        XCTAssertEqual(HotkeyOption.functionSpace.persistedValue, "fn_space")
-        XCTAssertEqual(HotkeyOption.commandSpace.persistedValue, "cmd_space")
+        try unitEqual(HotkeyOption.rightOption.persistedValue, "right_option")
+        try unitEqual(HotkeyOption.functionKey.persistedValue, "fn")
+        try unitEqual(HotkeyOption.functionSpace.persistedValue, "fn_space")
+        try unitEqual(HotkeyOption.commandSpace.persistedValue, "cmd_space")
     }
 
-    func testCustomHotkeyRoundTripPreservesBinding() {
+    static func testCustomHotkeyRoundTripPreservesBinding() throws {
         let custom = HotkeyOption(
             keyCodes: [KeyCode.f18],
             modifiers: [.control, .shift],
@@ -37,11 +40,11 @@ final class HotkeyOptionTests: XCTestCase {
 
         let roundTrip = HotkeyOption.fromRaw(custom.persistedValue)
 
-        XCTAssertEqual(roundTrip, custom)
-        XCTAssertEqual(roundTrip?.label, "Ctrl+Shift+F18")
+        try unitEqual(roundTrip, custom)
+        try unitEqual(roundTrip?.label, "Ctrl+Shift+F18")
     }
 
-    func testMultiKeyHotkeyRoundTripPreservesBinding() {
+    static func testMultiKeyHotkeyRoundTripPreservesBinding() throws {
         let custom = HotkeyOption(
             keyCodes: [KeyCode.j, KeyCode.k],
             modifiers: [.control],
@@ -50,16 +53,34 @@ final class HotkeyOptionTests: XCTestCase {
 
         let roundTrip = HotkeyOption.fromRaw(custom.persistedValue)
 
-        XCTAssertEqual(roundTrip, custom)
-        XCTAssertEqual(roundTrip?.label, "Ctrl+J+K")
+        try unitEqual(roundTrip, custom)
+        try unitEqual(roundTrip?.label, "Ctrl+J+K")
     }
 
-    func testSubsetDetectionSupportsOverlapResolution() {
+    static func testSubsetDetectionSupportsOverlapResolution() throws {
         let shorter = HotkeyOption.functionKey
         let longer = HotkeyOption.functionSpace
 
-        XCTAssertTrue(shorter.isStrictSubset(of: longer))
-        XCTAssertFalse(longer.isStrictSubset(of: shorter))
+        try unitExpect(shorter.isStrictSubset(of: longer))
+        try unitExpect(!(longer.isStrictSubset(of: shorter)))
     }
+
+    static let all: [(String, () throws -> Void)] = [
+        ("HotkeyOption.testDefaultHotkeysRoundTrip", testDefaultHotkeysRoundTrip),
+        ("HotkeyOption.testLegacyHotkeysRoundTrip", testLegacyHotkeysRoundTrip),
+        ("HotkeyOption.testCustomHotkeyRoundTripPreservesBinding", testCustomHotkeyRoundTripPreservesBinding),
+        ("HotkeyOption.testMultiKeyHotkeyRoundTripPreservesBinding", testMultiKeyHotkeyRoundTripPreservesBinding),
+        ("HotkeyOption.testSubsetDetectionSupportsOverlapResolution", testSubsetDetectionSupportsOverlapResolution),
+    ]
 }
+
+#if !VOXA_STANDALONE_TESTS
+final class HotkeyOptionTests: XCTestCase {
+    func testDefaultHotkeysRoundTrip() throws { try HotkeyOptionChecks.testDefaultHotkeysRoundTrip() }
+    func testLegacyHotkeysRoundTrip() throws { try HotkeyOptionChecks.testLegacyHotkeysRoundTrip() }
+    func testCustomHotkeyRoundTripPreservesBinding() throws { try HotkeyOptionChecks.testCustomHotkeyRoundTripPreservesBinding() }
+    func testMultiKeyHotkeyRoundTripPreservesBinding() throws { try HotkeyOptionChecks.testMultiKeyHotkeyRoundTripPreservesBinding() }
+    func testSubsetDetectionSupportsOverlapResolution() throws { try HotkeyOptionChecks.testSubsetDetectionSupportsOverlapResolution() }
+}
+#endif
 #endif
