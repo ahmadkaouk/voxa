@@ -86,6 +86,7 @@ final class DictationSession: ObservableObject {
     private let output: any DictationOutputting
     private let clock: DictationClock
     private var workflow: Task<Void, Never>?
+    private var recordingMonitor: Task<Void, Error>?
     private var shuttingDown = false
 
     init(settings: DictationSettings = DictationSettings(),
@@ -142,7 +143,9 @@ final class DictationSession: ObservableObject {
         guard !shuttingDown else { return }
         switch state {
         case .starting(let context, nil): state = .starting(context, requested: .stop)
-        case .recording(let context): state = .finishing(context, discard: false)
+        case .recording(let context):
+            state = .finishing(context, discard: false)
+            recordingMonitor?.cancel()
         default: break
         }
     }
@@ -152,7 +155,9 @@ final class DictationSession: ObservableObject {
         guard !shuttingDown else { return }
         switch state {
         case .starting(let context, _): state = .starting(context, requested: .cancel)
-        case .recording(let context), .finishing(let context, _): state = .finishing(context, discard: true)
+        case .recording(let context), .finishing(let context, _):
+            state = .finishing(context, discard: true)
+            recordingMonitor?.cancel()
         default: break
         }
     }
@@ -169,6 +174,7 @@ final class DictationSession: ObservableObject {
         shuttingDown = true
         state = .idle
         workflow?.cancel()
+        recordingMonitor?.cancel()
         await workflow?.value
         await output.drain()
         workflow = nil
@@ -178,6 +184,37 @@ final class DictationSession: ObservableObject {
     private func ensureCurrent(_ context: DictationContext) throws {
         try Task.checkCancellation()
         guard !shuttingDown, state.context?.id == context.id else { throw CancellationError() }
+    }
+
+    private func waitForRecordingToFinish(_ context: DictationContext) async throws {
+        guard case .recording = state else { return }
+        let deadline = clock.now() + context.settings.maxRecordingSeconds
+        // One monitor per recording keeps meter polling separate from the workflow. Stop can
+        // interrupt its sleep without cancelling WAV finalization, transcription, or delivery.
+        let monitor = Task {
+            while case .recording = self.state {
+                let snapshot = await self.recorder.snapshot()
+                try self.ensureCurrent(context)
+                guard case .recording = self.state else { break }
+                guard snapshot.id == context.id else { throw AudioRecorderError.staleSession }
+                if snapshot.phase == .failed { throw CaptureFailure(message: snapshot.error ?? "Audio capture failed.") }
+                guard snapshot.phase == .recording || snapshot.phase == .finished else { throw AudioRecorderError.noAudio }
+                self.level = snapshot.level
+                if snapshot.phase == .finished || self.clock.now() >= deadline {
+                    self.state = .finishing(context, discard: false)
+                    break
+                }
+                try await self.clock.pause(0.05)
+            }
+        }
+        recordingMonitor = monitor
+        defer { recordingMonitor = nil }
+        do { try await monitor.value }
+        catch is CancellationError {
+            try ensureCurrent(context)
+            // Only an explicit recording command may interrupt polling and continue this workflow.
+            guard monitor.isCancelled, case .finishing = state else { throw CancellationError() }
+        }
     }
 
     private func run(_ context: DictationContext, prepare: @MainActor () async throws -> String) async {
@@ -201,21 +238,7 @@ final class DictationSession: ObservableObject {
             default: throw CancellationError()
             }
 
-            let deadline = clock.now() + context.settings.maxRecordingSeconds
-            while case .recording = state {
-                let snapshot = await recorder.snapshot()
-                try ensureCurrent(context)
-                guard case .recording = state else { break }
-                guard snapshot.id == context.id else { throw AudioRecorderError.staleSession }
-                if snapshot.phase == .failed { throw CaptureFailure(message: snapshot.error ?? "Audio capture failed.") }
-                guard snapshot.phase == .recording || snapshot.phase == .finished else { throw AudioRecorderError.noAudio }
-                level = snapshot.level
-                if snapshot.phase == .finished || clock.now() >= deadline {
-                    state = .finishing(context, discard: false)
-                    break
-                }
-                try await clock.pause(0.05)
-            }
+            try await waitForRecordingToFinish(context)
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
             let audio = try await recorder.stop(id: context.id)

@@ -16,6 +16,7 @@ private final class SessionRecorderFixture: DictationRecording {
     var cancelGate: PipelineGate?
     var startError: Error?
     var stopError: Error?
+    var stopWasCancelled = false
     var current = AudioRecorderSnapshot()
     func start(id: UUID, limit: TimeInterval) async throws {
         starts.append(id); limits.append(limit)
@@ -25,6 +26,7 @@ private final class SessionRecorderFixture: DictationRecording {
         current.phase = .recording
     }
     func stop(id: UUID) async throws -> Data {
+        stopWasCancelled = Task.isCancelled
         stops.append(id)
         await stopGate?.wait()
         if let stopError { throw stopError }
@@ -45,7 +47,9 @@ private final class SessionTranscriberFixture: DictationTranscribing {
     var response = "  hello world \n"
     var error: TranscriptionError?
     var gate: PipelineGate?
+    var wasCancelled = false
     func transcribe(_ audio: Data, model: ModelOption, apiKey: String) async throws -> String {
+        wasCancelled = Task.isCancelled
         calls.append((audio, model, apiKey))
         await gate?.wait()
         if let error { throw error }
@@ -89,10 +93,13 @@ private final class SessionFixture {
     let transcriber = SessionTranscriberFixture()
     let output = SessionOutputFixture()
     var time = 0.0
+    var pause: (TimeInterval) async throws -> Void = { _ in
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
     lazy var session = DictationSession(settings: .init(outputMode: .clipboardOnly, maxRecordingSeconds: 10),
                                        recorder: recorder, transcriber: transcriber, output: output,
-                                       clock: DictationClock(now: { [unowned self] in self.time }, pause: { _ in
-        try await Task.sleep(nanoseconds: 1_000_000)
+                                       clock: DictationClock(now: { [unowned self] in self.time }, pause: { [unowned self] seconds in
+        try await self.pause(seconds)
     }))
     func wait(_ phase: String) async throws { try await eventually { self.session.state.tag == phase } }
     func record() async throws { session.start(prepare: { "fixture-key" }); try await wait("recording") }
@@ -100,6 +107,49 @@ private final class SessionFixture {
 
 @MainActor
 enum DictationSessionChecks {
+    static func commandsInterruptMeterWait() async throws {
+        for command in ["stop", "toggle", "release", "cancel", "shutdown"] {
+            let f = SessionFixture()
+            var waiting = false
+            var interrupted = false
+            f.pause = { interval in
+                try unitEqual(interval, 0.05) // Meter cadence stays the same.
+                waiting = true
+                do { try await Task.sleep(nanoseconds: 30_000_000_000) }
+                catch is CancellationError { interrupted = true; throw CancellationError() }
+            }
+            let id = f.session.start(origin: command == "release" ? .hotkeyHold : .manual,
+                                     prepare: { "fixture-key" })!
+            try await eventually { waiting }
+            var shutdown: Task<Void, Never>?
+            switch command {
+            case "stop": f.session.stop(); f.session.stop()
+            case "toggle": f.session.toggle(prepare: { "ignored" })
+            case "release": f.session.holdReleased()
+            case "cancel": f.session.cancel(); f.session.stop()
+            default: shutdown = Task { await f.session.shutdown() }
+            }
+            // This must finish without advancing the deliberately stalled meter timer.
+            try await eventually { interrupted && f.recorder.cancels == [id] }
+            await shutdown?.value
+            try await f.wait("idle")
+            let shouldTranscribe = !["cancel", "shutdown"].contains(command)
+            try unitEqual(f.recorder.stops, shouldTranscribe ? [id] : [])
+            try unitEqual(f.transcriber.calls.count, shouldTranscribe ? 1 : 0)
+            try unitEqual(f.output.calls.count, shouldTranscribe ? 1 : 0)
+            try unitExpect(!f.recorder.stopWasCancelled && !f.transcriber.wasCancelled)
+            if command != "shutdown" {
+                // The interrupted monitor must not interfere with the next recording.
+                f.pause = { _ in try await Task.sleep(nanoseconds: 1_000_000) }
+                try await f.record()
+                f.session.stop()
+                try await f.wait("idle")
+                try unitEqual(f.recorder.stops.count, shouldTranscribe ? 2 : 1)
+                await f.session.shutdown()
+            }
+        }
+    }
+
     static func workflowAndOutputCompletion() async throws {
         let f = SessionFixture()
         let delivery = PipelineGate()
@@ -341,6 +391,7 @@ enum DictationSessionChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("session: stop, toggle, hold release, cancel and shutdown interrupt the meter wait", commandsInterruptMeterWait),
         ("session: preparation release, cancellation, shutdown and recovery", preparationCommandsAndRecovery),
         ("session: one ordered workflow and output completion", workflowAndOutputCompletion),
         ("session: hold release and cancellation during startup", startupStopAndCancel),
@@ -355,6 +406,7 @@ enum DictationSessionChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class DictationSessionTests: XCTestCase {
+    func testCommandsInterruptMeterWait() async throws { try await DictationSessionChecks.commandsInterruptMeterWait() }
     func testPreparationCommandsAndRecovery() async throws { try await DictationSessionChecks.preparationCommandsAndRecovery() }
     func testWorkflowAndOutputCompletion() async throws { try await DictationSessionChecks.workflowAndOutputCompletion() }
     func testStartupStopAndCancel() async throws { try await DictationSessionChecks.startupStopAndCancel() }
