@@ -91,7 +91,7 @@ final class AppController: ObservableObject {
     var menuBarSymbol: String {
         if setupError != nil { return "exclamationmark.triangle" }
         switch session.state {
-        case .idle, .starting, .recording: return "waveform"
+        case .idle, .starting, .recording, .restoringClipboard: return "waveform"
         case .finishing, .transcribing: return "waveform.and.mic"
         case .delivering: return "square.and.arrow.up"
         case .failed: return "exclamationmark.triangle"
@@ -230,6 +230,7 @@ final class AppController: ObservableObject {
         case .finishing: show(.transcribing, title: "Finishing recording…")
         case .transcribing: show(.transcribing, title: "Transcribing")
         case .delivering: show(.transcribing, title: "Delivering transcript…")
+        case .restoringClipboard: show(.idle, title: "Start dictation")
         case .failed: overlay.hide()
         case .idle:
             if let outcome = session.lastOutcome {

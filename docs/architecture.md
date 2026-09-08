@@ -25,10 +25,17 @@ overlay presentation, and shutdown. Local view state controls presentation only.
 Each recording has an ID and settings snapshot. The session checks both its ID
 and expected state after suspension so a late callback cannot complete a newer
 recording. States are `idle`, `starting`, `recording`, `finishing`, `transcribing`,
-`delivering`, and `failed`. Stop or cancel during preparation is remembered;
-releasing a hold shortcut during a permission prompt cannot start capture later.
+`delivering`, `restoringClipboard`, and `failed`. Stop or cancel during preparation
+is remembered; releasing a hold shortcut during a permission prompt cannot start capture later.
 Cancellation is limited to recording. Normal Quit invalidates pending work and
 awaits capture teardown and clipboard cleanup before the process exits.
+
+After a paste request is sent and its clipboard text is read, `restoringClipboard`
+permits another recording while the output worker finishes its 500 ms settling
+interval and restoration. The recorder is released before delivery begins.
+Later pastes and copies remain queued behind cleanup, and its final result only
+updates the session if no newer recording has started. A clipboard read does not
+produce a success indicator before restoration finishes.
 
 The three workers are constructed directly. Small protocols and injected closures
 allow deterministic tests.

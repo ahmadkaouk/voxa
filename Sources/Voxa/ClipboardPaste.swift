@@ -100,7 +100,7 @@ final class ClipboardAutopaster {
         self.settlingDelay = settlingDelay
     }
 
-    func paste(_ text: String, sendShortcut: (Int) -> Bool) -> ClipboardPasteResult {
+    func paste(_ text: String, onRead: () -> Void = {}, sendShortcut: (Int) -> Bool) -> ClipboardPasteResult {
         precondition(!Thread.isMainThread, "Paste delivery waits must not block the main run loop")
         guard let snapshot = ClipboardSnapshot(pasteboard: pasteboard) else {
             return .snapshotFailed
@@ -155,6 +155,8 @@ final class ClipboardAutopaster {
             return .unconfirmed
         }
 
+        // Capture may start again now; this queue still owns the entire restoration operation.
+        onRead()
         Thread.sleep(forTimeInterval: settlingDelay)
         guard stillOwnsClipboard() else { return .clipboardChanged }
         return snapshot.restore(to: pasteboard, ifUnchangedSince: ownedCount)

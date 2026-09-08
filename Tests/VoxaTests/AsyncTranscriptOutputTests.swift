@@ -17,7 +17,7 @@ private final class OutputTrace: @unchecked Sendable {
 enum AsyncTranscriptOutputChecks {
     static func outcomes() async throws {
         let trace = OutputTrace()
-        let output = TranscriptOutput(copy: { text in trace.add("copy: \(text)"); return false }, paste: { text, _ in
+        let output = TranscriptOutput(copy: { text in trace.add("copy: \(text)"); return false }, paste: { text, _, _ in
             trace.add("paste: \(text)"); return .snapshotFailed
         })
         try unitEqual(await output.deliver(" \n", mode: .clipboardAutopaste), .empty)
@@ -30,7 +30,7 @@ enum AsyncTranscriptOutputChecks {
         try unitEqual(await copying.deliver(" hello\n", mode: .clipboardOnly), .copied)
         try unitEqual(trace.events, ["copy: hello", "paste: hello", "copy:  hello\n"])
         for result: ClipboardPasteResult in [.restored, .manualPaste, .unconfirmed, .clipboardChanged, .snapshotFailed, .writeFailed, .restoreFailed] {
-            let output = TranscriptOutput(paste: { _, _ in result })
+            let output = TranscriptOutput(paste: { _, _, _ in result })
             let outcome = await output.deliver("text", mode: .clipboardAutopaste)
             try unitEqual(outcome, .paste(result))
             try unitEqual(outcome.showsSuccess, result == .restored)
@@ -44,44 +44,55 @@ enum AsyncTranscriptOutputChecks {
         defer { board.releaseGlobally() }
         board.clearContents()
         board.setString("Original clipboard", forType: .string)
-        let original = ClipboardSnapshot(pasteboard: board)!
         let trace = OutputTrace()
         let release = DispatchSemaphore(value: 0)
         let output = TranscriptOutput(copy: { text in
             trace.add(Thread.isMainThread ? "WRONG THREAD" : "copy")
             return onPasteboardThread { board.clearContents(); return board.setString(text, forType: .string) }
-        }, paste: { text, _ in
-            let result = ClipboardAutopaster(pasteboard: board, readTimeout: 0.2, settlingDelay: 0.02).paste(text) { _ in
+        }, paste: { text, _, onRead in
+            let original = ClipboardSnapshot(pasteboard: board)!
+            let result = ClipboardAutopaster(pasteboard: board, readTimeout: 0.2, settlingDelay: 0.02).paste(text, onRead: {
+                onRead()
+                if text == "Dictation", release.wait(timeout: .now() + 5) != .success { trace.add("TIMED OUT") }
+            }) { _ in
                 _ = onPasteboardThread { board.string(forType: .string) }
-                trace.add(Thread.isMainThread ? "WRONG THREAD" : "paste")
-                if release.wait(timeout: .now() + 5) != .success { trace.add("TIMED OUT") }
+                trace.add(Thread.isMainThread ? "WRONG THREAD" : "paste: \(text)")
                 return true
             }
-            trace.add(ClipboardSnapshot(pasteboard: board)?.items == original.items ? "restored" : "NOT RESTORED")
+            trace.add(ClipboardSnapshot(pasteboard: board)?.items == original.items ? "restored: \(text)" : "NOT RESTORED")
             return result
         })
-        let delivery = Task { await output.deliver("Dictation", mode: .clipboardAutopaste) }
-        try await eventually { trace.events == ["paste"] }
-        var copyRequested = false, drained = false
+        let delivery = Task {
+            await output.deliver("Dictation", mode: .clipboardAutopaste, onPasteRead: {
+                trace.add(Thread.isMainThread ? "ready" : "WRONG THREAD")
+            })
+        }
+        try await eventually { trace.events == ["paste: Dictation", "ready"] }
+        try unitEqual(board.string(forType: .string), "Dictation") // Readiness does not restore early.
+        var copyRequested = false, secondRequested = false, drained = false
         let copy = Task { copyRequested = true; return await output.copy("Last transcript") }
         try await eventually { copyRequested }
+        let second = Task { secondRequested = true; return await output.deliver("Second dictation", mode: .clipboardAutopaste) }
+        try await eventually { secondRequested }
         let drain = Task { await output.drain(); drained = true }
         await Task.yield()
         try unitExpect(!drained)
         delivery.cancel() // cleanup must still finish before the queued copy and shutdown barrier
-        try unitEqual(trace.events, ["paste"])
+        try unitEqual(trace.events, ["paste: Dictation", "ready"])
         release.signal()
         try unitEqual(await delivery.value, .paste(.restored))
         try unitEqual(await copy.value, .copied)
+        try unitEqual(await second.value, .paste(.restored))
         await drain.value
-        try unitEqual(trace.events, ["paste", "restored", "copy"])
+        try unitEqual(trace.events, ["paste: Dictation", "ready", "restored: Dictation", "copy",
+                                     "paste: Second dictation", "restored: Second dictation"])
         try unitEqual(board.string(forType: .string), "Last transcript")
         try unitExpect(drained)
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
         ("output: explicit outcomes and success/fallback distinctions", outcomes),
-        ("output: copy serialization, main-thread responsiveness and cleanup on cancellation", serializedCopyAndCleanup),
+        ("output: early readiness, ordered paste/copy, and cleanup on cancellation", serializedCopyAndCleanup),
     ]
 }
 

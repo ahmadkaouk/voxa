@@ -14,7 +14,8 @@ protocol DictationTranscribing: Sendable {
 }
 
 protocol DictationOutputting: Sendable {
-    @MainActor func deliver(_ text: String, mode: OutputModeOption) async -> TranscriptOutputOutcome
+    @MainActor func deliver(_ text: String, mode: OutputModeOption,
+                           onPasteRead: @escaping @MainActor @Sendable () -> Void) async -> TranscriptOutputOutcome
     @MainActor func copy(_ text: String) async -> TranscriptOutputOutcome
     @MainActor func drain() async
 }
@@ -45,17 +46,21 @@ enum DictationState: Equatable {
     case finishing(DictationContext, discard: Bool)
     case transcribing(DictationContext)
     case delivering(DictationContext)
+    case restoringClipboard(DictationContext)
     case failed(id: UUID, message: String)
 
     var context: DictationContext? {
         switch self {
         case .starting(let context, _), .recording(let context), .finishing(let context, _),
-             .transcribing(let context), .delivering(let context): return context
+             .transcribing(let context), .delivering(let context), .restoringClipboard(let context): return context
         case .idle, .failed: return nil
         }
     }
 
-    var isBusy: Bool { context != nil }
+    var isBusy: Bool {
+        if case .restoringClipboard = self { return false }
+        return context != nil
+    }
     var isDiscarding: Bool {
         switch self {
         case .starting(_, .cancel), .finishing(_, true): return true
@@ -128,7 +133,7 @@ final class DictationSession: ObservableObject {
 
     func toggle(prepare: @escaping @MainActor () async throws -> String) {
         switch state {
-        case .idle, .failed: start(origin: .hotkeyToggle, prepare: prepare)
+        case .idle, .restoringClipboard, .failed: start(origin: .hotkeyToggle, prepare: prepare)
         case .starting, .recording: stop()
         default: break
         }
@@ -218,6 +223,7 @@ final class DictationSession: ObservableObject {
     }
 
     private func run(_ context: DictationContext, prepare: @MainActor () async throws -> String) async {
+        var captureReleased = false
         do {
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
@@ -251,20 +257,26 @@ final class DictationSession: ObservableObject {
             guard case .transcribing = state else { throw CancellationError() }
             let text = response.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw TranscriptionError.emptyTranscript }
+            // Release the recorder's cached WAV before delivery can make capture available again.
+            await recorder.cancel(id: context.id)
+            captureReleased = true
+            try ensureCurrent(context)
             lastTranscript = text
             state = .delivering(context)
-            let outcome = await output.deliver(text, mode: context.settings.outputMode)
-            try ensureCurrent(context)
-            guard case .delivering = state else { throw CancellationError() }
-            // The recorder caches Stop's result for idempotency. Release that WAV before idle.
-            await recorder.cancel(id: context.id)
-            try ensureCurrent(context)
+            let outcome = await output.deliver(text, mode: context.settings.outputMode, onPasteRead: { [weak self] in
+                guard let self, !self.shuttingDown, self.state.context?.id == context.id,
+                      case .delivering = self.state else { return }
+                self.state = .restoringClipboard(context)
+            })
+            // A newer recording may already own the session. Cleanup must not change it or
+            // release its recorder; shutdown still waits for all queued output through drain().
+            guard !shuttingDown, state.context?.id == context.id else { return }
             lastOutcome = outcome
             state = outcome.isFailure ? .failed(id: context.id, message: outcome.message) : .idle
         } catch {
             let cancelledTask = error is CancellationError
             // start/stop failures also pass through explicit cleanup before a retry is enabled.
-            await recorder.cancel(id: context.id)
+            if !captureReleased { await recorder.cancel(id: context.id) }
             guard !shuttingDown, state.context?.id == context.id else { return }
             level = 0
             state = (state.isDiscarding || cancelledTask) ? .idle : .failed(id: context.id, message: error.localizedDescription)

@@ -271,7 +271,7 @@ struct VoxaPopoverView: View {
         if controller.isSettingUp { return "Voxa is starting" }
         if !controller.isReady { return "Voxa needs attention" }
         switch session.state {
-        case .idle: return controller.isAPIKeySet ? "Voxa is ready" : "Set up Voxa"
+        case .idle, .restoringClipboard: return controller.isAPIKeySet ? "Voxa is ready" : "Set up Voxa"
         case .starting: return "Preparing microphone"
         case .recording: return "Voxa is recording"
         case .finishing: return "Finishing recording"
@@ -291,7 +291,7 @@ struct VoxaPopoverView: View {
         if let error = controller.setupError { return error }
         if controller.isSettingUp { return "Loading settings and checking access…" }
         switch session.state {
-        case .idle:
+        case .idle, .restoringClipboard:
             if !controller.isAPIKeySet { return "Add an API key to start transcribing" }
             if controller.permissions.microphone == .denied { return "Enable Microphone access in System Settings" }
             if !controller.permissions.accessibility || !controller.permissions.inputMonitoring {
@@ -314,7 +314,7 @@ struct VoxaPopoverView: View {
         switch session.state {
         case .starting(_, nil), .recording: return .stop
         case .starting, .finishing, .transcribing, .delivering: return .working
-        case .idle: return controller.isAPIKeySet ? .start : .addAPIKey
+        case .idle, .restoringClipboard: return controller.isAPIKeySet ? .start : .addAPIKey
         case .failed: return controller.isAPIKeySet ? .retry : .addAPIKey
         }
     }

@@ -62,15 +62,29 @@ private final class SessionOutputFixture: DictationOutputting {
     var calls: [(String, OutputModeOption)] = []
     var copies: [String] = []
     var drains = 0
+    var completions = 0
     var gate: PipelineGate?
     var result: TranscriptOutputOutcome = .copied
-    func deliver(_ text: String, mode: OutputModeOption) async -> TranscriptOutputOutcome {
+    var pasteRead: (@MainActor @Sendable () -> Void)?
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+    func deliver(_ text: String, mode: OutputModeOption,
+                 onPasteRead: @escaping @MainActor @Sendable () -> Void) async -> TranscriptOutputOutcome {
         calls.append((text, mode))
+        pasteRead = onPasteRead
+        let result = result
         await gate?.wait()
+        completions += 1
+        if completions == calls.count {
+            drainWaiters.forEach { $0.resume() }
+            drainWaiters.removeAll()
+        }
         return result
     }
     func copy(_ text: String) async -> TranscriptOutputOutcome { copies.append(text); return .copied }
-    func drain() async { drains += 1 }
+    func drain() async {
+        drains += 1
+        if completions < calls.count { await withCheckedContinuation { drainWaiters.append($0) } }
+    }
 }
 
 private extension DictationState {
@@ -82,6 +96,7 @@ private extension DictationState {
         case .finishing: return "finishing"
         case .transcribing: return "transcribing"
         case .delivering: return "delivering"
+        case .restoringClipboard: return "restoringClipboard"
         case .failed: return "failed"
         }
     }
@@ -107,6 +122,91 @@ private final class SessionFixture {
 
 @MainActor
 enum DictationSessionChecks {
+    static func restartDuringClipboardRestoration() async throws {
+        for origin in [RecordingOrigin.manual, .hotkeyToggle, .hotkeyHold] {
+            let f = SessionFixture()
+            try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardAutopaste, maxRecordingSeconds: 10)))
+            let cleanup = PipelineGate()
+            f.output.gate = cleanup
+            f.output.result = .paste(.restoreFailed)
+            try await f.record()
+            let first = f.session.state.context!.id
+            f.session.stop()
+            try await eventually { cleanup.entered }
+            try unitExpect(f.session.state.isBusy)
+            f.output.pasteRead?()
+            // Clipboard restoration is deliberately held open. Recording must already be available.
+            try await eventually { !f.session.state.isBusy }
+            try unitEqual(f.recorder.cancels, [first])
+            try unitExpect(f.session.lastOutcome == nil) // No premature success or restoration claim.
+            f.session.cancel(); f.session.stop()
+            if origin == .hotkeyToggle { f.session.toggle(prepare: { "fixture-key" }) }
+            else { f.session.start(origin: origin, prepare: { "fixture-key" }) }
+            try await f.wait("recording")
+            let second = f.session.state.context!.id
+            try unitExpect(second != first)
+            cleanup.open()
+            try await eventually { f.output.completions == 1 }
+            try unitEqual(f.session.state.context?.id, second)
+            try unitEqual(f.session.state.tag, "recording")
+            try unitExpect(f.session.lastOutcome == nil) // An old restore failure cannot fail this recording.
+            try unitEqual(f.recorder.cancels, [first])
+            f.output.gate = nil
+            f.output.result = .copied
+            f.transcriber.response = "Second dictation"
+            if origin == .hotkeyHold { f.session.holdReleased() } else { f.session.stop() }
+            try await f.wait("idle")
+            try unitEqual(f.session.lastTranscript, "Second dictation")
+            try unitEqual(f.session.lastOutcome, .copied)
+            try unitEqual(f.recorder.cancels, [first, second])
+            await f.session.shutdown()
+        }
+    }
+
+    static func clipboardRestorationCompletionAndShutdown() async throws {
+        for result: ClipboardPasteResult in [.restored, .clipboardChanged, .restoreFailed] {
+            let f = SessionFixture()
+            try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardAutopaste, maxRecordingSeconds: 10)))
+            let cleanup = PipelineGate()
+            f.output.gate = cleanup
+            f.output.result = .paste(result)
+            try await f.record(); f.session.stop()
+            try await eventually { cleanup.entered }
+            f.output.pasteRead?()
+            try await eventually { !f.session.state.isBusy }
+            cleanup.open()
+            try await f.wait(result == .restoreFailed ? "failed" : "idle")
+            try unitEqual(f.session.lastOutcome, .paste(result))
+            try unitEqual(f.recorder.cancels.count, 1)
+            f.output.pasteRead?() // A late progress callback must not reopen a finished delivery.
+            try unitEqual(f.session.state.tag, result == .restoreFailed ? "failed" : "idle")
+            await f.session.shutdown()
+        }
+        for restart in [false, true] {
+            let f = SessionFixture()
+            try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardAutopaste, maxRecordingSeconds: 10)))
+            let cleanup = PipelineGate()
+            f.output.gate = cleanup
+            f.output.result = .paste(.restored)
+            try await f.record(); f.session.stop()
+            try await eventually { cleanup.entered }
+            f.output.pasteRead?()
+            try await eventually { !f.session.state.isBusy }
+            if restart { try await f.record() }
+            var returned = false
+            let shutdown = Task { await f.session.shutdown(); returned = true }
+            try await f.wait("idle")
+            try unitExpect(!returned)
+            cleanup.open()
+            await shutdown.value
+            f.output.pasteRead?()
+            try unitEqual(f.session.state.tag, "idle")
+            try unitExpect(f.session.lastOutcome == nil)
+            try unitEqual(f.recorder.cancels.count, restart ? 2 : 1)
+            try unitEqual(f.output.drains, 1)
+        }
+    }
+
     static func commandsInterruptMeterWait() async throws {
         for command in ["stop", "toggle", "release", "cancel", "shutdown"] {
             let f = SessionFixture()
@@ -391,6 +491,8 @@ enum DictationSessionChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("session: restart while clipboard restores and ignore stale completion", restartDuringClipboardRestoration),
+        ("session: clipboard restoration outcomes and shutdown barrier", clipboardRestorationCompletionAndShutdown),
         ("session: stop, toggle, hold release, cancel and shutdown interrupt the meter wait", commandsInterruptMeterWait),
         ("session: preparation release, cancellation, shutdown and recovery", preparationCommandsAndRecovery),
         ("session: one ordered workflow and output completion", workflowAndOutputCompletion),
@@ -406,6 +508,8 @@ enum DictationSessionChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class DictationSessionTests: XCTestCase {
+    func testRestartDuringClipboardRestoration() async throws { try await DictationSessionChecks.restartDuringClipboardRestoration() }
+    func testClipboardRestorationCompletionAndShutdown() async throws { try await DictationSessionChecks.clipboardRestorationCompletionAndShutdown() }
     func testCommandsInterruptMeterWait() async throws { try await DictationSessionChecks.commandsInterruptMeterWait() }
     func testPreparationCommandsAndRecovery() async throws { try await DictationSessionChecks.preparationCommandsAndRecovery() }
     func testWorkflowAndOutputCompletion() async throws { try await DictationSessionChecks.workflowAndOutputCompletion() }
