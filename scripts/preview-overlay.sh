@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT_DIR/dist/apps.noindex/Voxa Overlay Preview.app"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
-ditto "$ROOT_DIR/Sources/VoxaMenuBar/Resources/Sounds" "$APP_DIR/Contents/Resources/Sounds"
+ditto "$ROOT_DIR/Sources/Voxa/Resources/Sounds" "$APP_DIR/Contents/Resources/Sounds"
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -16,8 +16,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 swiftc -parse-as-library -module-cache-path "$ROOT_DIR/.build/preview-module-cache" \
-  "$ROOT_DIR/Sources/VoxaMenuBar/ActivityOverlay.swift" \
-  "$ROOT_DIR/Sources/VoxaMenuBar/DictationSounds.swift" \
+  "$ROOT_DIR/Sources/Voxa/ActivityOverlay.swift" \
+  "$ROOT_DIR/Sources/Voxa/DictationSounds.swift" \
   "$ROOT_DIR/scripts/preview/OverlayPreview.swift" \
   -o "$APP_DIR/Contents/MacOS/VoxaOverlayPreview"
 printf 'Built preview: %s\n' "$APP_DIR"

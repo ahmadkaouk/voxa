@@ -10,7 +10,7 @@ Open `Package.swift` in Xcode or use Swift 6.0+ from the command line:
 
 ```bash
 swift build
-swift run voxa-menubar
+swift run voxa
 ./scripts/check.sh
 ```
 

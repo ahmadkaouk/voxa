@@ -3,7 +3,7 @@ import SwiftUI
 
 @main
 @MainActor
-struct VoxaMenuBarApp: App {
+struct VoxaApp: App {
     @NSApplicationDelegateAdaptor(VoxaAppDelegate.self) private var appDelegate
 
     init() {
@@ -14,14 +14,14 @@ struct VoxaMenuBarApp: App {
         MenuBarExtra {
             VoxaPopoverView(controller: appDelegate.controller)
         } label: {
-            VoxaMenuBarLabel(controller: appDelegate.controller)
+            MenuBarLabel(controller: appDelegate.controller)
         }
         .menuBarExtraStyle(.window)
     }
 }
 
 @MainActor
-private struct VoxaMenuBarLabel: View {
+private struct MenuBarLabel: View {
     @ObservedObject var controller: AppController
     var body: some View { Label("Voxa", systemImage: controller.menuBarSymbol) }
 }

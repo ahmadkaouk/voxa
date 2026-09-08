@@ -7,7 +7,7 @@ final class GlobalHotkeyBridge {
     var onHoldActivated: (() -> Void)?
     var onHoldDeactivated: (() -> Void)?
 
-    private let queue = DispatchQueue(label: "voxa.menubar.hotkeys")
+    private let queue = DispatchQueue(label: "com.voxa.hotkeys")
     private let overlapDelay: DispatchTimeInterval = .milliseconds(160)
 
     private var isEnabled = true

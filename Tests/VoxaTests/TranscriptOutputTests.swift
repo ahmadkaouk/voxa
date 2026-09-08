@@ -3,7 +3,7 @@ import AppKit
 import Foundation
 #if !VOXA_STANDALONE_TESTS
 import XCTest
-@testable import VoxaMenuBar
+@testable import Voxa
 #endif
 
 private struct OutputCheckFailure: Error, CustomStringConvertible {
