@@ -115,9 +115,18 @@ final class AudioWAVEncoder {
             guard status != .error else { throw error ?? AudioRecorderError.conversionFailed as NSError }
             if let samples = output.floatChannelData?[0] {
                 let count = min(Int(output.frameLength), maximumOutputFrames - pcm.count / 2)
-                for index in 0..<count {
-                    let sample = samples[index].isFinite ? max(-1, min(1, samples[index])) : 0
-                    pcm.appendLittleEndian(Int16((sample * Float(Int16.max)).rounded()))
+                if count > 0 {
+                    // Grow once per converted block, then fill its bytes without per-sample appends.
+                    let offset = pcm.count
+                    pcm.count += count * 2
+                    pcm.withUnsafeMutableBytes { (bytes: UnsafeMutableRawBufferPointer) in
+                        for index in 0..<count {
+                            let sample = samples[index].isFinite ? max(-1, min(1, samples[index])) : 0
+                            let value = UInt16(bitPattern: Int16((sample * Float(Int16.max)).rounded()))
+                            bytes[offset + index * 2] = UInt8(truncatingIfNeeded: value)
+                            bytes[offset + index * 2 + 1] = UInt8(value >> 8)
+                        }
+                    }
                 }
             }
             if status == .endOfStream || (!ending && status == .inputRanDry) { return }

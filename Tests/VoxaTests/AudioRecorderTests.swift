@@ -113,6 +113,37 @@ enum AudioRecorderChecks {
         try unitEqual(decoded.fileFormat.channelCount, 1)
     }
 
+    static func pcmBytePacking() async throws {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+        // Literal little-endian bytes cover sign, rounding, clipping, and non-finite input.
+        let pattern: [(Float, [UInt8])] = [
+            (0, [0, 0]), (1, [0xff, 0x7f]), (-1, [0x01, 0x80]),
+            (0.5, [0, 0x40]), (-0.5, [0, 0xc0]),
+            (Float(0x1234) / 32767, [0x34, 0x12]), (-Float(0x2345) / 32767, [0xbb, 0xdc]),
+            (2, [0xff, 0x7f]), (-2, [0x01, 0x80]),
+            (.nan, [0, 0]), (.infinity, [0, 0]), (-.infinity, [0, 0])
+        ]
+        for (frames, limit, expectedFrames) in [(20_123, 2.0, 20_123), (17_777, 1.0, 16_000)] {
+            let expected = Data((0..<expectedFrames).flatMap { pattern[$0 % pattern.count].1 })
+            for chunk in [317, 4096, 8193] {
+                let encoder = try AudioWAVEncoder(format: format, limit: limit)
+                for offset in stride(from: 0, to: frames, by: chunk) {
+                    let count = min(chunk, frames - offset)
+                    let input = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count))!
+                    input.frameLength = AVAudioFrameCount(count)
+                    for index in 0..<count {
+                        input.floatChannelData![0][index] = pattern[(offset + index) % pattern.count].0
+                    }
+                    try encoder.append(input)
+                }
+                let wav = try encoder.finish()
+                try unitEqual(wav.count, expected.count + 44)
+                try unitEqual(unsigned(wav, at: 40, bytes: 4), UInt32(expected.count))
+                try unitEqual(Data(wav.dropFirst(44)), expected)
+            }
+        }
+    }
+
     static func chunkContinuity() async throws {
         for rate in [44_100.0, 48_000] {
             let whole = try encode(rate: rate, channels: 2, frames: 22_050, chunk: 22_050)
@@ -394,6 +425,7 @@ enum AudioRecorderChecks {
 
     static let all: [(String, () async throws -> Void)] = [
         ("recorder: input rates, channels and independent WAV decoding", formatsAndWAV),
+        ("recorder: PCM byte order and rounding across block boundaries", pcmBytePacking),
         ("recorder: resampler continuity across arbitrary chunks", chunkContinuity),
         ("recorder: silence, clipping, downmix and non-finite samples", silenceClippingAndDownmix),
         ("recorder: speech meter sensitivity, peaks and smoothing without audio gain", speechMeterResponse),
@@ -428,6 +460,7 @@ private enum AudioRecorderChecksRunner {
 #else
 final class AudioRecorderTests: XCTestCase {
     func testFormatsAndWAV() async throws { try await AudioRecorderChecks.formatsAndWAV() }
+    func testPCMBytePacking() async throws { try await AudioRecorderChecks.pcmBytePacking() }
     func testChunkContinuity() async throws { try await AudioRecorderChecks.chunkContinuity() }
     func testSilenceClippingAndDownmix() async throws { try await AudioRecorderChecks.silenceClippingAndDownmix() }
     func testSpeechMeterResponse() async throws { try await AudioRecorderChecks.speechMeterResponse() }
