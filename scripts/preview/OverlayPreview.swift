@@ -14,7 +14,7 @@ final class PreviewController: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             guard let self, self.phase == .listening else { return }
             let t = Date.timeIntervalSinceReferenceDate
-            self.overlay.model.level = self.silent ? 0 : 0.12 + pow((sin(t * 2.8) + 1) / 2, 2) * 0.7
+            self.overlay.updateLevel(self.silent ? 0 : 0.12 + pow((sin(t * 2.8) + 1) / 2, 2) * 0.7)
         }
     }
 

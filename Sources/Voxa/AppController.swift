@@ -57,8 +57,9 @@ final class AppController: ObservableObject {
                 self.present(next, level: self.session.level)
             }.store(in: &subscriptions)
         session.$level.removeDuplicates().sink { [weak self] level in
-            guard let self else { return }
-            if case .recording = self.session.state { self.show(.listening, title: "Listening", level: level) }
+            guard let self, self.isReady, !self.closing,
+                  case .recording = self.session.state else { return }
+            self.overlay.updateLevel(level)
         }.store(in: &subscriptions)
         observe(.default, NSApplication.didBecomeActiveNotification) { $0.refreshPermissions() }
         let workspace = NSWorkspace.shared.notificationCenter
