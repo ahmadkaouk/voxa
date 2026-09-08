@@ -37,7 +37,7 @@ enum TranscriptOutputOutcome: Equatable {
 final class TranscriptOutput: @unchecked Sendable {
     private let worker = DispatchQueue(label: "com.voxa.transcript-output", qos: .userInitiated)
     private let copyText: (String) -> Bool
-    private let pasteText: (String, pid_t?) -> ClipboardPasteResult
+    private let pasteText: (String, pid_t?, () -> Void) -> ClipboardPasteResult
 
     init(copy: @escaping (String) -> Bool = { text in
         onPasteboardThread {
@@ -45,9 +45,9 @@ final class TranscriptOutput: @unchecked Sendable {
             board.clearContents()
             return board.setString(text, forType: .string)
         }
-    }, paste: @escaping (String, pid_t?) -> ClipboardPasteResult = { text, target in
+    }, paste: @escaping (String, pid_t?, () -> Void) -> ClipboardPasteResult = { text, target, onRead in
         let board = onPasteboardThread { NSPasteboard.general }
-        return ClipboardAutopaster(pasteboard: board).paste(text) { ownedCount in
+        return ClipboardAutopaster(pasteboard: board).paste(text, onRead: onRead) { ownedCount in
             guard let target, target != getpid() else { return false }
             return sendPasteShortcut(to: target, clipboardChangeCount: ownedCount)
         }
@@ -56,8 +56,10 @@ final class TranscriptOutput: @unchecked Sendable {
         pasteText = paste
     }
 
+    /// The read callback permits another recording; the result still waits for clipboard cleanup.
     @MainActor
-    func deliver(_ text: String, mode: OutputModeOption) async -> TranscriptOutputOutcome {
+    func deliver(_ text: String, mode: OutputModeOption,
+                 onPasteRead: @escaping @MainActor @Sendable () -> Void = {}) async -> TranscriptOutputOutcome {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .empty }
         let target = mode == .clipboardAutopaste ? NSWorkspace.shared.frontmostApplication?.processIdentifier : nil
         return await withCheckedContinuation { continuation in
@@ -66,7 +68,10 @@ final class TranscriptOutput: @unchecked Sendable {
                 switch mode {
                 case .none: outcome = .disabled
                 case .clipboardOnly: outcome = self.copyText(text) ? .copied : .copyFailed
-                case .clipboardAutopaste: outcome = .paste(self.pasteText(text, target))
+                case .clipboardAutopaste:
+                    outcome = .paste(self.pasteText(text, target) {
+                        DispatchQueue.main.async { onPasteRead() }
+                    })
                 }
                 continuation.resume(returning: outcome)
             }

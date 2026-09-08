@@ -19,7 +19,7 @@ enum HotkeyOptionChecks {
         try unitEqual(HotkeyOption.optionG.label, "Opt+G")
     }
 
-    static func testLegacyHotkeysRoundTrip() throws {
+    static func testPresetHotkeysRoundTrip() throws {
         try unitEqual(HotkeyOption.fromRawOrDefault("right_option"), .rightOption)
         try unitEqual(HotkeyOption.fromRawOrDefault("fn"), .functionKey)
         try unitEqual(HotkeyOption.fromRawOrDefault("fn_space"), .functionSpace)
@@ -67,7 +67,7 @@ enum HotkeyOptionChecks {
 
     static let all: [(String, () throws -> Void)] = [
         ("HotkeyOption.testDefaultHotkeysRoundTrip", testDefaultHotkeysRoundTrip),
-        ("HotkeyOption.testLegacyHotkeysRoundTrip", testLegacyHotkeysRoundTrip),
+        ("HotkeyOption.testPresetHotkeysRoundTrip", testPresetHotkeysRoundTrip),
         ("HotkeyOption.testCustomHotkeyRoundTripPreservesBinding", testCustomHotkeyRoundTripPreservesBinding),
         ("HotkeyOption.testMultiKeyHotkeyRoundTripPreservesBinding", testMultiKeyHotkeyRoundTripPreservesBinding),
         ("HotkeyOption.testSubsetDetectionSupportsOverlapResolution", testSubsetDetectionSupportsOverlapResolution),
@@ -77,7 +77,7 @@ enum HotkeyOptionChecks {
 #if !VOXA_STANDALONE_TESTS
 final class HotkeyOptionTests: XCTestCase {
     func testDefaultHotkeysRoundTrip() throws { try HotkeyOptionChecks.testDefaultHotkeysRoundTrip() }
-    func testLegacyHotkeysRoundTrip() throws { try HotkeyOptionChecks.testLegacyHotkeysRoundTrip() }
+    func testPresetHotkeysRoundTrip() throws { try HotkeyOptionChecks.testPresetHotkeysRoundTrip() }
     func testCustomHotkeyRoundTripPreservesBinding() throws { try HotkeyOptionChecks.testCustomHotkeyRoundTripPreservesBinding() }
     func testMultiKeyHotkeyRoundTripPreservesBinding() throws { try HotkeyOptionChecks.testMultiKeyHotkeyRoundTripPreservesBinding() }
     func testSubsetDetectionSupportsOverlapResolution() throws { try HotkeyOptionChecks.testSubsetDetectionSupportsOverlapResolution() }

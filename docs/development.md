@@ -60,14 +60,41 @@ This check does not replace or launch either supplied app.
 | `VOXA_DIST_DIR` | Select a separate packaging output and backup directory. |
 | `VOXA_INSTALL_DIR` | Change the installation directory; defaults to `/Applications`. |
 | `VOXA_CODESIGN_IDENTITY` | Select the identity used to sign the app. |
-| `VOXA_CONFIG_PATH` | Select the legacy TOML file imported before native settings have been saved. |
 | `VOXA_OPENAI_TRANSCRIPTIONS_URL` | Override the transcription endpoint for development. |
 | `OPENAI_API_KEY` | Supply a key for environment mode, or as a fallback when the Keychain item is missing. |
 
-An imported `api_key_source = "env"` selects read-only environment mode. Native
-settings and Keychain access are described in the [architecture guide](architecture.md).
+Settings and Keychain access are described in the [architecture guide](architecture.md).
 
 ## Manual checks
+
+To collect a dictation timing breakdown, enable the optional local JSON-lines log
+and restart the packaged app:
+
+```bash
+defaults write com.voxa.menubar VoxaTimingLogPath -string "$PWD/dist/dictation-timing.jsonl"
+```
+
+The log records audio finalization, the transcription request (including upload
+and response decoding), output preparation, and the clipboard-read signal.
+Clipboard restoration is timed separately. The read signal is a delivery proxy;
+use a receiving text window to measure actual insertion.
+
+The `transcription` measurements include audio/multipart sizes and URLSession's
+per-transaction connection setup, request sending, waiting for the first response
+byte, and response receiving. Connection reuse, protocol and status are recorded.
+Waiting includes network travel and server processing; it is not model inference
+time alone. Sending ends when the client sends the last byte, not when the server
+acknowledges it. DNS and connection details are subsets of `pre_request`, and TLS
+is included in `connect_including_tls`; do not sum these overlapping intervals.
+Unavailable measurements are omitted, including connection timings on reuse.
+
+Logs contain measurements, recording IDs and outcomes, without audio, transcripts,
+credentials, URLs or headers. File work runs after delivery. To disable logging,
+delete the override and restart Voxa:
+
+```bash
+defaults delete com.voxa.menubar VoxaTimingLogPath
+```
 
 Build the overlay preview with `./scripts/preview-overlay.sh`, then open
 `dist/apps.noindex/Voxa Overlay Preview.app`. It uses the production overlay and

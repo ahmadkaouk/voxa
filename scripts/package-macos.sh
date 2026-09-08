@@ -260,7 +260,6 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_PATH"
 
 cp "$BUILT_EXECUTABLE" "$APP_EXECUTABLE"
 cp -R "$ROOT_DIR/Sources/Voxa/Resources/Sounds" "$APP_RESOURCES_DIR/Sounds"
-cp "$ROOT_DIR/Sources/Voxa/Resources/ThirdPartyNotices.txt" "$APP_RESOURCES_DIR/ThirdPartyNotices.txt"
 chmod +x "$APP_EXECUTABLE"
 
 cat > "$INFO_PLIST_PATH" <<'EOF'

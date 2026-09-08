@@ -49,7 +49,8 @@ struct TranscriptionClient: Sendable {
         return config
     }
 
-    func transcribe(_ audio: Data, model: ModelOption, apiKey: String) async throws -> String {
+    func transcribe(_ audio: Data, model: ModelOption, apiKey: String,
+                    timing: TranscriptionTiming? = nil) async throws -> String {
         try Task.checkCancellation()
         guard !audio.isEmpty else { throw TranscriptionError.invalidAudio }
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -67,12 +68,13 @@ struct TranscriptionClient: Sendable {
         body.append(audio)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         request.httpBody = body
+        timing?.prepare(audioBytes: audio.count, multipartBytes: body.count)
 
         let data: Data
         let response: URLResponse
         do {
             // A redirect must not silently send this audio to a different destination.
-            (data, response) = try await session.data(for: request, delegate: NoTranscriptionRedirects())
+            (data, response) = try await session.data(for: request, delegate: TranscriptionTaskDelegate(timing: timing))
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
             if (error as? URLError)?.code == .timedOut { throw TranscriptionError.timeout }
@@ -96,7 +98,16 @@ struct TranscriptionClient: Sendable {
     }
 }
 
-private final class NoTranscriptionRedirects: NSObject, URLSessionTaskDelegate {
+private final class TranscriptionTaskDelegate: NSObject, URLSessionTaskDelegate {
+    private let timing: TranscriptionTiming?
+
+    init(timing: TranscriptionTiming?) { self.timing = timing }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didFinishCollecting metrics: URLSessionTaskMetrics) {
+        timing?.collect(metrics)
+    }
+
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping (URLRequest?) -> Void) {

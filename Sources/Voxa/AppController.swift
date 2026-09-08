@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 
 /// Application setup, presentation effects, and OS lifecycle wiring. DictationSession owns all
-/// recording state; there is no connection state, command queue, or second workflow here.
+/// recording state.
 @MainActor
 final class AppController: ObservableObject {
     let session: DictationSession
@@ -34,7 +34,8 @@ final class AppController: ObservableObject {
     private var capturingHotkey = false
 
     init() {
-        session = DictationSession(transcriber: TranscriptionClient(endpoint: TranscriptionClient.configuredEndpoint()))
+        session = DictationSession(transcriber: TranscriptionClient(endpoint: TranscriptionClient.configuredEndpoint()),
+                                   timingLog: DictationTimingLog.configured())
         store = PreferencesStore()
         keychain = Keychain()
         hotkeys.onToggleActivated = { [weak self] in
@@ -57,8 +58,9 @@ final class AppController: ObservableObject {
                 self.present(next, level: self.session.level)
             }.store(in: &subscriptions)
         session.$level.removeDuplicates().sink { [weak self] level in
-            guard let self else { return }
-            if case .recording = self.session.state { self.show(.listening, title: "Listening", level: level) }
+            guard let self, self.isReady, !self.closing,
+                  case .recording = self.session.state else { return }
+            self.overlay.updateLevel(level)
         }.store(in: &subscriptions)
         observe(.default, NSApplication.didBecomeActiveNotification) { $0.refreshPermissions() }
         let workspace = NSWorkspace.shared.notificationCenter
@@ -91,7 +93,7 @@ final class AppController: ObservableObject {
     var menuBarSymbol: String {
         if setupError != nil { return "exclamationmark.triangle" }
         switch session.state {
-        case .idle, .starting, .recording: return "waveform"
+        case .idle, .starting, .recording, .restoringClipboard: return "waveform"
         case .finishing, .transcribing: return "waveform.and.mic"
         case .delivering: return "square.and.arrow.up"
         case .failed: return "exclamationmark.triangle"
@@ -108,7 +110,7 @@ final class AppController: ObservableObject {
                 let loaded = try store.load()
                 preferences = loaded
                 _ = session.updateSettings(loaded.dictation)
-                try await LegacyCaptureGuard.retireLaunchAgent()
+                try CaptureGuard.check()
                 let key = try await keychain.value(source: loaded.apiKeySource)
                 try Task.checkCancellation()
                 guard !closing else { return }
@@ -130,7 +132,7 @@ final class AppController: ObservableObject {
         let source = preferences.apiKeySource
         return { [weak self] in
             guard let self, !self.closing else { throw CancellationError() }
-            try await LegacyCaptureGuard.check()
+            try CaptureGuard.check()
             defer { self.permissions = Permissions.current() }
             try await Permissions.requestMicrophone()
             try Task.checkCancellation()
@@ -139,7 +141,7 @@ final class AppController: ObservableObject {
                 throw TranscriptionError.authentication
             }
             try Task.checkCancellation()
-            try await LegacyCaptureGuard.check() // An older app may have launched during a prompt.
+            try CaptureGuard.check() // Another copy may have launched during a prompt.
             return key
         }
     }
@@ -230,6 +232,7 @@ final class AppController: ObservableObject {
         case .finishing: show(.transcribing, title: "Finishing recording…")
         case .transcribing: show(.transcribing, title: "Transcribing")
         case .delivering: show(.transcribing, title: "Delivering transcript…")
+        case .restoringClipboard: show(.idle, title: "Start dictation")
         case .failed: overlay.hide()
         case .idle:
             if let outcome = session.lastOutcome {

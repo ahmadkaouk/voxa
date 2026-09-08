@@ -3,7 +3,7 @@
 Voxa is one macOS application process. The root `voxa` Swift package contains the
 `Voxa` application target in `Sources/Voxa` and the `VoxaTests` target in
 `Tests/VoxaTests`, with `voxa` as the development executable. The deployment
-target is macOS 13; building requires Swift 6.0+ for the pinned TOMLDecoder dependency.
+target is macOS 13; development uses Swift 6.0+.
 
 ```text
 Voxa.app
@@ -25,14 +25,20 @@ overlay presentation, and shutdown. Local view state controls presentation only.
 Each recording has an ID and settings snapshot. The session checks both its ID
 and expected state after suspension so a late callback cannot complete a newer
 recording. States are `idle`, `starting`, `recording`, `finishing`, `transcribing`,
-`delivering`, and `failed`. Stop or cancel during preparation is remembered;
-releasing a hold shortcut during a permission prompt cannot start capture later.
+`delivering`, `restoringClipboard`, and `failed`. Stop or cancel during preparation
+is remembered; releasing a hold shortcut during a permission prompt cannot start capture later.
 Cancellation is limited to recording. Normal Quit invalidates pending work and
 awaits capture teardown and clipboard cleanup before the process exits.
 
+After a paste request is sent and its clipboard text is read, `restoringClipboard`
+permits another recording while the output worker finishes its 500 ms settling
+interval and restoration. The recorder is released before delivery begins.
+Later pastes and copies remain queued behind cleanup, and its final result only
+updates the session if no newer recording has started. A clipboard read does not
+produce a success indicator before restoration finishes.
+
 The three workers are constructed directly. Small protocols and injected closures
-allow deterministic tests; there is no service container, event bus, backend
-selector, separate core package, daemon, socket, or external control CLI.
+allow deterministic tests.
 
 ## Recording, transcription, and delivery
 
@@ -50,10 +56,10 @@ signal; macOS does not acknowledge universal paste success.
 
 ## Settings, credentials, and permissions
 
-`PreferencesStore` saves one versioned UserDefaults value. On first use it parses
-the whole legacy TOML with TOMLDecoder 0.4.5, validates it, then marks import
-complete atomically with the saved settings. Invalid imports remain retryable.
-The original `~/Library/Application Support/voxa/config.toml` is preserved.
+`PreferencesStore` validates and saves one versioned UserDefaults value under
+`nativePreferences.v1`. Existing settings keep the same format and storage key.
+A first launch saves the defaults; invalid saved settings produce a recoverable
+setup error. Failed saves restore the previous value.
 
 `Keychain` uses native Security APIs for service `com.voxa`, account
 `OPENAI_API_KEY`. The environment source is read-only. Keychain mode retains the
@@ -67,29 +73,22 @@ permissions and UserDefaults remain associated with Voxa. Microphone access is
 requested before capture. Permission state and hotkeys refresh when returning to
 the app or waking the Mac.
 
-## Installation, upgrades, and recovery
+## Installation and recovery
 
-`scripts/package-macos.sh` builds and signs the Swift executable, icons, sounds,
-and license notices, then creates a DMG. `scripts/verify-native-bundle.sh` checks
+`scripts/package-macos.sh` builds and signs the Swift executable, icons, and sounds
+with their license, then creates a DMG. `scripts/verify-native-bundle.sh` checks
 the signature, identity, resources, deployment target, and exactly one executable.
 `scripts/install.sh` verifies a staged copy and backs up the existing signed app
 before replacement. A failed final move restores the previous app. Replacing a
 running app is refused.
 
-`LegacyCaptureGuard` is retained for upgrades. It blocks capture if another Voxa
-copy, old Recorder Preview, or legacy recorder is running. During setup it
-validates and unregisters only the current user's recognized `com.voxa.daemon`
-LaunchAgent, then archives its unchanged plist under
-`~/Library/Application Support/voxa/migration/`. Unknown jobs fail with a retryable
-explanation. It does not launch a helper or modify TOML, credentials, or unrelated
-services.
+`CaptureGuard` blocks setup and recording if another Voxa copy is running.
+It checks through AppKit before and after permission/credential work, so a copy
+launched while a prompt is open is also detected.
 
 Signed backups stay under `dist/apps.noindex/backups/`; preserve that directory
 before cleaning build artifacts. To roll back, quit Voxa and restore the entire
-preserved signed app bundle to `/Applications/Voxa.app`. A legacy app can recreate
-its LaunchAgent and reuse the original TOML and Keychain. Settings changed only in
-the native app remain in UserDefaults and do not rewrite the legacy TOML. A later
-native launch retires the recreated registration again.
+preserved signed app bundle to `/Applications/Voxa.app`.
 
 ## Validation
 
@@ -97,7 +96,7 @@ native launch retires the recreated registration again.
 available; Command Line Tools run the same shared assertions through standalone
 harnesses. Discovery guards reject unregistered test files instead of silently
 skipping them. Fixtures cover capture/conversion, session ordering and cleanup,
-HTTP errors, output/clipboard recovery, settings/Keychain, and legacy upgrades.
+HTTP errors, output/clipboard recovery, settings/Keychain, and duplicate-app protection.
 
 `scripts/test-install.sh` exercises clean installation, signed updates/backups,
 failure recovery, and the running-app guard in temporary directories. See the

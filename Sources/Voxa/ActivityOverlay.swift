@@ -185,6 +185,13 @@ final class ActivityOverlayController {
     private var presentationGeneration = 0
     private var hiding = false
 
+    /// Meter updates leave presentation, content, and control callbacks in place.
+    func updateLevel(_ level: Double) {
+        let level = level.isFinite ? max(0, min(level, 1)) : 0
+        guard model.level != level else { return }
+        model.level = level
+    }
+
     func show(
         _ phase: ActivityOverlayPhase,
         content: ActivityOverlayContent,
@@ -195,7 +202,7 @@ final class ActivityOverlayController {
     ) {
         let previousPhase = model.phase
         model.content = content
-        model.level = level.isFinite ? max(0, min(level, 1)) : 0
+        updateLevel(level)
         model.onStart = onStart
         model.onCancel = onCancel
         model.onStop = onStop

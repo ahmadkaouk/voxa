@@ -39,9 +39,13 @@ private enum OutputChecks {
             second.setString("file:///tmp/voxa-test.txt", forType: .fileURL)
             try expect(onPasteboardThread { board.writeObjects([first, second]) }, "Fixture must be writable")
             let original = ClipboardSnapshot(pasteboard: board)!
-            let result = ClipboardAutopaster(pasteboard: board, readTimeout: 0.3, settlingDelay: 0.02).paste("New dictation") { _ in
+            var reads = 0
+            let result = ClipboardAutopaster(pasteboard: board, readTimeout: 0.3, settlingDelay: 0.02).paste("New dictation", onRead: {
+                if onPasteboardThread({ board.string(forType: .string) }) == "New dictation" { reads += 1 }
+            }) { _ in
                 onPasteboardThread { board.string(forType: .string) } == "New dictation"
             }
+            try expect(reads == 1, "Readiness must be reported once, before the original clipboard is restored")
             try expect(result == .restored, "Consumed paste must restore clipboard: \(result)")
             try expect(ClipboardSnapshot(pasteboard: board)?.items == original.items, "Every item and representation must round trip")
         }
@@ -61,7 +65,9 @@ private enum OutputChecks {
         for sent in [false, true] {
             try withPasteboard { board in
                 put("Original", on: board)
-                let result = ClipboardAutopaster(pasteboard: board, readTimeout: 0.04, settlingDelay: 0.01).paste("Manual recovery") { _ in sent }
+                var reads = 0
+                let result = ClipboardAutopaster(pasteboard: board, readTimeout: 0.04, settlingDelay: 0.01).paste("Manual recovery", onRead: { reads += 1 }) { _ in sent }
+                try expect(reads == 0, "Failed or unconsumed paste must not report early readiness")
                 try expect(result == (sent ? .unconfirmed : .manualPaste), "Unconsumed text must be retained: \(result)")
                 try expect(onPasteboardThread { board.string(forType: .string) } == "Manual recovery", "Manual paste must outlive the temporary provider")
             }
@@ -71,10 +77,12 @@ private enum OutputChecks {
     static func newerCopy() throws {
         try withPasteboard { board in
             put("Original", on: board)
-            let result = ClipboardAutopaster(pasteboard: board).paste("Dictation") { _ in
+            var reads = 0
+            let result = ClipboardAutopaster(pasteboard: board).paste("Dictation", onRead: { reads += 1 }) { _ in
                 put("User copied something newer", on: board)
                 return true
             }
+            try expect(reads == 0, "An intervening clipboard owner must not report early readiness")
             try expect(result == .clipboardChanged, "Newer clipboard owner must be detected")
             try expect(onPasteboardThread { board.string(forType: .string) } == "User copied something newer", "Never overwrite a newer copy")
         }
