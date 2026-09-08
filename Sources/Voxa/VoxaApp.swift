@@ -344,7 +344,7 @@ struct VoxaPopoverView: View {
     private var primaryActionAccessibilityHint: String {
         switch primaryActionKind {
         case .addAPIKey: return "Opens the secure API key editor"
-        case .setup: return "Retries settings import and access checks"
+        case .setup: return "Reloads settings and checks access"
         case .start, .retry: return "Starts a new dictation"
         case .stop: return "Stops recording and begins transcription"
         case .working: return "Voxa is processing the current operation"

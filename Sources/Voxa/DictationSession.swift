@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-// Small test boundaries for the three concrete components; no alternate backend or event bus.
+// Small test boundaries for the three concrete components.
 protocol DictationRecording: Sendable {
     func start(id: UUID, limit: TimeInterval) async throws
     func stop(id: UUID) async throws -> Data
@@ -72,7 +72,7 @@ struct DictationClock {
     }
 }
 
-/// The sole owner of native workflow state, including asynchronous recording preparation.
+/// The sole owner of dictation state, including asynchronous recording preparation.
 @MainActor
 final class DictationSession: ObservableObject {
     @Published private(set) var state: DictationState = .idle

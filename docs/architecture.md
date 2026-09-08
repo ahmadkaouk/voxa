@@ -31,8 +31,7 @@ Cancellation is limited to recording. Normal Quit invalidates pending work and
 awaits capture teardown and clipboard cleanup before the process exits.
 
 The three workers are constructed directly. Small protocols and injected closures
-allow deterministic tests; there is no service container, event bus, backend
-selector, separate core package, daemon, socket, or external control CLI.
+allow deterministic tests.
 
 ## Recording, transcription, and delivery
 

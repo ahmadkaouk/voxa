@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 
 /// Application setup, presentation effects, and OS lifecycle wiring. DictationSession owns all
-/// recording state; there is no connection state, command queue, or second workflow here.
+/// recording state.
 @MainActor
 final class AppController: ObservableObject {
     let session: DictationSession
