@@ -108,7 +108,7 @@ final class AppController: ObservableObject {
                 let loaded = try store.load()
                 preferences = loaded
                 _ = session.updateSettings(loaded.dictation)
-                try await LegacyCaptureGuard.retireLaunchAgent()
+                try CaptureGuard.check()
                 let key = try await keychain.value(source: loaded.apiKeySource)
                 try Task.checkCancellation()
                 guard !closing else { return }
@@ -130,7 +130,7 @@ final class AppController: ObservableObject {
         let source = preferences.apiKeySource
         return { [weak self] in
             guard let self, !self.closing else { throw CancellationError() }
-            try await LegacyCaptureGuard.check()
+            try CaptureGuard.check()
             defer { self.permissions = Permissions.current() }
             try await Permissions.requestMicrophone()
             try Task.checkCancellation()
@@ -139,7 +139,7 @@ final class AppController: ObservableObject {
                 throw TranscriptionError.authentication
             }
             try Task.checkCancellation()
-            try await LegacyCaptureGuard.check() // An older app may have launched during a prompt.
+            try CaptureGuard.check() // Another copy may have launched during a prompt.
             return key
         }
     }

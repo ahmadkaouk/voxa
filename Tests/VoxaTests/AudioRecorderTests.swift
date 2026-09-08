@@ -139,7 +139,7 @@ enum AudioRecorderChecks {
         }
     }
 
-    static func legacyMeterResponse() async throws {
+    static func speechMeterResponse() async throws {
         let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 2)!
         func input(_ pattern: [Float], opposed: Bool = false) -> AVAudioPCMBuffer {
             let input = buffer(format: format, offset: 0, count: 1600)
@@ -153,7 +153,7 @@ enum AudioRecorderChecks {
 
         let encoder = try AudioWAVEncoder(format: format, limit: 1)
         let speech: [Float] = [0, 0.018, -0.016, 0.022, -0.021, 0.014, -0.012, 0.02]
-        // Reference levels captured from the legacy Rust meter for these buffers.
+        // Reference levels for the speech meter response to these buffers.
         // They cover the noise gate, speech sensitivity, attack, and slower release.
         let sequence: [([Float], Double)] = [
             ([0.001, -0.0015, 0.002, -0.002], 0),
@@ -180,7 +180,7 @@ enum AudioRecorderChecks {
 
         let stereoEncoder = try AudioWAVEncoder(format: format, limit: 1)
         try stereoEncoder.append(input([0.5], opposed: true))
-        // The legacy meter measures input channels before mono downmix.
+        // The speech meter measures input channels before mono downmix.
         try unitExpect(abs(stereoEncoder.level - 0.550000012) < 0.000002)
         let stereoPCM = samples(try stereoEncoder.finish())
         try unitExpect(stereoPCM.allSatisfy { $0 == 0 })
@@ -396,7 +396,7 @@ enum AudioRecorderChecks {
         ("recorder: input rates, channels and independent WAV decoding", formatsAndWAV),
         ("recorder: resampler continuity across arbitrary chunks", chunkContinuity),
         ("recorder: silence, clipping, downmix and non-finite samples", silenceClippingAndDownmix),
-        ("recorder: legacy meter sensitivity, peaks and smoothing without audio gain", legacyMeterResponse),
+        ("recorder: speech meter sensitivity, peaks and smoothing without audio gain", speechMeterResponse),
         ("recorder: bounded duration and invalid input", limitsAndInvalidInput),
         ("recorder: bounded handoff, copied samples and overrun", boundedInbox),
         ("recorder: rapid stop, repeated stop and restart", stopAndRestart),
@@ -430,7 +430,7 @@ final class AudioRecorderTests: XCTestCase {
     func testFormatsAndWAV() async throws { try await AudioRecorderChecks.formatsAndWAV() }
     func testChunkContinuity() async throws { try await AudioRecorderChecks.chunkContinuity() }
     func testSilenceClippingAndDownmix() async throws { try await AudioRecorderChecks.silenceClippingAndDownmix() }
-    func testLegacyMeterResponse() async throws { try await AudioRecorderChecks.legacyMeterResponse() }
+    func testSpeechMeterResponse() async throws { try await AudioRecorderChecks.speechMeterResponse() }
     func testLimitsAndInvalidInput() async throws { try await AudioRecorderChecks.limitsAndInvalidInput() }
     func testBoundedInbox() async throws { try await AudioRecorderChecks.boundedInbox() }
     func testStopAndRestart() async throws { try await AudioRecorderChecks.stopAndRestart() }

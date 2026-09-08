@@ -65,7 +65,7 @@ final class AudioWAVEncoder {
             let mixed = Float(max(-1, min(1, value / Double(channelCount))))
             destination[frame] = mixed
         }
-        // Preserve the legacy display response: gate noise, boost speech/peaks, then
+        // Shape the speech meter response: gate noise, boost speech/peaks, then
         // rise quickly and fall gently. Metering never changes the PCM sent to conversion.
         let rms = sqrt(energy / Double(count * channelCount))
         let rmsLevel = sqrt(max(0, rms - 0.003) * 20)

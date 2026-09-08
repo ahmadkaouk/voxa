@@ -9,9 +9,7 @@ INFO="$APP_DIR/Contents/Info.plist"
 [ -n "$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$INFO")" ]
 [ -x "$APP_DIR/Contents/MacOS/Voxa" ]
 [ -s "$APP_DIR/Contents/Resources/Voxa.icns" ]
-[ -s "$APP_DIR/Contents/Resources/ThirdPartyNotices.txt" ]
 [ -d "$APP_DIR/Contents/Resources/Sounds/Zen" ]
-[ ! -e "$APP_DIR/Contents/Resources/bin" ]
 # The final product has one executable. Inspect all files, including nested helper bundles.
 MACHO_COUNT=0
 while IFS= read -r -d '' path; do

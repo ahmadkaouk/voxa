@@ -118,7 +118,7 @@ swift run voxa
 
 The check script uses XCTest when available. With Command Line Tools, it runs
 the same assertions through standalone harnesses. Checks cover recording,
-session state, transcription, clipboard delivery, settings, and upgrade recovery.
+session state, transcription, clipboard delivery, settings, and duplicate-app protection.
 
 ```text
 Package.swift           Swift package definition
@@ -135,11 +135,9 @@ Build outputs in `.build/` and `dist/` are ignored by Git. Preserve
 - [Development guide](docs/development.md): signing, packaging, focused checks,
   previews, and environment overrides.
 - [Architecture](docs/architecture.md): session ownership, audio capture,
-  transcription, clipboard delivery, and upgrades from older versions.
+  transcription, clipboard delivery, and settings.
 
 ## License
 
 Voxa is available under the [MIT License](LICENSE). Bundled sounds have their
-own [CC0 license](Sources/Voxa/Resources/Sounds/Zen/LICENSE-AUDIO);
-dependency notices are included in
-[ThirdPartyNotices.txt](Sources/Voxa/Resources/ThirdPartyNotices.txt).
+own [CC0 license](Sources/Voxa/Resources/Sounds/Zen/LICENSE-AUDIO).

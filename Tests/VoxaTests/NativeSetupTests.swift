@@ -14,102 +14,101 @@ enum NativeSetupChecks {
         try unitExpect(failed)
     }
 
-    static func completeTOMLImport() throws {
-        let custom = HotkeyOption(keyCodes: [0, 1], modifiers: [.command, .shift], keyDisplays: ["A", "S"])
-        let document = """
-        # Quoted keys, literal/multiline strings, Unicode, integer separators, and an unrelated table.
-        "toggle_hotkey" = '''\(custom.persistedValue)'''
-        hold_hotkey = "fn_space"
-        model = "gpt-4o-mini-transcribe"
-        output_mode = "clipboard_only"
-        max_recording_seconds = 1_800
-        api_key_source = 'env'
-        revision = 42
-        [unrelated]
-        """ + "\nnote = " + "\"\"\"\nbonjour 🌍\nsecond line\"\"\"\n"
-        let value = try Preferences.importing(document)
-        try unitEqual(HotkeyOption.fromRaw(value.toggleHotkey), custom)
-        try unitEqual(HotkeyOption.fromRaw(value.holdHotkey), .functionSpace)
-        try unitEqual(value.model, "gpt-transcribe")
-        try unitEqual(value.outputMode, "clipboard_only")
-        try unitEqual(value.maxRecordingSeconds, 1800)
-        try unitEqual(value.apiKeySource, "env")
-        try unitEqual(try Preferences.importing("model='gpt-4o-transcribe'").model, "gpt-transcribe")
-        try unitEqual(try Preferences.importing("api_key_source='legacy-custom'").apiKeySource, "keychain")
-        try unitEqual(try Preferences.importing(""), Preferences())
+    static func duplicateAppProtection() throws {
+        var running: [pid_t] = []
+        let inspect = { try CaptureGuard.check(currentPID: 42, runningProcessIDs: { running }) }
+        try inspect()
+        running = [42]
+        try inspect()
+        // A second copy starting during a prompt must be caught by the next check.
+        running.append(99)
+        do { try inspect(); try unitExpect(false) }
+        catch is CaptureGuard.AnotherCopyRunning { }
+        running = [99]
+        do { try inspect(); try unitExpect(false) }
+        catch is CaptureGuard.AnotherCopyRunning { }
+        running = [42]
+        try inspect()
     }
 
-    static func rejectsInvalidDocuments() throws {
-        for document in ["model='unknown'", "model='gpt-transcribe'\nmodel='gpt-transcribe'",
-                         "toggle_hotkey='unknown'", "toggle_hotkey='fn'\nhold_hotkey='fn'",
-                         "output_mode='unknown'", "max_recording_seconds=0", "max_recording_seconds=3601",
-                         "max_recording_seconds=-1", "max_recording_seconds=2.5", "max_recording_seconds='60'",
-                         "api_key_source=true", "revision=-1", "[broken"] {
-            try rejected { _ = try Preferences.importing(document) }
-        }
-        // Semantically identical shortcuts must also be rejected when their encodings differ.
-        let same = HotkeyOption.defaultToggle.persistedValue
-        try rejected { _ = try Preferences.importing("toggle_hotkey='option_f'\nhold_hotkey='\(same)'") }
-    }
-
-    private static func withStore(_ run: (UserDefaults, URL) throws -> Void) throws {
+    private static func withStore(_ run: (UserDefaults) throws -> Void) throws {
         let name = "com.voxa.tests.preferences.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer {
             defaults.removePersistentDomain(forName: name)
             _ = defaults.synchronize()
-            try? FileManager.default.removeItem(at: folder)
         }
-        try run(defaults, folder.appendingPathComponent("config.toml"))
+        try run(defaults)
     }
 
-    static func oneTimePersistenceAndRollback() throws {
-        try withStore { defaults, url in
-            let original = Data("output_mode='none'\nmax_recording_seconds=120\n".utf8)
-            try original.write(to: url)
-            let first = PreferencesStore(defaults: defaults, legacyURL: url)
-            var value = try first.load()
+    // The shipped v1 shape, including a saved single-key binding and environment mode.
+    private static let savedPreferences: [String: Any] = [
+        "toggleHotkey": #"{"keyCode":79,"modifiers":["control","shift"],"keyDisplay":"F18"}"#,
+        "holdHotkey": "fn_space", "model": "gpt-transcribe", "outputMode": "none",
+        "maxRecordingSeconds": 120, "apiKeySource": "env",
+    ]
+
+    static func savedSettingsSurviveRelaunch() throws {
+        try withStore { defaults in
+            let original = try JSONSerialization.data(withJSONObject: ["version": 1, "preferences": savedPreferences])
+            defaults.set(original, forKey: PreferencesStore.storageKey)
+            let store = PreferencesStore(defaults: defaults)
+            var value = try store.load()
+            try unitEqual(value.toggleHotkey, savedPreferences["toggleHotkey"] as? String)
+            try unitEqual(HotkeyOption.fromRaw(value.toggleHotkey),
+                          HotkeyOption(keyCodes: [79], modifiers: [.control, .shift], keyDisplays: ["F18"]))
+            try unitEqual(value.holdHotkey, "fn_space")
+            try unitEqual(value.model, "gpt-transcribe")
             try unitEqual(value.outputMode, "none")
             try unitEqual(value.maxRecordingSeconds, 120)
-            try unitEqual(try Data(contentsOf: url), original)
+            try unitEqual(value.apiKeySource, "env")
+            try unitEqual(defaults.data(forKey: PreferencesStore.storageKey), original)
             value.maxRecordingSeconds = 60
-            try first.save(value)
-            // A later legacy run or malformed legacy file cannot overwrite the native values.
-            try Data("broken TOML".utf8).write(to: url)
-            let relaunched = PreferencesStore(defaults: defaults, legacyURL: url)
-            try unitEqual(try relaunched.load(), value)
-            let stored = defaults.data(forKey: PreferencesStore.storageKey)!
-            try unitExpect(!String(decoding: stored, as: UTF8.self).contains("OPENAI_API_KEY"))
-            defaults.set(Data("corrupt".utf8), forKey: PreferencesStore.storageKey)
-            try rejected { _ = try relaunched.load() }
+            try store.save(value)
+            try unitEqual(try PreferencesStore(defaults: defaults).load(), value)
         }
     }
 
-    static func recoverableImportAndSaveFailures() throws {
-        try withStore { defaults, url in
-            try Data("max_recording_seconds=0".utf8).write(to: url)
-            let store = PreferencesStore(defaults: defaults, legacyURL: url)
-            try rejected { _ = try store.load() }
-            try unitExpect(defaults.object(forKey: PreferencesStore.storageKey) == nil)
-            try Data("max_recording_seconds=30".utf8).write(to: url)
-            let failing = PreferencesStore(defaults: defaults, legacyURL: url, flush: { false })
+    static func rejectsInvalidSettings() throws {
+        try withStore { defaults in
+            let store = PreferencesStore(defaults: defaults)
+            let corruptRecords: [Any] = ["not data", Data("corrupt".utf8),
+                try JSONSerialization.data(withJSONObject: ["version": 2, "preferences": savedPreferences])]
+            for record in corruptRecords {
+                defaults.set(record, forKey: PreferencesStore.storageKey)
+                try rejected { _ = try store.load() }
+            }
+            for (key, value) in [("toggleHotkey", "unknown"), ("holdHotkey", savedPreferences["toggleHotkey"]!),
+                                 ("model", "unknown"), ("outputMode", "unknown"), ("apiKeySource", "unknown"),
+                                 ("maxRecordingSeconds", 0), ("maxRecordingSeconds", 3601),
+                                 ("maxRecordingSeconds", "60")] as [(String, Any)] {
+                var invalid = savedPreferences
+                invalid[key] = value
+                let data = try JSONSerialization.data(withJSONObject: ["version": 1, "preferences": invalid])
+                defaults.set(data, forKey: PreferencesStore.storageKey)
+                try rejected { _ = try store.load() }
+                try unitEqual(defaults.data(forKey: PreferencesStore.storageKey), data)
+            }
+        }
+    }
+
+    static func saveFailureRecovery() throws {
+        try withStore { defaults in
+            let failing = PreferencesStore(defaults: defaults, flush: { false })
             try rejected { _ = try failing.load() }
             try unitExpect(defaults.object(forKey: PreferencesStore.storageKey) == nil)
+            let store = PreferencesStore(defaults: defaults)
             let value = try store.load()
-            try unitEqual(value.maxRecordingSeconds, 30)
+            try unitEqual(value, Preferences())
             var update = value
             update.maxRecordingSeconds = 60
             try rejected { try failing.save(update) }
             try unitEqual(try store.load(), value)
+            try store.save(update)
+            try unitEqual(try store.load(), update)
             update.holdHotkey = update.toggleHotkey
             try rejected { try store.save(update) }
-            try unitEqual(try store.load(), value)
-        }
-        try withStore { defaults, url in
-            // A clean install has no config file and must still persist valid defaults.
-            try unitEqual(try PreferencesStore(defaults: defaults, legacyURL: url).load(), Preferences())
+            try unitEqual(try store.load().maxRecordingSeconds, 60)
         }
     }
 
@@ -163,10 +162,10 @@ enum NativeSetupChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
-        ("setup: full TOML import and model/hotkey migration", completeTOMLImport),
-        ("setup: invalid configuration rejected as a whole", rejectsInvalidDocuments),
-        ("setup: one-time persistence, relaunch and preserved rollback", oneTimePersistenceAndRollback),
-        ("setup: import/save failure recovery and clean install", recoverableImportAndSaveFailures),
+        ("setup: duplicate app protection before and after prompts", duplicateAppProtection),
+        ("setup: invalid saved configuration rejected without overwriting it", rejectsInvalidSettings),
+        ("setup: existing v1 settings and relaunch preserved", savedSettingsSurviveRelaunch),
+        ("setup: save failure recovery and clean install", saveFailureRecovery),
         ("setup: credential sources, denied access and worker isolation", credentialSourcesAndErrors),
         ("setup: native Keychain add/read/update with disposable item", nativeKeychainRoundTrip),
     ]
@@ -174,10 +173,10 @@ enum NativeSetupChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class NativeSetupTests: XCTestCase {
-    func testCompleteTOMLImport() async throws { try await NativeSetupChecks.completeTOMLImport() }
-    func testRejectsInvalidDocuments() async throws { try await NativeSetupChecks.rejectsInvalidDocuments() }
-    func testOneTimePersistenceAndRollback() async throws { try await NativeSetupChecks.oneTimePersistenceAndRollback() }
-    func testRecoverableImportAndSaveFailures() async throws { try await NativeSetupChecks.recoverableImportAndSaveFailures() }
+    func testDuplicateAppProtection() async throws { try await NativeSetupChecks.duplicateAppProtection() }
+    func testRejectsInvalidSettings() async throws { try await NativeSetupChecks.rejectsInvalidSettings() }
+    func testSavedSettingsSurviveRelaunch() async throws { try await NativeSetupChecks.savedSettingsSurviveRelaunch() }
+    func testSaveFailureRecovery() async throws { try await NativeSetupChecks.saveFailureRecovery() }
     func testCredentialSourcesAndErrors() async throws { try await NativeSetupChecks.credentialSourcesAndErrors() }
     func testNativeKeychainRoundTrip() async throws { try await NativeSetupChecks.nativeKeychainRoundTrip() }
 }

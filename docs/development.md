@@ -60,12 +60,10 @@ This check does not replace or launch either supplied app.
 | `VOXA_DIST_DIR` | Select a separate packaging output and backup directory. |
 | `VOXA_INSTALL_DIR` | Change the installation directory; defaults to `/Applications`. |
 | `VOXA_CODESIGN_IDENTITY` | Select the identity used to sign the app. |
-| `VOXA_CONFIG_PATH` | Select the legacy TOML file imported before native settings have been saved. |
 | `VOXA_OPENAI_TRANSCRIPTIONS_URL` | Override the transcription endpoint for development. |
 | `OPENAI_API_KEY` | Supply a key for environment mode, or as a fallback when the Keychain item is missing. |
 
-An imported `api_key_source = "env"` selects read-only environment mode. Native
-settings and Keychain access are described in the [architecture guide](architecture.md).
+Settings and Keychain access are described in the [architecture guide](architecture.md).
 
 ## Manual checks
 

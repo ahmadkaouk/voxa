@@ -21,7 +21,7 @@ else
   for test_file in "$ROOT_DIR"/Tests/VoxaTests/*Tests.swift; do
     case "$(basename "$test_file")" in
       HotkeyOptionTests.swift|TranscriptOutputTests.swift|DictationSoundTests.swift|AudioRecorderTests.swift) ;;
-      DictationSessionTests.swift|TranscriptionClientTests.swift|AsyncTranscriptOutputTests.swift|NativeSetupTests.swift|LegacyLaunchAgentTests.swift) ;;
+      DictationSessionTests.swift|TranscriptionClientTests.swift|AsyncTranscriptOutputTests.swift|NativeSetupTests.swift) ;;
       *) echo "No standalone harness registered for $test_file; use XCTest or add coverage." >&2; exit 1 ;;
     esac
   done

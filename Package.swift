@@ -9,14 +9,10 @@ let package = Package(
     products: [
         .executable(name: "voxa", targets: ["Voxa"]),
     ],
-    dependencies: [
-        .package(url: "https://github.com/dduan/TOMLDecoder", exact: "0.4.5"),
-    ],
     targets: [
         .executableTarget(
             name: "Voxa",
-            dependencies: [.product(name: "TOMLDecoder", package: "TOMLDecoder")],
-            resources: [.copy("Resources/Sounds"), .copy("Resources/ThirdPartyNotices.txt")]
+            resources: [.copy("Resources/Sounds")]
         ),
         .testTarget(
             name: "VoxaTests",
