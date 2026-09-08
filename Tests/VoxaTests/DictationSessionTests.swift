@@ -48,7 +48,8 @@ private final class SessionTranscriberFixture: DictationTranscribing {
     var error: TranscriptionError?
     var gate: PipelineGate?
     var wasCancelled = false
-    func transcribe(_ audio: Data, model: ModelOption, apiKey: String) async throws -> String {
+    func transcribe(_ audio: Data, model: ModelOption, apiKey: String,
+                    timing: TranscriptionTiming?) async throws -> String {
         wasCancelled = Task.isCancelled
         calls.append((audio, model, apiKey))
         await gate?.wait()
@@ -107,6 +108,7 @@ private final class SessionFixture {
     let recorder = SessionRecorderFixture()
     let transcriber = SessionTranscriberFixture()
     let output = SessionOutputFixture()
+    var timingLog: DictationTimingLog?
     var time = 0.0
     var pause: (TimeInterval) async throws -> Void = { _ in
         try await Task.sleep(nanoseconds: 1_000_000)
@@ -115,13 +117,110 @@ private final class SessionFixture {
                                        recorder: recorder, transcriber: transcriber, output: output,
                                        clock: DictationClock(now: { [unowned self] in self.time }, pause: { [unowned self] seconds in
         try await self.pause(seconds)
-    }))
+    }), timingLog: timingLog)
     func wait(_ phase: String) async throws { try await eventually { self.session.state.tag == phase } }
     func record() async throws { session.start(prepare: { "fixture-key" }); try await wait("recording") }
 }
 
 @MainActor
 enum DictationSessionChecks {
+    static func timingBreakdownAndOverlappingCleanup() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("voxa-timing-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("timings.jsonl")
+        let log = DictationTimingLog(url: url)
+        let f = SessionFixture()
+        f.timingLog = log
+        try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardAutopaste)))
+        let audio = PipelineGate(), api = PipelineGate(), cleanup = PipelineGate()
+        f.recorder.stopGate = audio
+        f.transcriber.gate = api
+        f.transcriber.response = "private fixture transcript"
+        f.output.gate = cleanup
+        f.output.result = .paste(.restored)
+        try await f.record()
+        let firstID = f.session.state.context!.id
+        f.time = 10
+        f.session.stop()
+        try await eventually { audio.entered }
+        f.time = 10.01
+        f.session.stop() // Must not move the first Stop timestamp.
+        f.time = 10.1
+        audio.open()
+        try await eventually { api.entered }
+        f.time = 10.9
+        api.open()
+        try await eventually { cleanup.entered }
+        f.time = 10.92
+        f.output.pasteRead?()
+        try await f.wait("restoringClipboard")
+        try unitExpect(!FileManager.default.fileExists(atPath: url.path)) // No file I/O before delivery finishes.
+        try await f.record() // A second trace must not overwrite the first during clipboard cleanup.
+        let secondID = f.session.state.context!.id
+        f.time = 11.42
+        cleanup.open()
+        try await eventually { (try? String(contentsOf: url, encoding: .utf8))?.contains("\n") == true }
+        try unitEqual(f.session.state.context?.id, secondID)
+        f.output.gate = nil
+        f.time = 12
+        f.session.stop()
+        try await f.wait("idle")
+        await f.session.shutdown()
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let reports = try text.split(separator: "\n").map {
+            try JSONDecoder().decode(DictationTiming.Report.self, from: Data($0.utf8))
+        }
+        try unitEqual(reports.count, 2)
+        try unitEqual(reports[0].recordingID, firstID)
+        try unitEqual(reports[1].recordingID, secondID)
+        try unitEqual(reports[0].outcome, .completed)
+        for (name, expected) in ["audio_finalization": 100.0, "transcription_request": 800.0,
+                                 "paste_read": 20.0, "clipboard_cleanup": 500.0,
+                                 "stop_to_paste_read": 920.0, "stop_to_output_finished": 1420.0] {
+            try unitExpect(abs((reports[0].milliseconds[name] ?? -1) - expected) < 0.0001)
+        }
+        try unitExpect(reports[1].milliseconds["stop_to_paste_read"] == nil)
+        try unitExpect(!text.contains("private fixture transcript") && !text.contains("fixture-key"))
+    }
+
+    static func timingFailuresAndConfiguration() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("voxa-timing-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = "voxa-timing-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        try unitExpect(DictationTimingLog.configured(defaults: defaults) == nil)
+        defaults.set("relative-path", forKey: DictationTimingLog.defaultsKey)
+        try unitExpect(DictationTimingLog.configured(defaults: defaults) == nil)
+        defaults.set(directory.appendingPathComponent("configured.jsonl").path, forKey: DictationTimingLog.defaultsKey)
+        try unitExpect(DictationTimingLog.configured(defaults: defaults) != nil)
+
+        for command in ["cancel", "apiFailure", "unwritableLog"] {
+            let url = command == "unwritableLog" ? directory : directory.appendingPathComponent("\(command).jsonl")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let f = SessionFixture()
+            f.timingLog = DictationTimingLog(url: url)
+            try await f.record()
+            if command == "cancel" {
+                f.session.cancel()
+            } else {
+                if command == "apiFailure" { f.transcriber.error = .network }
+                f.session.stop()
+            }
+            try await f.wait(command == "apiFailure" ? "failed" : "idle")
+            await f.session.shutdown()
+            if command == "cancel" { try unitExpect(!FileManager.default.fileExists(atPath: url.path)) }
+            if command == "apiFailure" {
+                let report = try JSONDecoder().decode(DictationTiming.Report.self, from: Data(contentsOf: url))
+                try unitEqual(report.outcome, .failed)
+                try unitExpect(report.milliseconds["transcription_request"] != nil)
+                try unitExpect(report.milliseconds["paste_read"] == nil)
+                try unitExpect(f.output.calls.isEmpty)
+            }
+            if command == "unwritableLog" { try unitEqual(f.output.calls.count, 1) }
+        }
+    }
+
     static func restartDuringClipboardRestoration() async throws {
         for origin in [RecordingOrigin.manual, .hotkeyToggle, .hotkeyHold] {
             let f = SessionFixture()
@@ -491,6 +590,8 @@ enum DictationSessionChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("session: timing breakdown, clipboard cleanup and overlapping recordings", timingBreakdownAndOverlappingCleanup),
+        ("session: opt-in timing, cancellation, API errors and log failures", timingFailuresAndConfiguration),
         ("session: restart while clipboard restores and ignore stale completion", restartDuringClipboardRestoration),
         ("session: clipboard restoration outcomes and shutdown barrier", clipboardRestorationCompletionAndShutdown),
         ("session: stop, toggle, hold release, cancel and shutdown interrupt the meter wait", commandsInterruptMeterWait),
@@ -508,6 +609,8 @@ enum DictationSessionChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class DictationSessionTests: XCTestCase {
+    func testTimingBreakdownAndOverlappingCleanup() async throws { try await DictationSessionChecks.timingBreakdownAndOverlappingCleanup() }
+    func testTimingFailuresAndConfiguration() async throws { try await DictationSessionChecks.timingFailuresAndConfiguration() }
     func testRestartDuringClipboardRestoration() async throws { try await DictationSessionChecks.restartDuringClipboardRestoration() }
     func testClipboardRestorationCompletionAndShutdown() async throws { try await DictationSessionChecks.clipboardRestorationCompletionAndShutdown() }
     func testCommandsInterruptMeterWait() async throws { try await DictationSessionChecks.commandsInterruptMeterWait() }

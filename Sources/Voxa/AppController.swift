@@ -34,7 +34,8 @@ final class AppController: ObservableObject {
     private var capturingHotkey = false
 
     init() {
-        session = DictationSession(transcriber: TranscriptionClient(endpoint: TranscriptionClient.configuredEndpoint()))
+        session = DictationSession(transcriber: TranscriptionClient(endpoint: TranscriptionClient.configuredEndpoint()),
+                                   timingLog: DictationTimingLog.configured())
         store = PreferencesStore()
         keychain = Keychain()
         hotkeys.onToggleActivated = { [weak self] in

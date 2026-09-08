@@ -10,7 +10,8 @@ protocol DictationRecording: Sendable {
 }
 
 protocol DictationTranscribing: Sendable {
-    func transcribe(_ audio: Data, model: ModelOption, apiKey: String) async throws -> String
+    func transcribe(_ audio: Data, model: ModelOption, apiKey: String,
+                    timing: TranscriptionTiming?) async throws -> String
 }
 
 protocol DictationOutputting: Sendable {
@@ -90,6 +91,8 @@ final class DictationSession: ObservableObject {
     private let transcriber: any DictationTranscribing
     private let output: any DictationOutputting
     private let clock: DictationClock
+    private let timingLog: DictationTimingLog?
+    private var currentTiming: DictationTiming?
     private var workflow: Task<Void, Never>?
     private var recordingMonitor: Task<Void, Error>?
     private var shuttingDown = false
@@ -98,12 +101,14 @@ final class DictationSession: ObservableObject {
          recorder: any DictationRecording = AudioRecorder(),
          transcriber: any DictationTranscribing = TranscriptionClient(),
          output: any DictationOutputting = TranscriptOutput(),
-         clock: DictationClock? = nil) {
+         clock: DictationClock? = nil,
+         timingLog: DictationTimingLog? = nil) {
         self.settings = settings
         self.recorder = recorder
         self.transcriber = transcriber
         self.output = output
         self.clock = clock ?? DictationClock()
+        self.timingLog = timingLog
     }
 
     @discardableResult
@@ -125,9 +130,11 @@ final class DictationSession: ObservableObject {
             return nil
         }
         let context = DictationContext(id: id, origin: origin, settings: settings)
+        let timing = timingLog.map { _ in DictationTiming(id: id, now: clock.now) }
+        currentTiming = timing
         level = 0
         state = .starting(context, requested: nil)
-        workflow = Task { await self.run(context, prepare: prepare) }
+        workflow = Task { await self.run(context, timing: timing, prepare: prepare) }
         return id
     }
 
@@ -147,8 +154,11 @@ final class DictationSession: ObservableObject {
     func stop() {
         guard !shuttingDown else { return }
         switch state {
-        case .starting(let context, nil): state = .starting(context, requested: .stop)
+        case .starting(let context, nil):
+            currentTiming?.mark(.stopRequested)
+            state = .starting(context, requested: .stop)
         case .recording(let context):
+            currentTiming?.mark(.stopRequested)
             state = .finishing(context, discard: false)
             recordingMonitor?.cancel()
         default: break
@@ -182,7 +192,9 @@ final class DictationSession: ObservableObject {
         recordingMonitor?.cancel()
         await workflow?.value
         await output.drain()
+        await timingLog?.drain()
         workflow = nil
+        currentTiming = nil
         level = 0
     }
 
@@ -206,6 +218,7 @@ final class DictationSession: ObservableObject {
                 guard snapshot.phase == .recording || snapshot.phase == .finished else { throw AudioRecorderError.noAudio }
                 self.level = snapshot.level
                 if snapshot.phase == .finished || self.clock.now() >= deadline {
+                    self.currentTiming?.mark(.stopRequested)
                     self.state = .finishing(context, discard: false)
                     break
                 }
@@ -222,8 +235,13 @@ final class DictationSession: ObservableObject {
         }
     }
 
-    private func run(_ context: DictationContext, prepare: @MainActor () async throws -> String) async {
+    private func run(_ context: DictationContext, timing: DictationTiming?,
+                     prepare: @MainActor () async throws -> String) async {
         var captureReleased = false
+        var timingOutcome = DictationTiming.Outcome.cancelled
+        defer {
+            if let report = timing?.report(outcome: timingOutcome) { timingLog?.append(report) }
+        }
         do {
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
@@ -247,12 +265,23 @@ final class DictationSession: ObservableObject {
             try await waitForRecordingToFinish(context)
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
-            let audio = try await recorder.stop(id: context.id)
+            let audio: Data
+            do {
+                timing?.mark(.finalizationStarted)
+                defer { timing?.mark(.finalizationFinished) }
+                audio = try await recorder.stop(id: context.id)
+            }
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
             level = 0
             state = .transcribing(context)
-            let response = try await transcriber.transcribe(audio, model: context.settings.model, apiKey: apiKey)
+            let response: String
+            do {
+                timing?.mark(.transcriptionStarted)
+                defer { timing?.mark(.transcriptionFinished) }
+                response = try await transcriber.transcribe(audio, model: context.settings.model, apiKey: apiKey,
+                                                           timing: timing?.transcription)
+            }
             try ensureCurrent(context)
             guard case .transcribing = state else { throw CancellationError() }
             let text = response.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -263,11 +292,15 @@ final class DictationSession: ObservableObject {
             try ensureCurrent(context)
             lastTranscript = text
             state = .delivering(context)
+            timing?.mark(.deliveryStarted)
             let outcome = await output.deliver(text, mode: context.settings.outputMode, onPasteRead: { [weak self] in
+                timing?.mark(.pasteRead)
                 guard let self, !self.shuttingDown, self.state.context?.id == context.id,
                       case .delivering = self.state else { return }
                 self.state = .restoringClipboard(context)
             })
+            timing?.mark(.outputFinished)
+            timingOutcome = outcome.isFailure ? .failed : .completed
             // A newer recording may already own the session. Cleanup must not change it or
             // release its recorder; shutdown still waits for all queued output through drain().
             guard !shuttingDown, state.context?.id == context.id else { return }
@@ -275,6 +308,7 @@ final class DictationSession: ObservableObject {
             state = outcome.isFailure ? .failed(id: context.id, message: outcome.message) : .idle
         } catch {
             let cancelledTask = error is CancellationError
+            timingOutcome = (cancelledTask || state.isDiscarding) ? .cancelled : .failed
             // start/stop failures also pass through explicit cleanup before a retry is enabled.
             if !captureReleased { await recorder.cancel(id: context.id) }
             guard !shuttingDown, state.context?.id == context.id else { return }

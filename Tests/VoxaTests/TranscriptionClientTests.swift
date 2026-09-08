@@ -169,12 +169,15 @@ enum TranscriptionClientChecks {
     }
 
     static func integratedPipeline() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("voxa-network-timing-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let logURL = directory.appendingPathComponent("timings.jsonl")
         try await withClient(.response(200, Data("{\"text\":\"Fixture dictation\"}".utf8))) { client, fixture in
             let recorder = AudioRecorder(makeDevice: { PipelineAudioDevice() })
             var copied: String?
             let output = TranscriptOutput(copy: { copied = $0; return true })
             let session = DictationSession(settings: .init(outputMode: .clipboardOnly), recorder: recorder,
-                                           transcriber: client, output: output)
+                                           transcriber: client, output: output, timingLog: DictationTimingLog(url: logURL))
             session.start(prepare: { "fixture-key" })
             try await eventually { if case .recording = session.state { return true }; return false }
             session.stop()
@@ -190,6 +193,20 @@ enum TranscriptionClientChecks {
             try unitEqual(String(decoding: wav.prefix(4), as: UTF8.self), "RIFF")
             try unitEqual(await recorder.snapshot().phase, .idle) // completed WAV cache was released
             await session.shutdown()
+            let logged = try Data(contentsOf: logURL)
+            let report = try JSONDecoder().decode(DictationTiming.Report.self, from: logged)
+            try unitEqual(report.outcome, .completed)
+            try unitEqual(report.transcription?.audioBytes, 3244)
+            try unitEqual(report.transcription?.multipartBytes, body.count)
+            // This intercepted request never establishes TLS; unavailable phases stay absent.
+            for transaction in report.transcription?.transactions ?? [] {
+                try unitExpect(transaction.milliseconds["tls"] == nil)
+            }
+            let json = String(decoding: logged, as: UTF8.self)
+            for privateValue in ["fixture-key", "Fixture dictation", fixture.requests[0].0.url!.absoluteString,
+                                 "Authorization", "Content-Disposition", "RIFF"] {
+                try unitExpect(!json.contains(privateValue))
+            }
         }
     }
 
