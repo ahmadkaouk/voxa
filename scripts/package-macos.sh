@@ -231,8 +231,10 @@ rm -rf "$BUILD_DIR" "$STAGE_DIR" "$APP_DIR"
 mkdir -p "$BUILD_DIR" "$STAGE_DIR"
 
 echo "Building native release app..."
-swift build --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --product voxa
-SWIFT_BIN_DIR="$(swift build --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --show-bin-path)"
+# CLT 27's SwiftBuild linker stamps the deployment target as the SDK version.
+# Native SwiftPM preserves the real SDK version, used by macOS appearance checks.
+swift build --build-system native --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --product voxa
+SWIFT_BIN_DIR="$(swift build --build-system native --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR/swift" --configuration release --show-bin-path)"
 BUILT_EXECUTABLE="$SWIFT_BIN_DIR/voxa"
 
 if [ ! -x "$BUILT_EXECUTABLE" ]; then

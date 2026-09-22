@@ -3,6 +3,9 @@ import CoreGraphics
 import Foundation
 
 final class GlobalHotkeyBridge {
+    var onFinishAndSubmit: (() -> Bool)?
+    private var returnShortcut = FinishAndSubmitShortcut()
+
     var onToggleActivated: (() -> Void)?
     var onHoldActivated: (() -> Void)?
     var onHoldDeactivated: (() -> Void)?
@@ -38,6 +41,9 @@ final class GlobalHotkeyBridge {
         }
         if localMonitor == nil {
             localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+                if self?.consumeReturn(keyCode: event.keyCode, isDown: event.type == .keyDown,
+                                       flags: HotkeyModifiers(eventFlags: event.modifierFlags),
+                                       isRepeat: event.isARepeat) == true { return nil }
                 self?.handle(event)
                 return event
             }
@@ -61,6 +67,7 @@ final class GlobalHotkeyBridge {
             CFMachPortInvalidate(eventTap)
             self.eventTap = nil
         }
+        returnShortcut = FinishAndSubmitShortcut()
         queue.sync {
             self.resetState()
         }
@@ -150,6 +157,13 @@ final class GlobalHotkeyBridge {
             return Unmanaged.passUnretained(event)
         }
 
+        if (type == .keyDown || type == .keyUp),
+           consumeReturn(keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
+                         isDown: type == .keyDown, flags: HotkeyModifiers(cgFlags: event.flags),
+                         isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0) {
+            return nil
+        }
+
         guard let mapped = HotkeyInputEvent.from(
             eventType: type,
             keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
@@ -166,6 +180,15 @@ final class GlobalHotkeyBridge {
         }
 
         return shouldConsume ? nil : Unmanaged.passUnretained(event)
+    }
+
+    // Runs on the main run loop, where the recording state can be checked before
+    // swallowing Enter. The global monitor fallback cannot swallow keys, so it
+    // deliberately leaves this action unavailable without an event tap.
+    private func consumeReturn(keyCode: UInt16, isDown: Bool, flags: HotkeyModifiers, isRepeat: Bool) -> Bool {
+        return returnShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat) {
+            queue.sync(execute: { isEnabled }) && onFinishAndSubmit?() == true
+        }
     }
 
     private func handle(_ event: HotkeyInputEvent) {
@@ -434,48 +457,31 @@ private struct HotkeyInputEvent {
     let isModifierEvent: Bool
 
     static func from(event: NSEvent) -> HotkeyInputEvent? {
+        let type: CGEventType
         switch event.type {
-        case .keyDown:
-            return HotkeyInputEvent(
-                kind: .press,
-                keyCode: event.keyCode,
-                modifiers: HotkeyModifiers(eventFlags: event.modifierFlags),
-                isModifierEvent: HotkeyOption.isModifierKeyCode(event.keyCode)
-            )
-        case .keyUp:
-            return HotkeyInputEvent(
-                kind: .release,
-                keyCode: event.keyCode,
-                modifiers: HotkeyModifiers(eventFlags: event.modifierFlags),
-                isModifierEvent: HotkeyOption.isModifierKeyCode(event.keyCode)
-            )
-        case .flagsChanged:
-            return modifierEvent(keyCode: event.keyCode, modifiers: HotkeyModifiers(eventFlags: event.modifierFlags))
-        default:
-            return nil
+        case .keyDown: type = .keyDown
+        case .keyUp: type = .keyUp
+        case .flagsChanged: type = .flagsChanged
+        default: return nil
         }
+        return from(eventType: type, keyCode: event.keyCode,
+                    modifiers: HotkeyModifiers(eventFlags: event.modifierFlags))
     }
 
     static func from(eventType: CGEventType, keyCode: UInt16, flags: CGEventFlags) -> HotkeyInputEvent? {
+        from(eventType: eventType, keyCode: keyCode, modifiers: HotkeyModifiers(cgFlags: flags))
+    }
+
+    private static func from(eventType: CGEventType, keyCode: UInt16,
+                             modifiers: HotkeyModifiers) -> HotkeyInputEvent? {
         switch eventType {
-        case .keyDown:
-            return HotkeyInputEvent(
-                kind: .press,
-                keyCode: keyCode,
-                modifiers: HotkeyModifiers(cgFlags: flags),
-                isModifierEvent: HotkeyOption.isModifierKeyCode(keyCode)
-            )
-        case .keyUp:
-            return HotkeyInputEvent(
-                kind: .release,
-                keyCode: keyCode,
-                modifiers: HotkeyModifiers(cgFlags: flags),
-                isModifierEvent: HotkeyOption.isModifierKeyCode(keyCode)
-            )
+        case .keyDown, .keyUp:
+            return HotkeyInputEvent(kind: eventType == .keyDown ? .press : .release,
+                                    keyCode: keyCode, modifiers: modifiers,
+                                    isModifierEvent: HotkeyOption.isModifierKeyCode(keyCode))
         case .flagsChanged:
-            return modifierEvent(keyCode: keyCode, modifiers: HotkeyModifiers(cgFlags: flags))
-        default:
-            return nil
+            return modifierEvent(keyCode: keyCode, modifiers: modifiers)
+        default: return nil
         }
     }
 

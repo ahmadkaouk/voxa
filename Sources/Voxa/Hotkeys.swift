@@ -11,113 +11,43 @@ struct HotkeyModifiers: OptionSet, Hashable {
     static let command = HotkeyModifiers(rawValue: 1 << 3)
     static let function = HotkeyModifiers(rawValue: 1 << 4)
 
-    static let supported: HotkeyModifiers = [.control, .option, .shift, .command, .function]
+    // Keep event mapping, display order, and saved names together.
+    private static let definitions: [(modifier: Self, event: NSEvent.ModifierFlags,
+                                      cg: CGEventFlags, label: String, name: String)] = [
+        (.control, .control, .maskControl, "Ctrl", "control"),
+        (.option, .option, .maskAlternate, "Opt", "option"),
+        (.shift, .shift, .maskShift, "Shift", "shift"),
+        (.command, .command, .maskCommand, "Cmd", "command"),
+        (.function, .function, .maskSecondaryFn, "Fn", "function"),
+    ]
 
-    init(rawValue: Int) {
-        self.rawValue = rawValue
-    }
+    init(rawValue: Int) { self.rawValue = rawValue }
 
     init(eventFlags: NSEvent.ModifierFlags) {
-        var modifiers: HotkeyModifiers = []
-        if eventFlags.contains(.control) {
-            modifiers.insert(.control)
+        self = Self.definitions.reduce(into: []) { result, item in
+            if eventFlags.contains(item.event) { result.insert(item.modifier) }
         }
-        if eventFlags.contains(.option) {
-            modifiers.insert(.option)
-        }
-        if eventFlags.contains(.shift) {
-            modifiers.insert(.shift)
-        }
-        if eventFlags.contains(.command) {
-            modifiers.insert(.command)
-        }
-        if eventFlags.contains(.function) {
-            modifiers.insert(.function)
-        }
-        self = modifiers
     }
 
     init(cgFlags: CGEventFlags) {
-        var modifiers: HotkeyModifiers = []
-        if cgFlags.contains(.maskControl) {
-            modifiers.insert(.control)
+        self = Self.definitions.reduce(into: []) { result, item in
+            if cgFlags.contains(item.cg) { result.insert(item.modifier) }
         }
-        if cgFlags.contains(.maskAlternate) {
-            modifiers.insert(.option)
-        }
-        if cgFlags.contains(.maskShift) {
-            modifiers.insert(.shift)
-        }
-        if cgFlags.contains(.maskCommand) {
-            modifiers.insert(.command)
-        }
-        if cgFlags.contains(.maskSecondaryFn) {
-            modifiers.insert(.function)
-        }
-        self = modifiers
-    }
-
-    var isEmpty: Bool {
-        rawValue == 0
     }
 
     var displayParts: [String] {
-        var parts: [String] = []
-        if contains(.control) {
-            parts.append("Ctrl")
-        }
-        if contains(.option) {
-            parts.append("Opt")
-        }
-        if contains(.shift) {
-            parts.append("Shift")
-        }
-        if contains(.command) {
-            parts.append("Cmd")
-        }
-        if contains(.function) {
-            parts.append("Fn")
-        }
-        return parts
+        Self.definitions.filter { contains($0.modifier) }.map(\.label)
     }
 
     var persistedParts: [String] {
-        var parts: [String] = []
-        if contains(.control) {
-            parts.append("control")
-        }
-        if contains(.option) {
-            parts.append("option")
-        }
-        if contains(.shift) {
-            parts.append("shift")
-        }
-        if contains(.command) {
-            parts.append("command")
-        }
-        if contains(.function) {
-            parts.append("function")
-        }
-        return parts
+        Self.definitions.filter { contains($0.modifier) }.map(\.name)
     }
 
     static func fromPersistedParts(_ rawParts: [String]) -> HotkeyModifiers? {
-        var modifiers: HotkeyModifiers = []
+        var modifiers: Self = []
         for part in rawParts {
-            switch part {
-            case "control":
-                modifiers.insert(.control)
-            case "option":
-                modifiers.insert(.option)
-            case "shift":
-                modifiers.insert(.shift)
-            case "command":
-                modifiers.insert(.command)
-            case "function":
-                modifiers.insert(.function)
-            default:
-                return nil
-            }
+            guard let item = definitions.first(where: { $0.name == part }) else { return nil }
+            modifiers.insert(item.modifier)
         }
         return modifiers
     }
@@ -172,47 +102,23 @@ struct HotkeyOption: Identifiable, Equatable {
         persistedValue
     }
 
+    private static let presets: [(value: String, hotkey: Self, label: String?)] = [
+        ("option_f", .optionF, nil),
+        ("option_g", .optionG, nil),
+        ("right_option", .rightOption, "Right Option"),
+        ("fn", .functionKey, "Fn"),
+        ("fn_space", .functionSpace, "Fn+Space"),
+        ("cmd_space", .commandSpace, "Cmd+Space"),
+    ]
+
     var label: String {
-        switch self {
-        case .rightOption:
-            return "Right Option"
-        case .functionKey:
-            return "Fn"
-        case .functionSpace:
-            return "Fn+Space"
-        case .commandSpace:
-            return "Cmd+Space"
-        default:
-            break
-        }
-
+        if let label = Self.presets.first(where: { $0.hotkey == self })?.label { return label }
         let parts = modifiers.displayParts + keyDisplays
-        if parts.isEmpty {
-            return "Unassigned"
-        }
-
-        return parts.joined(separator: "+")
+        return parts.isEmpty ? "Unassigned" : parts.joined(separator: "+")
     }
 
     var persistedValue: String {
-        if self == .optionF {
-            return "option_f"
-        }
-        if self == .optionG {
-            return "option_g"
-        }
-        if self == .rightOption {
-            return "right_option"
-        }
-        if self == .functionKey {
-            return "fn"
-        }
-        if self == .functionSpace {
-            return "fn_space"
-        }
-        if self == .commandSpace {
-            return "cmd_space"
-        }
+        if let preset = Self.presets.first(where: { $0.hotkey == self }) { return preset.value }
 
         let payload = PersistedHotkey(
             keyCodes: keyCodes.isEmpty ? nil : keyCodes,
@@ -232,29 +138,6 @@ struct HotkeyOption: Identifiable, Equatable {
         }
 
         return encoded
-    }
-
-    fileprivate var inputTokens: Set<HotkeyInputToken> {
-        var tokens: Set<HotkeyInputToken> = []
-        if modifiers.contains(.control) {
-            tokens.insert(.control)
-        }
-        if modifiers.contains(.option) {
-            tokens.insert(.option)
-        }
-        if modifiers.contains(.shift) {
-            tokens.insert(.shift)
-        }
-        if modifiers.contains(.command) {
-            tokens.insert(.command)
-        }
-        if modifiers.contains(.function) {
-            tokens.insert(.function)
-        }
-        for keyCode in keyCodes {
-            tokens.insert(.keyCode(keyCode))
-        }
-        return tokens
     }
 
     func matches(modifiers activeModifiers: HotkeyModifiers, pressedKeys: Set<UInt16>) -> Bool {
@@ -285,9 +168,8 @@ struct HotkeyOption: Identifiable, Equatable {
     }
 
     func isStrictSubset(of other: HotkeyOption) -> Bool {
-        let tokens = inputTokens
-        let otherTokens = other.inputTokens
-        return tokens.count < otherTokens.count && tokens.isSubset(of: otherTokens)
+        self != other && modifiers.isSubset(of: other.modifiers)
+            && Set(keyCodes).isSubset(of: Set(other.keyCodes))
     }
 
     static func fromRawOrDefault(
@@ -298,22 +180,7 @@ struct HotkeyOption: Identifiable, Equatable {
     }
 
     static func fromRaw(_ raw: String) -> HotkeyOption? {
-        switch raw {
-        case "option_f":
-            return .optionF
-        case "option_g":
-            return .optionG
-        case "right_option":
-            return .rightOption
-        case "fn":
-            return .functionKey
-        case "fn_space":
-            return .functionSpace
-        case "cmd_space":
-            return .commandSpace
-        default:
-            break
-        }
+        if let preset = presets.first(where: { $0.value == raw }) { return preset.hotkey }
 
         guard let data = raw.data(using: .utf8),
               let payload = try? JSONDecoder().decode(PersistedHotkey.self, from: data),
@@ -475,15 +342,6 @@ enum KeyCode {
     static let tab: UInt16 = 48
 }
 
-private enum HotkeyInputToken: Hashable {
-    case control
-    case option
-    case shift
-    case command
-    case function
-    case keyCode(UInt16)
-}
-
 private struct PersistedHotkey: Codable {
     let keyCodes: [UInt16]?
     let modifiers: [String]
@@ -580,3 +438,20 @@ private let namedKeyDisplays: [UInt16: String] = [
     KeyCode.help: "Help",
     KeyCode.capsLock: "Caps Lock",
 ]
+
+/// Consume the whole physical Enter press only when finishing was accepted.
+struct FinishAndSubmitShortcut {
+    private var consumedKeys: Set<UInt16> = []
+
+    mutating func consume(keyCode: UInt16, isDown: Bool, flags: HotkeyModifiers,
+                          isRepeat: Bool, activate: () -> Bool) -> Bool {
+        guard keyCode == KeyCode.returnKey || keyCode == 76 else { return false }
+        if consumedKeys.contains(keyCode) {
+            if !isDown { consumedKeys.remove(keyCode) }
+            return true
+        }
+        guard isDown, !isRepeat, flags.isEmpty, activate() else { return false }
+        consumedKeys.insert(keyCode)
+        return true
+    }
+}

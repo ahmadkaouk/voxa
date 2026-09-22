@@ -15,7 +15,7 @@ protocol DictationTranscribing: Sendable {
 }
 
 protocol DictationOutputting: Sendable {
-    @MainActor func deliver(_ text: String, mode: OutputModeOption,
+    @MainActor func deliver(_ text: String, mode: OutputModeOption, submitTo: pid_t?,
                            onPasteRead: @escaping @MainActor @Sendable () -> Void) async -> TranscriptOutputOutcome
     @MainActor func copy(_ text: String) async -> TranscriptOutputOutcome
     @MainActor func drain() async
@@ -95,6 +95,7 @@ final class DictationSession: ObservableObject {
     private var currentTiming: DictationTiming?
     private var workflow: Task<Void, Never>?
     private var recordingMonitor: Task<Void, Error>?
+    private var submitTarget: pid_t?
     private var shuttingDown = false
 
     init(settings: DictationSettings = DictationSettings(),
@@ -113,7 +114,9 @@ final class DictationSession: ObservableObject {
 
     @discardableResult
     func updateSettings(_ settings: DictationSettings) -> Bool {
-        guard !shuttingDown, !state.isBusy, settings.isValid else { return false }
+        // Each active workflow already owns an immutable settings snapshot.
+        // Updating the defaults here only affects the next recording.
+        guard !shuttingDown, settings.isValid else { return false }
         self.settings = settings
         return true
     }
@@ -125,6 +128,7 @@ final class DictationSession: ObservableObject {
         guard !shuttingDown, !state.isBusy else { return nil }
         let id = UUID()
         lastOutcome = nil
+        submitTarget = nil
         guard settings.isValid else {
             state = .failed(id: id, message: AudioRecorderError.invalidLimit.localizedDescription)
             return nil
@@ -163,6 +167,16 @@ final class DictationSession: ObservableObject {
             recordingMonitor?.cancel()
         default: break
         }
+    }
+
+    /// Explicit Enter action is available only while recording with automatic paste enabled.
+    @discardableResult
+    func stopAndSubmit(to targetPID: pid_t) -> Bool {
+        guard !shuttingDown, targetPID != getpid(), case .recording(let context) = state,
+              context.settings.outputMode == .clipboardAutopaste else { return false }
+        submitTarget = targetPID
+        stop()
+        return true
     }
 
     /// Recording-only cancellation, including capture still starting or releasing its device.
@@ -293,9 +307,10 @@ final class DictationSession: ObservableObject {
             lastTranscript = text
             state = .delivering(context)
             timing?.mark(.deliveryStarted)
-            let outcome = await output.deliver(text, mode: context.settings.outputMode, onPasteRead: { [weak self] in
+            let submitTo = submitTarget
+            let outcome = await output.deliver(text, mode: context.settings.outputMode, submitTo: submitTo, onPasteRead: { [weak self] in
                 timing?.mark(.pasteRead)
-                guard let self, !self.shuttingDown, self.state.context?.id == context.id,
+                guard submitTo == nil, let self, !self.shuttingDown, self.state.context?.id == context.id,
                       case .delivering = self.state else { return }
                 self.state = .restoringClipboard(context)
             })

@@ -7,27 +7,17 @@ if ! command -v swift >/dev/null 2>&1; then
   exit 1
 fi
 
-swift build --package-path "$ROOT_DIR"
+# Match packaging so CLT 27 records the actual SDK version in the executable.
+swift build --build-system native --package-path "$ROOT_DIR"
 if command -v xcrun >/dev/null 2>&1 && xcrun --find xctest >/dev/null 2>&1; then
-  SWIFT_TEST_LIST="$(swift test --package-path "$ROOT_DIR" list 2>&1)"
+  SWIFT_TEST_LIST="$(swift test --build-system native --package-path "$ROOT_DIR" list 2>&1)"
   if ! printf '%s\n' "$SWIFT_TEST_LIST" | grep -Eq '^VoxaTests[./]'; then
     printf '%s\n' "$SWIFT_TEST_LIST" >&2
     echo "Swift test discovery found no VoxaTests; refusing a false-green check." >&2
     exit 1
   fi
-  swift test --package-path "$ROOT_DIR"
+  swift test --build-system native --package-path "$ROOT_DIR"
 else
   echo "XCTest unavailable: running the same assertions with the Command Line Tools harnesses."
-  for test_file in "$ROOT_DIR"/Tests/VoxaTests/*Tests.swift; do
-    case "$(basename "$test_file")" in
-      HotkeyOptionTests.swift|TranscriptOutputTests.swift|DictationSoundTests.swift|AudioRecorderTests.swift) ;;
-      DictationSessionTests.swift|TranscriptionClientTests.swift|AsyncTranscriptOutputTests.swift|NativeSetupTests.swift) ;;
-      *) echo "No standalone harness registered for $test_file; use XCTest or add coverage." >&2; exit 1 ;;
-    esac
-  done
-  "$ROOT_DIR/scripts/test-swift-unit.sh"
-  "$ROOT_DIR/scripts/test-transcript-output.sh"
-  "$ROOT_DIR/scripts/test-dictation-sounds.sh"
-  "$ROOT_DIR/scripts/test-audio-recorder.sh"
-  "$ROOT_DIR/scripts/test-native-pipeline.sh"
+  "$ROOT_DIR/scripts/test.sh"
 fi

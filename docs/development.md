@@ -4,13 +4,25 @@ See the [README](../README.md) for installation, permissions, and everyday use,
 and the [architecture guide](architecture.md) for component ownership and recovery
 behavior. All commands below run from the repository root.
 
+## Script responsibilities
+
+| Script | Purpose |
+| --- | --- |
+| `check.sh` | Build the app and select XCTest or the standalone fallback. Use this for routine validation. |
+| `test.sh` | Run all or one of the five standalone Swift test suites without requiring Xcode. |
+| `package-macos.sh` | Assemble the app's executable, icon, resources, and metadata; sign it and create a DMG. |
+| `verify-native-bundle.sh` | Share bundle and signature checks between packaging, installation, and installer tests. |
+| `install.sh` | Stage and verify an app, preserve a backup, and restore the previous app if replacement fails. |
+| `test-install.sh` | Exercise installation and recovery in temporary directories using two supplied signed apps. |
+| `preview-overlay.sh` | Build an optional visual preview without recording or transcription. |
+
 ## Build and check
 
 Open `Package.swift` in Xcode or use Swift 6.0+ from the command line:
 
 ```bash
-swift build
-swift run voxa
+swift build --build-system native
+swift run --build-system native voxa
 ./scripts/check.sh
 ```
 
@@ -18,9 +30,23 @@ Quit other Voxa copies before running a development build. The check script uses
 XCTest when available and otherwise runs the same assertions through standalone
 harnesses. Unregistered test files fail the fallback path instead of being skipped.
 
-Focused checks are available through `scripts/test-swift-unit.sh`,
-`scripts/test-audio-recorder.sh`, `scripts/test-dictation-sounds.sh`,
-`scripts/test-transcript-output.sh`, and `scripts/test-native-pipeline.sh`.
+Packaging and validation use the native SwiftPM build system because CLT 27's
+default SwiftBuild currently stamps the deployment target as the SDK version.
+The correct SDK version is needed for macOS appearance behavior. CLT 27 also
+omits the SwiftUIMacros plugin; the overlay's `ViewState` alias explicitly selects
+the existing `SwiftUI.State` property wrapper without that plugin.
+
+One standalone runner provides all five focused suites:
+
+```bash
+./scripts/test.sh           # All standalone checks, even when XCTest is available
+./scripts/test.sh hotkeys   # Shortcut validation
+./scripts/test.sh recorder  # Audio capture and WAV encoding
+./scripts/test.sh sounds    # Bundled sound resources
+./scripts/test.sh output    # Clipboard delivery and restoration
+./scripts/test.sh pipeline  # Sessions, transcription, async output, and setup
+```
+
 They use fixture audio and isolated pasteboards, with no microphone capture or
 external API calls. The pipeline checks also exercise a disposable Keychain entry.
 
@@ -100,7 +126,7 @@ Build the overlay preview with `./scripts/preview-overlay.sh`, then open
 `dist/apps.noindex/Voxa Overlay Preview.app`. It uses the production overlay and
 sounds with simulated recording states and levels, without microphone access.
 
-`./scripts/test-transcript-output.sh --live` opens a temporary text window to
+`./scripts/test.sh output --live` opens a temporary text window to
 check the actual paste shortcut, selection replacement, Unicode, and clipboard
 restoration. It requires Accessibility permission for the test process and
 saves/restores the system clipboard. Ordinary output checks use isolated

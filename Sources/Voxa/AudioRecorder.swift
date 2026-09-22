@@ -83,7 +83,7 @@ final class AudioRecorder: @unchecked Sendable {
     func start(id: UUID, limit: TimeInterval) async throws {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            worker.async {
+            worker.async { [self] in
                 guard self.capture == nil else { continuation.resume(throwing: AudioRecorderError.busy); return }
                 self.state = AudioRecorderSnapshot(id: id, phase: .starting)
                 self.completed = nil

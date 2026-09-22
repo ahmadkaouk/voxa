@@ -2,6 +2,10 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
+// Select the property wrapper explicitly: the SDK 27 State macro requires
+// SwiftUIMacros, which is not bundled with the standalone Command Line Tools.
+private typealias ViewState<Value> = SwiftUI.State<Value>
+
 enum ActivityOverlayPhase: Equatable {
     case idle
     case listening
@@ -42,7 +46,7 @@ enum ActivityOverlayMetrics {
 struct ActivityOverlayView: View {
     @ObservedObject var model: ActivityOverlayModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hovering = false
+    @ViewState private var hovering = false
 
     private var resting: Bool { model.phase == .idle }
     private var expanded: Bool { !resting || hovering }
@@ -122,7 +126,7 @@ struct ActivityOverlayView: View {
                 .accessibilityHidden(true)
 
                 circleControl(symbol: "checkmark", bright: true, action: model.onStop)
-                    .help("Finish dictation")
+                    .help("Finish dictation · Enter to finish and submit")
                     .accessibilityLabel("Finish dictation")
                     .accessibilityHint("Stops recording and transcribes your speech")
             }

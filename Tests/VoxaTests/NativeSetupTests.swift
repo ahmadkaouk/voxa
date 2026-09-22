@@ -57,6 +57,7 @@ enum NativeSetupChecks {
             try unitEqual(value.toggleHotkey, savedPreferences["toggleHotkey"] as? String)
             try unitEqual(HotkeyOption.fromRaw(value.toggleHotkey),
                           HotkeyOption(keyCodes: [79], modifiers: [.control, .shift], keyDisplays: ["F18"]))
+            try unitEqual(HotkeyOption.fromRaw(value.toggleHotkey)?.label, "Ctrl+Shift+F18")
             try unitEqual(value.holdHotkey, "fn_space")
             try unitEqual(value.model, "gpt-transcribe")
             try unitEqual(value.outputMode, "none")

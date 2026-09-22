@@ -54,19 +54,7 @@ final class DictationSoundController {
         }
     }
 
-    func playListeningStarted() {
-        play(.listeningStarted)
-    }
-
-    func playRecordingEnded() {
-        play(.recordingEnded)
-    }
-
-    func playError() {
-        play(.error)
-    }
-
-    private func play(_ cue: DictationSoundCue) {
+    func play(_ cue: DictationSoundCue) {
         guard let player = preparedPlayer(for: cue) else { return }
         // A fast press/release fades the previous gesture without cutting its waveform.
         if let previous = currentPlayer, previous !== player {

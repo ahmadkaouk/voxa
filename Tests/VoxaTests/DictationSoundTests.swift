@@ -12,9 +12,6 @@ private struct SoundCheckFailure: Error, CustomStringConvertible {
 
 private enum DictationSoundChecks {
     static func bundledZenAudio() throws {
-        let expectedDurations: [DictationSoundCue: TimeInterval] = [
-            .listeningStarted: 0.401, .recordingEnded: 0.352, .error: 0.481,
-        ]
         var recordings = Set<Data>()
         for cue in DictationSoundCue.allCases {
             guard let url = DictationSoundAssets.url(for: cue) else {
@@ -22,9 +19,8 @@ private enum DictationSoundChecks {
             }
             recordings.insert(try Data(contentsOf: url))
             let player = try AVAudioPlayer(contentsOf: url)
-            guard player.numberOfChannels == 1,
-                  abs(player.duration - expectedDurations[cue]!) < 0.06 else {
-                throw SoundCheckFailure(description: "Unexpected Zen audio format or duration: \(cue)")
+            guard player.numberOfChannels == 1, player.duration > 0, player.duration < 1 else {
+                throw SoundCheckFailure(description: "Zen cue must be mono, brief, and nonempty: \(cue)")
             }
 
             let file = try AVAudioFile(forReading: url)

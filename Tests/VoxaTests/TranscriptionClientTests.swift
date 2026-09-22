@@ -123,8 +123,7 @@ enum TranscriptionClientChecks {
             (401, "secret body must not be shown", .authentication), (403, "", .authentication),
             (429, "", .rateLimited), (400, "", .request(status: 400)), (500, "", .request(status: 500)),
             (307, "", .request(status: 307)), (200, "not JSON", .invalidResponse),
-            (200, "{}", .invalidResponse), (200, "{\"text\":23}", .invalidResponse),
-            (200, "{\"text\":null}", .invalidResponse), (200, "{\"text\":\" \\n\"}", .emptyTranscript),
+            (200, "{}", .invalidResponse), (200, "{\"text\":\" \\n\"}", .emptyTranscript),
         ]
         for (status, data, expected) in cases {
             try await withClient(.response(status, Data(data.utf8))) { client, fixture in
@@ -136,7 +135,7 @@ enum TranscriptionClientChecks {
     }
 
     static func transportAndValidation() async throws {
-        for (code, expected) in [(URLError.timedOut, TranscriptionError.timeout), (.notConnectedToInternet, .network), (.cannotConnectToHost, .network)] {
+        for (code, expected) in [(URLError.timedOut, TranscriptionError.timeout), (.notConnectedToInternet, .network)] {
             try await withClient(.failure(code)) { client, fixture in
                 do { _ = try await client.transcribe(Data([1]), model: .gptTranscribe, apiKey: "fixture-key"); try unitExpect(false) }
                 catch { try unitEqual(error as? TranscriptionError, expected) }

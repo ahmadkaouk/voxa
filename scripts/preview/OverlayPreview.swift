@@ -32,8 +32,8 @@ final class PreviewController: ObservableObject {
                      onCancel: { [weak self] in self?.show(.idle) },
                      onStop: { [weak self] in self?.finish() })
         if soundEnabled {
-            if next == .listening { sounds.playListeningStarted() }
-            if next == .transcribing { sounds.playRecordingEnded() }
+            if next == .listening { sounds.play(.listeningStarted) }
+            if next == .transcribing { sounds.play(.recordingEnded) }
         }
     }
 

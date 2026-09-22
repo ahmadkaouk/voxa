@@ -15,9 +15,7 @@ final class AppController: ObservableObject {
     @Published private(set) var settingsError: String?
     @Published private(set) var permissions = Permissions.current()
     @Published private(set) var isAPIKeySet = false
-    @Published private(set) var apiKeySaveCount = 0
     @Published private(set) var apiKeyError: String?
-    @Published private(set) var statusMessage = "Preparing Voxa…"
     @Published var apiKeyInput = ""
 
     private let store: PreferencesStore
@@ -30,6 +28,7 @@ final class AppController: ObservableObject {
     private var setupTask: Task<Void, Never>?
     private var keyTask: Task<Void, Never>?
     private var completionPresentation: Task<Void, Never>?
+    private var showingPasteCompletion = false
     private var closing = false
     private var capturingHotkey = false
 
@@ -38,6 +37,11 @@ final class AppController: ObservableObject {
                                    timingLog: DictationTimingLog.configured())
         store = PreferencesStore()
         keychain = Keychain()
+        hotkeys.onFinishAndSubmit = { [weak self] in
+            guard let self, self.canStart,
+                  let target = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
+            return self.session.stopAndSubmit(to: target)
+        }
         hotkeys.onToggleActivated = { [weak self] in
             guard let self, self.canStart else { return }
             self.session.toggle(prepare: self.recordingPreparation())
@@ -51,10 +55,10 @@ final class AppController: ObservableObject {
             .sink { [weak self] previous, next in
                 guard let self else { return }
                 self.objectWillChange.send() // MenuBarExtra's symbol also observes this controller.
-                if case .recording = next { self.sounds.playListeningStarted() }
-                if case .transcribing = next { self.sounds.playRecordingEnded() }
-                if case .failed = next { self.sounds.playError() }
-                if case .idle = next, previous.isDiscarding { self.sounds.playRecordingEnded() }
+                if case .recording = next { self.sounds.play(.listeningStarted) }
+                if case .transcribing = next { self.sounds.play(.recordingEnded) }
+                if case .failed = next { self.sounds.play(.error) }
+                if case .idle = next, previous.isDiscarding { self.sounds.play(.recordingEnded) }
                 self.present(next, level: self.session.level)
             }.store(in: &subscriptions)
         session.$level.removeDuplicates().sink { [weak self] level in
@@ -79,6 +83,7 @@ final class AppController: ObservableObject {
     }
 
     var isBusy: Bool { session.state.isBusy || isSettingUp || isSavingKey }
+    var canEditDictationSettings: Bool { isReady && !isSettingUp && !isSavingKey && !closing }
     private var canStart: Bool { isReady && !isSettingUp && !isSavingKey && !closing && !capturingHotkey }
     var toggleHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.toggleHotkey) }
     var holdHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.holdHotkey, fallback: .defaultHold) }
@@ -116,7 +121,6 @@ final class AppController: ObservableObject {
                 guard !closing else { return }
                 isAPIKeySet = key != nil
                 isReady = true
-                statusMessage = key == nil ? "Add an API key to start transcribing" : "Ready when you are"
                 hotkeys.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
                 refreshPermissions()
                 present(session.state, level: session.level)
@@ -148,7 +152,6 @@ final class AppController: ObservableObject {
 
     func startRecording() {
         guard canStart else { return }
-        statusMessage = "Ready when you are"
         session.start(prepare: recordingPreparation())
     }
     func setHotkeyCaptureEnabled(_ enabled: Bool) {
@@ -156,24 +159,29 @@ final class AppController: ObservableObject {
         hotkeys.setEnabled(!enabled)
     }
 
-    private func update(_ change: (inout Preferences) -> Void) {
-        guard !isBusy, isReady, !closing else { return }
+    private func update(duringDictation: Bool = false, _ change: (inout Preferences) -> Void) {
+        guard canEditDictationSettings, duringDictation || !session.state.isBusy else { return }
         var next = preferences
         change(&next)
         do {
             try store.save(next)
             _ = session.updateSettings(next.dictation)
+            let hotkeysChanged = next.toggleHotkey != preferences.toggleHotkey || next.holdHotkey != preferences.holdHotkey
             preferences = next
             settingsError = nil
-            hotkeys.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
-            present(session.state, level: session.level)
+            // Rebinding resets held-key tracking. Model/output/limit edits must not
+            // interrupt the release of a hold-to-record shortcut.
+            if hotkeysChanged {
+                hotkeys.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
+                present(session.state, level: session.level)
+            }
         } catch { settingsError = error.localizedDescription }
     }
     func setToggleHotkey(_ value: HotkeyOption) { update { $0.toggleHotkey = value.persistedValue } }
     func setHoldHotkey(_ value: HotkeyOption) { update { $0.holdHotkey = value.persistedValue } }
-    func setModel(_ value: ModelOption) { update { $0.model = value.rawValue } }
-    func setOutputMode(_ value: OutputModeOption) { update { $0.outputMode = value.rawValue } }
-    func setMaxRecordingSeconds(_ value: UInt64) { update { $0.maxRecordingSeconds = value } }
+    func setModel(_ value: ModelOption) { update(duringDictation: true) { $0.model = value.rawValue } }
+    func setOutputMode(_ value: OutputModeOption) { update(duringDictation: true) { $0.outputMode = value.rawValue } }
+    func setMaxRecordingSeconds(_ value: UInt64) { update(duringDictation: true) { $0.maxRecordingSeconds = value } }
 
     func saveAPIKey() {
         guard !isBusy, !closing else { return }
@@ -184,8 +192,7 @@ final class AppController: ObservableObject {
             do {
                 try await keychain.save(key, source: source)
                 guard !closing else { return }
-                apiKeyInput = ""; isAPIKeySet = true; apiKeySaveCount += 1
-                statusMessage = "API key saved in Keychain"
+                apiKeyInput = ""; isAPIKeySet = true
             } catch { if !closing { apiKeyError = error.localizedDescription } }
             isSavingKey = false
             if !closing, apiKeyError == nil { retrySetup() }
@@ -193,7 +200,7 @@ final class AppController: ObservableObject {
     }
 
     func copyLastTranscript() {
-        Task { if let result = await session.copyLastTranscript() { statusMessage = result.message } }
+        Task { _ = await session.copyLastTranscript() }
     }
 
     func refreshPermissions() {
@@ -222,8 +229,15 @@ final class AppController: ObservableObject {
     }
 
     private func present(_ state: DictationState, level: Double) {
-        completionPresentation?.cancel()
         guard isReady, !closing else { overlay.hide(); return }
+        // A paste read already started the checkmark. Finishing clipboard cleanup
+        // must neither delay it nor restart its display timer.
+        if showingPasteCompletion {
+            if case .restoringClipboard = state { return }
+            if case .idle = state, session.lastOutcome?.showsSuccess == true { return }
+        }
+        completionPresentation?.cancel()
+        showingPasteCompletion = false
         switch state {
         case .starting(_, let requested):
             if requested == nil { show(.listening, title: "Preparing microphone…") }
@@ -232,22 +246,28 @@ final class AppController: ObservableObject {
         case .finishing: show(.transcribing, title: "Finishing recording…")
         case .transcribing: show(.transcribing, title: "Transcribing")
         case .delivering: show(.transcribing, title: "Delivering transcript…")
-        case .restoringClipboard: show(.idle, title: "Start dictation")
+        case .restoringClipboard:
+            showingPasteCompletion = true
+            showCompletion(title: "Transcript pasted")
         case .failed: overlay.hide()
         case .idle:
-            if let outcome = session.lastOutcome {
-                statusMessage = outcome.message
-                if outcome.showsSuccess {
-                    show(.outputting, title: outcome.message)
-                    completionPresentation = Task {
-                        do { try await Task.sleep(nanoseconds: 900_000_000) } catch { return }
-                        guard !closing, case .idle = session.state else { return }
-                        show(.idle, title: "Start dictation")
-                    }
-                    return
-                }
+            if let outcome = session.lastOutcome, outcome.showsSuccess {
+                showCompletion(title: outcome.message)
+                return
             }
             if isAPIKeySet { show(.idle, title: "Start dictation") } else { overlay.hide() }
+        }
+    }
+
+    private func showCompletion(title: String) {
+        show(.outputting, title: title)
+        completionPresentation = Task {
+            do { try await Task.sleep(nanoseconds: 900_000_000) } catch { return }
+            guard !closing else { return }
+            switch session.state {
+            case .idle, .restoringClipboard: show(.idle, title: "Start dictation")
+            default: break
+            }
         }
     }
 

@@ -41,7 +41,7 @@ and quit Voxa first. The installer preserves a signed backup of the previous app
 
 ### Set up Voxa
 
-1. Open Voxa from the menu bar and choose **Add API Key…**. Save your OpenAI API
+1. Open Voxa from the menu bar and choose **Voxa Settings…**. Save your OpenAI API
    key; Voxa stores it in macOS Keychain.
 2. Allow the permissions needed for the features you use:
 
@@ -66,11 +66,21 @@ the relevant System Settings page. Return to Voxa after granting access.
 | Hold to record | Hold **Option + G**; release to finish |
 | Toggle recording | Press **Option + F** to start; press again to finish |
 | Record with the mouse | Click the floating handle to start, then the checkmark to finish |
+| Finish and submit | Press **Enter** while recording in Autopaste mode |
 | Discard a recording | Click **×** on the dictation bar while recording |
 
-Change shortcuts under **Hotkeys** in the menu. **Max Recording** sets the
-recording limit; the default is five minutes. Transcription begins after
+Change shortcuts in **Voxa Settings…**.
+Press **Esc** while capturing a shortcut to cancel without closing Settings.
+**Max Recording** sets the recording limit; the default is five minutes. Transcription begins after
 recording finishes. Discarding a recording skips transcription and output.
+
+Model, output, and recording-limit menus remain available during dictation.
+Changes made while recording or processing are saved for the next recording.
+
+Enter finishes recording, pastes, and sends Return to the same app. This submits
+in chat apps and inserts a newline in editors. It requires Accessibility access
+and is skipped if you switch apps. Modified Enter shortcuts and other finish
+controls keep their usual behavior.
 
 ### Choose where text goes
 

@@ -17,10 +17,12 @@ Voxa.app
 
 ## Ownership and concurrency
 
-`DictationSession` is the sole observable owner of the dictation workflow. Views
-observe the same session instance and send it start, stop, and cancel actions.
+`DictationSession` is the sole observable owner of the dictation workflow.
 `AppController` connects setup, settings, hotkeys, permission recovery, sounds,
 overlay presentation, and shutdown. Local view state controls presentation only.
+The native menu observes `AppController`, which forwards workflow state changes.
+Audio levels update only the overlay; rebuilding menus on each level sample
+interrupts submenu tracking while recording.
 
 Each recording has an ID and settings snapshot. The session checks both its ID
 and expected state after suspension so a late callback cannot complete a newer
@@ -30,12 +32,22 @@ is remembered; releasing a hold shortcut during a permission prompt cannot start
 Cancellation is limited to recording. Normal Quit invalidates pending work and
 awaits capture teardown and clipboard cleanup before the process exits.
 
+Model, output, and recording-limit preferences can change during a workflow.
+The active recording keeps its snapshot; the next recording uses the new defaults.
+These edits do not rebind hotkeys, so a held recording shortcut still releases normally.
+
 After a paste request is sent and its clipboard text is read, `restoringClipboard`
 permits another recording while the output worker finishes its 500 ms settling
 interval and restoration. The recorder is released before delivery begins.
 Later pastes and copies remain queued behind cleanup, and its final result only
-updates the session if no newer recording has started. A clipboard read does not
-produce a success indicator before restoration finishes.
+updates the session if no newer recording has started. The paste checkmark appears
+on the read signal; restoration does not delay it or restart its display timer.
+
+Enter during recording requests paste-and-submit in Autopaste mode. This pins the
+destination to the app active at the keypress and keeps the session busy until
+Return is sent or skipped. Return follows the settling interval and is skipped
+if delivery is unconfirmed, the clipboard changes, or a different app is active.
+Its completion checkmark follows the submission outcome.
 
 The three workers are constructed directly. Small protocols and injected closures
 allow deterministic tests.
