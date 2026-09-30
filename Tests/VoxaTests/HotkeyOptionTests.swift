@@ -7,6 +7,39 @@ import XCTest
 #endif
 
 enum HotkeyOptionChecks {
+    static func testFeedbackShortcuts() throws {
+        for target in [KeyCode.s, KeyCode.d] {
+            var shortcut = FeedbackShortcut(keyCode: target)
+            var activations = 0
+            func press(_ down: Bool, key: UInt16? = nil, flags: HotkeyModifiers = [],
+                       repeated: Bool = false, accepted: Bool = true) -> Bool {
+                shortcut.consume(keyCode: key ?? target, isDown: down, flags: flags, isRepeat: repeated) {
+                    activations += 1
+                    return accepted
+                }
+            }
+            try unitExpect(!press(true, flags: .option))
+            try unitExpect(!press(true, flags: .command))
+            try unitExpect(!press(true, flags: .shift))
+            try unitExpect(!press(true, flags: .control))
+            try unitExpect(!press(true, flags: [.option, .command]))
+            try unitExpect(!press(true, flags: [.option, .shift]))
+            try unitExpect(!press(true, key: KeyCode.f))
+            try unitExpect(!press(true, repeated: true))
+            try unitEqual(activations, 0)
+            try unitExpect(!press(true, accepted: false)) // No visible eligible card: pass through.
+            try unitExpect(!press(false))
+            try unitExpect(press(true))
+            // Closing the card must not leak repeats or the key-up to the focused app.
+            try unitExpect(press(true, flags: [], repeated: true, accepted: false))
+            try unitExpect(press(false, flags: [], accepted: false))
+            try unitEqual(activations, 2)
+            try unitExpect(!press(false))
+            try unitExpect(press(true))
+            try unitEqual(activations, 3)
+        }
+    }
+
     static func testPresetHotkeysRoundTrip() throws {
         let presets: [(HotkeyOption, String, String)] = [
             (.optionF, "option_f", "Opt+F"), (.optionG, "option_g", "Opt+G"),
@@ -84,6 +117,7 @@ enum HotkeyOptionChecks {
     }
 
     static let all: [(String, () throws -> Void)] = [
+        ("HotkeyOption.testFeedbackShortcuts", testFeedbackShortcuts),
         ("HotkeyOption.testFinishAndSubmitShortcut", testFinishAndSubmitShortcut),
         ("HotkeyOption.testPresetHotkeysRoundTrip", testPresetHotkeysRoundTrip),
         ("HotkeyOption.testCustomHotkeyRoundTripPreservesBinding", testCustomHotkeyRoundTripPreservesBinding),
@@ -94,6 +128,7 @@ enum HotkeyOptionChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class HotkeyOptionTests: XCTestCase {
+    func testFeedbackShortcuts() throws { try HotkeyOptionChecks.testFeedbackShortcuts() }
     func testFinishAndSubmitShortcut() throws { try HotkeyOptionChecks.testFinishAndSubmitShortcut() }
     func testPresetHotkeysRoundTrip() throws { try HotkeyOptionChecks.testPresetHotkeysRoundTrip() }
     func testCustomHotkeyRoundTripPreservesBinding() throws { try HotkeyOptionChecks.testCustomHotkeyRoundTripPreservesBinding() }

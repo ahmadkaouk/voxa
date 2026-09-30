@@ -7,6 +7,7 @@ import SwiftUI
 @MainActor
 final class AppController: ObservableObject {
     let session: DictationSession
+    let feedback = FeedbackController()
     @Published private(set) var preferences = Preferences()
     @Published private(set) var isSettingUp = false
     @Published private(set) var isSavingKey = false
@@ -22,6 +23,7 @@ final class AppController: ObservableObject {
     private let keychain: Keychain
     private let hotkeys = GlobalHotkeyBridge()
     private let overlay = ActivityOverlayController()
+    private let feedbackPanel = FeedbackPanelController()
     private let sounds = DictationSoundController()
     private var subscriptions = Set<AnyCancellable>()
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -37,6 +39,24 @@ final class AppController: ObservableObject {
                                    timingLog: DictationTimingLog.configured())
         store = PreferencesStore()
         keychain = Keychain()
+        session.onFeedbackTranscript = { [weak self] id, text, key in
+            self?.feedback.analyze(id: id, transcript: text, apiKey: key)
+        }
+        session.onDeliveryFinished = { [weak self] id in self?.feedback.deliveryFinished(id: id) }
+        feedback.$panelVisible.removeDuplicates().sink { [weak self] visible in
+            guard let self else { return }
+            if visible { self.feedbackPanel.show(self.feedback) }
+            else { self.feedbackPanel.hide() }
+        }.store(in: &subscriptions)
+        feedback.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
+        hotkeys.onSaveFeedback = { [weak self] in
+            guard let self, self.isReady, !self.closing, !self.capturingHotkey else { return false }
+            return self.feedback.saveAndClose()
+        }
+        hotkeys.onDiscardFeedback = { [weak self] in
+            guard let self, self.isReady, !self.closing, !self.capturingHotkey else { return false }
+            return self.feedback.discardReview()
+        }
         hotkeys.onFinishAndSubmit = { [weak self] in
             guard let self, self.canStart,
                   let target = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
@@ -54,6 +74,7 @@ final class AppController: ObservableObject {
         session.$state.removeDuplicates().scan((DictationState.idle, DictationState.idle)) { ($0.1, $1) }
             .sink { [weak self] previous, next in
                 guard let self else { return }
+                self.feedback.updateDictation(next)
                 self.objectWillChange.send() // MenuBarExtra's symbol also observes this controller.
                 if case .recording = next { self.sounds.play(.listeningStarted) }
                 if case .transcribing = next { self.sounds.play(.recordingEnded) }
@@ -114,6 +135,7 @@ final class AppController: ObservableObject {
             do {
                 let loaded = try store.load()
                 preferences = loaded
+                feedback.setEnabled(loaded.englishFeedbackEnabled)
                 _ = session.updateSettings(loaded.dictation)
                 try CaptureGuard.check()
                 let key = try await keychain.value(source: loaded.apiKeySource)
@@ -168,6 +190,7 @@ final class AppController: ObservableObject {
             _ = session.updateSettings(next.dictation)
             let hotkeysChanged = next.toggleHotkey != preferences.toggleHotkey || next.holdHotkey != preferences.holdHotkey
             preferences = next
+            feedback.setEnabled(next.englishFeedbackEnabled)
             settingsError = nil
             // Rebinding resets held-key tracking. Model/output/limit edits must not
             // interrupt the release of a hold-to-record shortcut.
@@ -182,6 +205,7 @@ final class AppController: ObservableObject {
     func setModel(_ value: ModelOption) { update(duringDictation: true) { $0.model = value.rawValue } }
     func setOutputMode(_ value: OutputModeOption) { update(duringDictation: true) { $0.outputMode = value.rawValue } }
     func setMaxRecordingSeconds(_ value: UInt64) { update(duringDictation: true) { $0.maxRecordingSeconds = value } }
+    func setEnglishFeedbackEnabled(_ value: Bool) { update(duringDictation: true) { $0.englishFeedbackEnabled = value } }
 
     func saveAPIKey() {
         guard !isBusy, !closing else { return }
@@ -279,6 +303,8 @@ final class AppController: ObservableObject {
         observers.removeAll()
         completionPresentation?.cancel(); setupTask?.cancel(); keyTask?.cancel()
         overlay.hide()
+        feedbackPanel.hide()
+        await feedback.shutdown()
         await session.shutdown()
         await setupTask?.value
         await keyTask?.value

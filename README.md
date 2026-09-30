@@ -14,6 +14,8 @@ words into text. Transcription uses OpenAI with your own API key.
   the result available for manual copying.
 - **Clipboard restoration:** autopaste restores your previous clipboard when
   safe, preserving anything you copy while delivery is in progress.
+- **Optional English feedback:** review all useful corrections after dictation, with highlighted
+  differences, explicit saving, and a short sentence-writing exercise.
 
 ## Get started
 
@@ -98,11 +100,50 @@ you replace it with another dictation or quit Voxa.
 
 ## Audio and data
 
+### English learning
+
+Enable **Voxa Settings → English Learning → Feedback after dictation** for
+background English coaching. Dictation is inserted normally and never rewritten;
+feedback failures do not interrupt it.
+
+The review puts grammar and sentence-construction corrections first. **Original**
+and **Corrected** use equal-size text, highlighting only changed words in red/green.
+A short reason teaches the rule. A useful **Another way to say it · Optional** can
+appear underneath in neutral text. The coach is instructed to preserve meaning,
+conversational tone and technical terms, and ignore clear self-corrections.
+No useful finding means no panel. Text alone cannot assess pronunciation or
+reliably distinguish every recognition error from a spoken mistake.
+
+The panel appears after delivery without taking focus or disappearing on a timer.
+A new recording hides it; **English Learning → Show Latest Feedback** reopens the
+latest review until another transcript replaces it.
+
+- **✓ Accept & save all / S:** save all lessons together, then close. Possible
+  transcription issues are excluded; a recognition-only review offers **Done / S**.
+- **× Discard all / D:** close without saving or changing earlier saved lessons.
+- **English Learning → Saved Lessons…:** review, practise, or delete saved lessons.
+
+A failed save keeps the review open. While feedback is visible, S and D act on it
+instead of typing in the focused app; modified shortcuts such as Command+S still
+work. Global shortcuts require Accessibility access.
+
+Feedback is off by default. Enabling it sends transcript text in an additional
+OpenAI request using the same API key, with additional usage cost. It uses
+`gpt-6-luna` with low reasoning effort and requests `store: false`, which does
+not guarantee zero provider retention; see [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data).
+Only accepted excerpts, suggestions, explanations, dates, and practice prompts
+are stored in `~/Library/Application Support/Voxa/corrections.json`. Practice
+answers stay in memory. Disabling feedback cancels pending requests and clears
+unsaved findings; saved lessons remain until deleted.
+
+### Dictation data
+
 Voxa records audio locally and sends the completed recording to OpenAI for
 transcription. **Transcription requires internet access.**
 
 The app holds recordings and the latest transcript in memory; it does not save
-an audio or transcript history to disk. API keys entered in the app are stored
+an audio or full-transcript history to disk. Only explicitly saved English lessons
+are persisted. API keys entered in the app are stored
 in macOS Keychain, and preferences are saved locally. See the
 [architecture guide](docs/architecture.md) for details about data handling and
 clipboard recovery.

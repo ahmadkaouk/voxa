@@ -7,6 +7,25 @@ struct Preferences: Codable, Equatable {
     var outputMode = OutputModeOption.clipboardAutopaste.rawValue
     var maxRecordingSeconds: UInt64 = 300
     var apiKeySource = "keychain"
+    var englishFeedbackEnabled = false
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case toggleHotkey, holdHotkey, model, outputMode, maxRecordingSeconds, apiKeySource, englishFeedbackEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        toggleHotkey = try values.decode(String.self, forKey: .toggleHotkey)
+        holdHotkey = try values.decode(String.self, forKey: .holdHotkey)
+        model = try values.decode(String.self, forKey: .model)
+        outputMode = try values.decode(String.self, forKey: .outputMode)
+        maxRecordingSeconds = try values.decode(UInt64.self, forKey: .maxRecordingSeconds)
+        apiKeySource = try values.decode(String.self, forKey: .apiKeySource)
+        // Older v1 preferences remain valid and never opt users in implicitly.
+        englishFeedbackEnabled = try values.decodeIfPresent(Bool.self, forKey: .englishFeedbackEnabled) ?? false
+    }
 
     func validated() throws -> Preferences {
         guard let toggle = HotkeyOption.fromRaw(toggleHotkey),
@@ -20,7 +39,8 @@ struct Preferences: Codable, Equatable {
     var dictation: DictationSettings {
         DictationSettings(model: ModelOption.fromRawOrDefault(model),
                           outputMode: OutputModeOption.fromRawOrDefault(outputMode),
-                          maxRecordingSeconds: TimeInterval(maxRecordingSeconds))
+                          maxRecordingSeconds: TimeInterval(maxRecordingSeconds),
+                          englishFeedbackEnabled: englishFeedbackEnabled)
     }
 }
 

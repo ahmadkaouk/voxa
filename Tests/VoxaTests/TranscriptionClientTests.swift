@@ -34,7 +34,9 @@ private final class HTTPFixture: @unchecked Sendable {
 
 private final class PipelineAudioDevice: AudioCaptureDevice {
     let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
-    func start(receive: @escaping (AVAudioPCMBuffer) -> Void, interrupted: @escaping () -> Void) throws {
+    func start(receive: @escaping (AVAudioPCMBuffer) -> Void,
+               configurationChanged: @escaping () -> Void,
+               interrupted: @escaping () -> Void) throws {
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4800)!
         buffer.frameLength = 4800
         for channel in 0..<2 {
@@ -80,6 +82,51 @@ private final class TranscriptionURLProtocol: URLProtocol, @unchecked Sendable {
 
 @MainActor
 enum TranscriptionClientChecks {
+    static func feedbackHTTPContract() async throws {
+        let payload = String(decoding: try JSONEncoder().encode(FeedbackChecks.lesson), as: UTF8.self)
+        let response = try JSONSerialization.data(withJSONObject: ["choices": [[
+            "finish_reason": "stop", "message": ["content": "{\"feedback\":[\(payload)]}"]]]])
+        let replies: [HTTPFixture.Reply] = [.response(200, response), .response(401, Data()),
+                                          .response(429, Data()), .response(500, Data()),
+                                          .response(200, Data("{}".utf8)), .failure(.timedOut), .pending]
+        for (index, reply) in replies.enumerated() {
+            let host = "\(UUID().uuidString.lowercased()).invalid"
+            let fixture = HTTPFixture(reply)
+            TranscriptionURLProtocol.register(fixture, host: host)
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [TranscriptionURLProtocol.self]
+            let transport = URLSession(configuration: configuration)
+            defer { transport.invalidateAndCancel(); TranscriptionURLProtocol.remove(host: host) }
+            let client = FeedbackClient(endpoint: URL(string: "https://\(host)/v1/chat/completions"), session: transport)
+            let task = Task { try await client.analyze(FeedbackChecks.lesson.original, apiKey: "fixture-key") }
+            if index == 6 {
+                try await eventually { fixture.requests.count == 1 }
+                task.cancel()
+            }
+            do {
+                let finding = try await task.value
+                try unitEqual(index, 0)
+                try unitEqual(finding, [FeedbackChecks.lesson])
+            } catch {
+                switch index {
+                case 1: try unitExpect(error as? FeedbackError == .authentication)
+                case 2: try unitExpect(error as? FeedbackError == .rateLimited)
+                case 3, 5: try unitExpect(error as? FeedbackError == .network)
+                case 4: try unitExpect(error as? FeedbackError == .invalidResponse)
+                case 6: try unitExpect(error is CancellationError)
+                default: throw error
+                }
+            }
+            try unitEqual(fixture.requests.count, 1)
+            try unitEqual(fixture.requests[0].0.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-key")
+            let body = try JSONSerialization.jsonObject(with: fixture.requests[0].1) as! [String: Any]
+            try unitEqual(body["store"] as? Bool, false)
+            try unitEqual(body["model"] as? String, "gpt-6-luna")
+            try unitEqual(body["reasoning_effort"] as? String, "low")
+            try unitExpect(body["temperature"] == nil)
+        }
+    }
+
     private static func withClient(_ reply: HTTPFixture.Reply,
                                    body: (TranscriptionClient, HTTPFixture) async throws -> Void) async throws {
         let host = "\(UUID().uuidString.lowercased()).invalid"
@@ -210,6 +257,7 @@ enum TranscriptionClientChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("feedback: HTTP contract, authentication, rate limits, timeout and cancellation", feedbackHTTPContract),
         ("transcription: multipart bytes, Unicode response and request limits", multipartAndSuccess),
         ("transcription: HTTP, malformed and empty responses without retries", responseErrors),
         ("transcription: transport failures and input validation", transportAndValidation),
@@ -220,6 +268,7 @@ enum TranscriptionClientChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class TranscriptionClientTests: XCTestCase {
+    func testFeedbackHTTPContract() async throws { try await TranscriptionClientChecks.feedbackHTTPContract() }
     func testMultipartAndSuccess() async throws { try await TranscriptionClientChecks.multipartAndSuccess() }
     func testResponseErrors() async throws { try await TranscriptionClientChecks.responseErrors() }
     func testTransportAndValidation() async throws { try await TranscriptionClientChecks.transportAndValidation() }

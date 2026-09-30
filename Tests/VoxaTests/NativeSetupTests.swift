@@ -63,8 +63,10 @@ enum NativeSetupChecks {
             try unitEqual(value.outputMode, "none")
             try unitEqual(value.maxRecordingSeconds, 120)
             try unitEqual(value.apiKeySource, "env")
+            try unitExpect(!value.englishFeedbackEnabled)
             try unitEqual(defaults.data(forKey: PreferencesStore.storageKey), original)
             value.maxRecordingSeconds = 60
+            value.englishFeedbackEnabled = true
             try store.save(value)
             try unitEqual(try PreferencesStore(defaults: defaults).load(), value)
         }

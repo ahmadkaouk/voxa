@@ -29,6 +29,7 @@ struct DictationSettings: Equatable {
     var model: ModelOption = .gptTranscribe
     var outputMode: OutputModeOption = .clipboardAutopaste
     var maxRecordingSeconds: TimeInterval = 300
+    var englishFeedbackEnabled = false
 
     var isValid: Bool { maxRecordingSeconds.isFinite && (1...3600).contains(maxRecordingSeconds) }
 }
@@ -86,6 +87,10 @@ final class DictationSession: ObservableObject {
     @Published private(set) var level = 0.0
     @Published private(set) var lastTranscript: String?
     @Published private(set) var lastOutcome: TranscriptOutputOutcome?
+
+    // Observers enqueue independent work; neither callback is awaited by dictation.
+    var onFeedbackTranscript: ((UUID, String, String) -> Void)?
+    var onDeliveryFinished: ((UUID) -> Void)?
 
     private let recorder: any DictationRecording
     private let transcriber: any DictationTranscribing
@@ -306,6 +311,9 @@ final class DictationSession: ObservableObject {
             try ensureCurrent(context)
             lastTranscript = text
             state = .delivering(context)
+            if context.settings.englishFeedbackEnabled {
+                onFeedbackTranscript?(context.id, text, apiKey)
+            }
             timing?.mark(.deliveryStarted)
             let submitTo = submitTarget
             let outcome = await output.deliver(text, mode: context.settings.outputMode, submitTo: submitTo, onPasteRead: { [weak self] in
@@ -316,6 +324,7 @@ final class DictationSession: ObservableObject {
             })
             timing?.mark(.outputFinished)
             timingOutcome = outcome.isFailure ? .failed : .completed
+            if !shuttingDown { onDeliveryFinished?(context.id) }
             // A newer recording may already own the session. Cleanup must not change it or
             // release its recorder; shutdown still waits for all queued output through drain().
             guard !shuttingDown, state.context?.id == context.id else { return }

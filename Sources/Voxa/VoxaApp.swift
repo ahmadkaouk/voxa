@@ -22,6 +22,10 @@ struct VoxaApp: App {
             VoxaSettingsView(controller: appDelegate.controller)
         }
         .windowResizability(.contentSize)
+
+        Window("Saved English Lessons", id: "english-lessons") {
+            SavedCorrectionsView(controller: appDelegate.controller.feedback)
+        }
     }
 }
 
@@ -108,6 +112,24 @@ struct VoxaMenuView: View {
                 .labelStyle(.titleAndIcon)
         }
         .disabled(!controller.canEditDictationSettings)
+
+        Divider()
+        Menu {
+            Toggle("English feedback", isOn: Binding(
+                get: { controller.preferences.englishFeedbackEnabled },
+                set: { controller.setEnglishFeedbackEnabled($0) }))
+                .disabled(!controller.canEditDictationSettings)
+            if controller.feedback.isAnalyzing { Text("Reviewing your English…") }
+            if let status = controller.feedback.status { Text(status) }
+            Button("Show Latest Feedback") { controller.feedback.showLatest() }
+                .disabled(controller.feedback.findings.isEmpty || session.state.context != nil)
+            Button("Saved Lessons…") {
+                openWindow(id: "english-lessons")
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
+        } label: {
+            Label("English Learning", systemImage: "text.bubble")
+        }
 
         Divider()
         if controller.permissions.microphone == .denied || controller.permissions.microphone == .restricted {
@@ -242,6 +264,22 @@ struct VoxaSettingsView: View {
                     }
                 }
                 .disabled(controller.isBusy || !controller.isReady)
+
+                Section("English Learning") {
+                    LabeledContent("Accept & save review", value: FeedbackShortcut.saveLabel)
+                        .help("Press S to save all lessons in the review and close it. Press D to discard the entire review. S and D act on visible feedback instead of typing in the focused app. Requires Accessibility access for global use.")
+                    LabeledContent("Discard review", value: FeedbackShortcut.discardLabel)
+                    Toggle("Feedback after dictation", isOn: Binding(
+                        get: { controller.preferences.englishFeedbackEnabled },
+                        set: { controller.setEnglishFeedbackEnabled($0) }))
+                        .disabled(!controller.canEditDictationSettings)
+                    Text("Get English corrections and clearer, more natural ways to express your ideas without changing your inserted text. Enabling applies to your next recording; disabling stops pending feedback.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Sends transcript text to OpenAI using your API key, with additional API usage. Only lessons you save are stored on this Mac. Practice answers stay in memory.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Link("OpenAI data retention details", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
+                        .font(.caption)
+                }
 
                 Section("OpenAI API Key") {
                     LabeledContent("API key") {

@@ -15,17 +15,32 @@ private final class FixtureCaptureDevice: AudioCaptureDevice, @unchecked Sendabl
     private let lock = NSLock()
     private var receiver: ((AVAudioPCMBuffer) -> Void)?
     private var interruption: (() -> Void)?
+    private var starts = 0
     private var stops = 0
 
+    var startCount: Int { lock.lock(); defer { lock.unlock() }; return starts }
     var stopCount: Int { lock.lock(); defer { lock.unlock() }; return stops }
 
-    func start(receive: @escaping (AVAudioPCMBuffer) -> Void, interrupted: @escaping () -> Void) throws {
+    func start(receive: @escaping (AVAudioPCMBuffer) -> Void,
+               configurationChanged: @escaping () -> Void,
+               interrupted: @escaping () -> Void) throws {
         lock.lock()
         receiver = receive
         interruption = interrupted
+        self.configurationChanged = configurationChanged
+        starts += 1
         lock.unlock()
         if let startError { throw startError }
         if sendsFirstBuffer { for _ in 0..<firstBufferCount { send() } }
+    }
+
+    private var configurationChanged: (() -> Void)?
+
+    func changeConfiguration() {
+        lock.lock()
+        let callback = configurationChanged
+        lock.unlock()
+        callback?()
     }
 
     func send() {
@@ -349,6 +364,62 @@ enum AudioRecorderChecks {
         try unitEqual(device.stopCount, 3)
     }
 
+    static func startupConfigurationRecovery() async throws {
+        let switchingDevice = FixtureCaptureDevice()
+        switchingDevice.sendsFirstBuffer = false
+        let airPodsDevice = FixtureCaptureDevice()
+        var devices = [switchingDevice, airPodsDevice]
+        let recorder = AudioRecorder(makeDevice: { devices.removeFirst() })
+        let id = UUID()
+        let starting = Task { try await recorder.start(id: id, limit: 1) }
+        try await waitFor(recorder, phase: .starting)
+        switchingDevice.changeConfiguration()
+        try await starting.value
+        try unitEqual(await recorder.snapshot().phase, .recording)
+        try unitEqual(switchingDevice.stopCount, 1)
+        _ = try await recorder.stop(id: id)
+        try unitEqual(airPodsDevice.stopCount, 1)
+
+        let activeDevice = FixtureCaptureDevice()
+        let activeRecorder = AudioRecorder(makeDevice: { activeDevice })
+        let activeID = UUID()
+        try await activeRecorder.start(id: activeID, limit: 1)
+        activeDevice.changeConfiguration()
+        try await expectError(.configurationChanged) { _ = try await activeRecorder.stop(id: activeID) }
+        try unitEqual(activeDevice.stopCount, 1)
+
+        let sleepingDevice = FixtureCaptureDevice()
+        sleepingDevice.sendsFirstBuffer = false
+        let sleepingRecorder = AudioRecorder(makeDevice: { sleepingDevice })
+        let sleepingID = UUID()
+        let sleepingStart = Task { try await sleepingRecorder.start(id: sleepingID, limit: 1) }
+        try await waitFor(sleepingRecorder, phase: .starting)
+        sleepingDevice.interrupt()
+        try await expectError(.interrupted) { try await sleepingStart.value }
+        try unitEqual(sleepingDevice.startCount, 1)
+        try unitEqual(sleepingDevice.stopCount, 1)
+
+        let first = FixtureCaptureDevice()
+        first.sendsFirstBuffer = false
+        let second = FixtureCaptureDevice()
+        second.sendsFirstBuffer = false
+        var failingDevices = [first, second]
+        let failingRecorder = AudioRecorder(makeDevice: { failingDevices.removeFirst() })
+        let failingID = UUID()
+        let failingStart = Task { try await failingRecorder.start(id: failingID, limit: 1) }
+        try await waitFor(failingRecorder, phase: .starting)
+        first.changeConfiguration()
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while second.startCount == 0 {
+            try unitExpect(ProcessInfo.processInfo.systemUptime < deadline)
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        second.changeConfiguration()
+        try await expectError(.configurationChanged) { try await failingStart.value }
+        try unitEqual(first.stopCount, 1)
+        try unitEqual(second.stopCount, 1)
+    }
+
     static func automaticLimitAndBusy() async throws {
         let device = FixtureCaptureDevice()
         let recorder = AudioRecorder(makeDevice: { device })
@@ -417,6 +488,7 @@ enum AudioRecorderChecks {
         ("recorder: stop during startup", stopDuringStartup),
         ("recorder: denied/absent microphone and startup cleanup", unavailableAndStartupFailure),
         ("recorder: interruption and missing/stalled audio", interruptionsAndTimeouts),
+        ("recorder: AirPods startup configuration recovery is bounded", startupConfigurationRecovery),
         ("recorder: automatic limit and conflicting start", automaticLimitAndBusy),
         ("recorder: teardown completes before successor capture", teardownBeforeSuccessor),
     ]

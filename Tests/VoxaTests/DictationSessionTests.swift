@@ -126,6 +126,40 @@ private final class SessionFixture {
 
 @MainActor
 enum DictationSessionChecks {
+    static func feedbackNeverBlocksDelivery() async throws {
+        let f = SessionFixture()
+        let network = PipelineGate(), output = PipelineGate()
+        var analyzed: String?
+        var analysisCompleted = false
+        var delivered: UUID?
+        var feedbackTask: Task<Void, Never>?
+        f.session.onFeedbackTranscript = { _, text, key in
+            analyzed = text
+            feedbackTask = Task { await network.wait(); analysisCompleted = true }
+        }
+        f.session.onDeliveryFinished = { delivered = $0 }
+        try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardOnly, englishFeedbackEnabled: true)))
+        f.output.gate = output
+        try await f.record()
+        let id = f.session.state.context!.id
+        // The opt-in value is captured at recording start, like other dictation preferences.
+        try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardOnly, englishFeedbackEnabled: false)))
+        f.session.stop()
+        try await eventually { output.entered && network.entered }
+        try unitEqual(analyzed, "hello world")
+        try unitEqual(f.output.calls.first?.0, "hello world")
+        try unitExpect(delivered == nil && !analysisCompleted)
+        output.open()
+        try await f.wait("idle")
+        try unitEqual(delivered, id)
+        try unitExpect(!analysisCompleted)
+        network.open(); await feedbackTask?.value
+        analyzed = nil
+        try await f.record(); f.session.stop(); try await f.wait("idle")
+        try unitExpect(analyzed == nil)
+        await f.session.shutdown()
+    }
+
     static func timingBreakdownAndOverlappingCleanup() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("voxa-timing-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -616,6 +650,7 @@ enum DictationSessionChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("session: feedback is independent, opt-in and preserves delivered text", feedbackNeverBlocksDelivery),
         ("session: Enter submits only its own recording", finishAndSubmit),
         ("session: timing breakdown, clipboard cleanup and overlapping recordings", timingBreakdownAndOverlappingCleanup),
         ("session: opt-in timing, cancellation, API errors and log failures", timingFailuresAndConfiguration),
@@ -636,6 +671,7 @@ enum DictationSessionChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class DictationSessionTests: XCTestCase {
+    func testFeedbackNeverBlocksDelivery() async throws { try await DictationSessionChecks.feedbackNeverBlocksDelivery() }
     func testFinishAndSubmit() async throws { try await DictationSessionChecks.finishAndSubmit() }
     func testTimingBreakdownAndOverlappingCleanup() async throws { try await DictationSessionChecks.timingBreakdownAndOverlappingCleanup() }
     func testTimingFailuresAndConfiguration() async throws { try await DictationSessionChecks.timingFailuresAndConfiguration() }

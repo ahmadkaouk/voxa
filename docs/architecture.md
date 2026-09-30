@@ -56,15 +56,51 @@ allow deterministic tests.
 
 | Component | Behavior |
 | --- | --- |
-| `AudioRecorder` | Owns AVAudioEngine lifecycle on a serial worker. A four-slot bounded inbox copies tap buffers without resampling or allocating audio buffers in the callback. Stop drains accepted audio; cancellation discards it. Interruptions, overruns, and a stalled microphone fail the recording and clean up. |
+| `AudioRecorder` | Owns AVAudioEngine lifecycle on a serial worker. A four-slot bounded inbox copies tap buffers without resampling or allocating audio buffers in the callback. Stop drains accepted audio; cancellation discards it. A pre-audio configuration change gets one clean engine restart for Bluetooth profile switching; later changes, interruptions, overruns, and a stalled microphone fail the recording and clean up. |
 | `AudioWAVEncoder` | Downmixes and streams conversion to 16 kHz mono PCM16 WAV, bounded by the configured 1–3,600-second limit. Meter sensitivity and smoothing affect the display only. |
 | `TranscriptionClient` | Uploads WAV data with async URLSession, the configured model, and a Bearer credential. The request timeout is 60 seconds. Redirects and automatic retries are disabled; errors are typed and no transcript/key is logged. |
 | `TranscriptOutput` | Serializes delivery and Copy Last Transcript. Autopaste saves all clipboard items/formats, sends paste, waits for consumption, and restores only if the clipboard still belongs to the operation. Clipboard Only intentionally replaces it; None skips automatic delivery. Explicit outcomes distinguish success from manual recovery. |
 
 Audio and the latest transcript are held in memory. The app does not persist a
-recording/transcript history. A failed paste can be recovered with Copy Last
+recording/full-transcript history. A failed paste can be recovered with Copy Last
 Transcript while the app remains open. Clipboard reads are a best-effort delivery
 signal; macOS does not acknowledge universal paste success.
+
+## English feedback
+
+`DictationSettings` snapshots the opt-in at recording start. After obtaining the
+original text, `DictationSession` emits a synchronous callback that only enqueues
+analysis; output never awaits it. A second callback marks delivery complete,
+including clipboard restoration and any Return submission. `AppController`
+connects these callbacks to a separate `FeedbackController` and nonactivating
+`FeedbackPanelController`; feedback never changes dictation state or output.
+
+`FeedbackClient` sends a separate untrusted transcript message with fixed coaching
+instructions, a strict array schema, and `gpt-6-luna` with low reasoning effort.
+It uses an ephemeral URLSession, `store: false`, a 60-second timeout, and no
+tools, redirects, or retries.
+Input above 40,000 characters is skipped. Truncated or invalid responses produce
+a quiet menu status; each finding must quote an exact source excerpt. Duplicate
+corrections are removed without capping the array. The output budget is 16,384 tokens.
+Grammar findings may include a nullable spoken `alternative`, saved as part of
+the same lesson; older saved lessons without that field remain compatible.
+See [feedback validation](english-feedback.md) for coaching quality checks.
+
+`FeedbackController` owns the findings array, request generation, presentation,
+and persistence. Delivery and recording IDs prevent premature or stale panels.
+New transcripts cancel earlier analysis; disabling and shutdown invalidate it.
+S saves all lessons in one atomic write, excluding recognition issues; D clears
+the review without modifying saved history. Failed writes retain the review, and
+a late save cannot dismiss a newer generation. Neither path changes inserted text.
+
+`CorrectionStore` is an actor that stores a versioned JSON file in Application
+Support/Voxa. A failed load blocks mutations to protect unreadable data. Only
+explicitly accepted lessons reach disk; full transcripts and practice answers do
+not. Shutdown waits for explicit writes, never for the feedback service.
+
+Existing v1 preferences default a missing `englishFeedbackEnabled` to false.
+A custom transcription endpoint requires an explicit `VOXA_OPENAI_FEEDBACK_URL`
+(HTTPS, or HTTP loopback for fixtures), avoiding an implicit fallback to OpenAI.
 
 ## Settings, credentials, and permissions
 

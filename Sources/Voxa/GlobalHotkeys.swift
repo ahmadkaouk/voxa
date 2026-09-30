@@ -5,6 +5,10 @@ import Foundation
 final class GlobalHotkeyBridge {
     var onFinishAndSubmit: (() -> Bool)?
     private var returnShortcut = FinishAndSubmitShortcut()
+    var onSaveFeedback: (() -> Bool)?
+    private var saveShortcut = FeedbackShortcut()
+    var onDiscardFeedback: (() -> Bool)?
+    private var discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
 
     var onToggleActivated: (() -> Void)?
     var onHoldActivated: (() -> Void)?
@@ -41,7 +45,8 @@ final class GlobalHotkeyBridge {
         }
         if localMonitor == nil {
             localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-                if self?.consumeReturn(keyCode: event.keyCode, isDown: event.type == .keyDown,
+                if (event.type == .keyDown || event.type == .keyUp),
+                   self?.consumeContextualShortcut(keyCode: event.keyCode, isDown: event.type == .keyDown,
                                        flags: HotkeyModifiers(eventFlags: event.modifierFlags),
                                        isRepeat: event.isARepeat) == true { return nil }
                 self?.handle(event)
@@ -68,6 +73,8 @@ final class GlobalHotkeyBridge {
             self.eventTap = nil
         }
         returnShortcut = FinishAndSubmitShortcut()
+        saveShortcut = FeedbackShortcut()
+        discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
         queue.sync {
             self.resetState()
         }
@@ -79,6 +86,9 @@ final class GlobalHotkeyBridge {
     }
 
     func resetForSystemInterruption() {
+        returnShortcut = FinishAndSubmitShortcut()
+        saveShortcut = FeedbackShortcut()
+        discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
         queue.async { [weak self] in
             self?.resetState()
         }
@@ -158,7 +168,7 @@ final class GlobalHotkeyBridge {
         }
 
         if (type == .keyDown || type == .keyUp),
-           consumeReturn(keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
+           consumeContextualShortcut(keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
                          isDown: type == .keyDown, flags: HotkeyModifiers(cgFlags: event.flags),
                          isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0) {
             return nil
@@ -182,10 +192,16 @@ final class GlobalHotkeyBridge {
         return shouldConsume ? nil : Unmanaged.passUnretained(event)
     }
 
-    // Runs on the main run loop, where the recording state can be checked before
-    // swallowing Enter. The global monitor fallback cannot swallow keys, so it
-    // deliberately leaves this action unavailable without an event tap.
-    private func consumeReturn(keyCode: UInt16, isDown: Bool, flags: HotkeyModifiers, isRepeat: Bool) -> Bool {
+    // Runs on the main run loop, where recording/card state can be checked before
+    // swallowing a contextual shortcut. The global monitor fallback cannot swallow
+    // keys, so these actions are available globally only with an event tap.
+    private func consumeContextualShortcut(keyCode: UInt16, isDown: Bool, flags: HotkeyModifiers, isRepeat: Bool) -> Bool {
+        if discardShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat, activate: {
+            queue.sync(execute: { isEnabled }) && onDiscardFeedback?() == true
+        }) { return true }
+        if saveShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat, activate: {
+            queue.sync(execute: { isEnabled }) && onSaveFeedback?() == true
+        }) { return true }
         return returnShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat) {
             queue.sync(execute: { isEnabled }) && onFinishAndSubmit?() == true
         }
