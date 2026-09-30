@@ -85,7 +85,7 @@ enum TranscriptionClientChecks {
     static func feedbackHTTPContract() async throws {
         let payload = String(decoding: try JSONEncoder().encode(FeedbackChecks.lesson), as: UTF8.self)
         let response = try JSONSerialization.data(withJSONObject: ["choices": [[
-            "finish_reason": "stop", "message": ["content": "{\"feedback\":[\(payload)]}"]]]])
+            "finish_reason": "stop", "message": ["content": "{\"feedback\":[\(payload)],\"assessment\":{\"status\":\"too_short\",\"band\":null},\"successfulPatterns\":[]}"]]]])
         let replies: [HTTPFixture.Reply] = [.response(200, response), .response(401, Data()),
                                           .response(429, Data()), .response(500, Data()),
                                           .response(200, Data("{}".utf8)), .failure(.timedOut), .pending]
@@ -106,7 +106,7 @@ enum TranscriptionClientChecks {
             do {
                 let finding = try await task.value
                 try unitEqual(index, 0)
-                try unitEqual(finding, [FeedbackChecks.lesson])
+                try unitEqual(finding.feedback, [FeedbackChecks.lesson])
             } catch {
                 switch index {
                 case 1: try unitExpect(error as? FeedbackError == .authentication)

@@ -12,6 +12,9 @@ final class FeedbackController: ObservableObject {
     @Published private(set) var storageError: String?
     @Published private(set) var storageReady = false
     @Published private(set) var isSaving = false
+    @Published private(set) var assessment: GrammarAssessment?
+    @Published private(set) var successfulPatterns: [LearningFocus] = []
+    let progress: LearningProgress
 
     private let client: any FeedbackAnalyzing
     private let store: any CorrectionStoring
@@ -23,11 +26,16 @@ final class FeedbackController: ObservableObject {
     private var delivered: UUID?
     private var busy = false
     private var closed = false
+    private var learningRecord: LearningRecord?
+    private var progressSubscription: AnyCancellable?
 
     init(client: any FeedbackAnalyzing = FeedbackClient(endpoint: FeedbackClient.configuredEndpoint()),
-         store: any CorrectionStoring = CorrectionStore()) {
+         store: any CorrectionStoring = CorrectionStore(),
+         progressStore: any LearningProgressStoring = LearningProgressStore()) {
         self.client = client
         self.store = store
+        self.progress = LearningProgress(store: progressStore)
+        progressSubscription = progress.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         reloadSaved()
     }
 
@@ -38,6 +46,7 @@ final class FeedbackController: ObservableObject {
             generation = UUID()
             request?.cancel(); request = nil
             findings = []; currentRequest = nil; delivered = nil
+            assessment = nil; successfulPatterns = []; learningRecord = nil
             panelVisible = false; isAnalyzing = false; status = nil
         }
     }
@@ -57,17 +66,25 @@ final class FeedbackController: ObservableObject {
         generation = token
         currentRequest = id; delivered = nil
         findings = []; panelVisible = false; status = nil; isAnalyzing = true
+        assessment = nil; successfulPatterns = []; learningRecord = nil
         let client = client
+        let knownPatterns = progress.knownPatterns.union(saved.flatMap { item in
+            [item.feedback.focus, item.feedback.alternative?.focus].compactMap { $0 }
+        })
         request = Task { [weak self] in
             do {
-                let findings = try await client.analyze(transcript, apiKey: apiKey)
+                let result = try await client.analyze(transcript, apiKey: apiKey, knownPatterns: knownPatterns)
                 guard let self, !self.closed, self.enabled, self.generation == token, !Task.isCancelled else { return }
                 self.isAnalyzing = false
-                let valid = try EnglishFeedback.validated(findings, for: transcript)
+                let valid = try result.validated(for: transcript, knownPatterns: knownPatterns)
                 let date = Date()
-                self.findings = valid.enumerated().map { index, feedback in
+                self.findings = valid.feedback.enumerated().map { index, feedback in
                     SavedCorrection(id: index == 0 ? id : UUID(), date: date, feedback: feedback)
                 }
+                self.assessment = valid.assessment
+                self.successfulPatterns = valid.successfulPatterns.map(\.focus)
+                self.learningRecord = LearningRecord(id: id, date: date, analysis: valid)
+                self.recordProgressIfReady()
                 self.presentIfReady()
             } catch {
                 guard let self, !self.closed, self.generation == token, !Task.isCancelled else { return }
@@ -81,21 +98,38 @@ final class FeedbackController: ObservableObject {
     func deliveryFinished(id: UUID) {
         guard !closed, currentRequest == id else { return }
         delivered = id
+        recordProgressIfReady()
         presentIfReady()
     }
 
+    private func recordProgressIfReady() {
+        guard enabled, !closed, let currentRequest, delivered == currentRequest, let learningRecord else { return }
+        progress.record(learningRecord)
+        self.learningRecord = nil
+    }
+
+    var hasReview: Bool { !findings.isEmpty || assessment?.band != nil || !successfulPatterns.isEmpty }
+
+    var corrections: [SavedCorrection] { findings.filter { $0.feedback.kind == .grammar || $0.feedback.kind == .construction } }
+    var alternatives: [SavedCorrection] { findings.filter { $0.feedback.kind == .phrasing } }
+    var transcriptionIssues: [SavedCorrection] { findings.filter { $0.feedback.kind == .transcriptionIssue } }
+
+    func previousOccurrences(of focus: LearningFocus) -> Int {
+        progress.records.filter { $0.id != currentRequest && $0.mistakes.contains(focus) }.count
+    }
+
     private func presentIfReady() {
-        guard enabled, !closed, !busy, !findings.isEmpty, let currentRequest,
+        guard enabled, !closed, !busy, hasReview, let currentRequest,
               delivered == currentRequest, latestRecording == currentRequest else { return }
         panelVisible = true
     }
 
     func showLatest() {
-        guard enabled, !closed, !busy, !findings.isEmpty, let currentRequest, delivered == currentRequest else { return }
+        guard enabled, !closed, !busy, hasReview, let currentRequest, delivered == currentRequest else { return }
         panelVisible = true
     }
 
-    func dismiss() { findings = []; panelVisible = false }
+    func dismiss() { findings = []; assessment = nil; successfulPatterns = []; panelVisible = false }
 
     var hasLessons: Bool { findings.contains { $0.feedback.kind != .transcriptionIssue } }
 
@@ -103,7 +137,7 @@ final class FeedbackController: ObservableObject {
     /// are consumed while saving; a failure keeps the entire review available.
     @discardableResult
     func saveAndClose() -> Bool {
-        guard enabled, !closed, !busy, panelVisible, !findings.isEmpty else { return false }
+        guard enabled, !closed, !busy, panelVisible, hasReview else { return false }
         guard !isSaving else { return true }
         let lessons = findings.filter { $0.feedback.kind != .transcriptionIssue }
         guard !lessons.isEmpty else { dismiss(); return true }
@@ -117,7 +151,7 @@ final class FeedbackController: ObservableObject {
 
     @discardableResult
     func discardReview() -> Bool {
-        guard enabled, !closed, !busy, panelVisible, !findings.isEmpty else { return false }
+        guard enabled, !closed, !busy, panelVisible, hasReview else { return false }
         // Do not race an explicit save. Discard never changes previously saved lessons.
         if !isSaving { dismiss() }
         return true
@@ -163,7 +197,9 @@ final class FeedbackController: ObservableObject {
         closed = true; generation = UUID()
         request?.cancel(); request = nil
         findings = []; panelVisible = false; status = nil; isAnalyzing = false
+        assessment = nil; successfulPatterns = []; learningRecord = nil
         // Explicit saves finish, but a stalled feedback API cannot delay Quit.
         await persistence?.value
+        await progress.finishPendingWrites()
     }
 }

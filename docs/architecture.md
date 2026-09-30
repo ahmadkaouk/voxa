@@ -76,27 +76,53 @@ connects these callbacks to a separate `FeedbackController` and nonactivating
 `FeedbackPanelController`; feedback never changes dictation state or output.
 
 `FeedbackClient` sends a separate untrusted transcript message with fixed coaching
-instructions, a strict array schema, and `gpt-6-luna` with low reasoning effort.
+instructions, a strict `FeedbackAnalysis` schema, and `gpt-6-luna` with low reasoning effort.
 It uses an ephemeral URLSession, `store: false`, a 60-second timeout, and no
 tools, redirects, or retries.
 Input above 40,000 characters is skipped. Truncated or invalid responses produce
 a quiet menu status; each finding must quote an exact source excerpt. Duplicate
 corrections are removed without capping the array. The output budget is 16,384 tokens.
 Grammar findings may include a nullable spoken `alternative`, saved as part of
-the same lesson; older saved lessons without that field remain compatible.
+the same lesson. Optional `pattern` templates and stable `LearningFocus` categories
+support reusable expressions and history; older saved lessons without these fields
+remain compatible. The response also contains `GrammarAssessment` and grounded
+`successfulPatterns` observations. Only category IDs from prior reviews/saved
+lessons accompany the next transcript; prior excerpts never leave local storage.
+
+The grammar rubric has fixed 2/4/6/8/10 bands, not model confidence or a deduction
+per correction. Code suppresses scores under 20 words, for recognition issues, or
+when the band contradicts the actual errors. The model must also abstain on
+insufficient English or ambiguous transcripts. Optional phrasing cannot lower a
+score. Success observations need exact source evidence and a previously encountered
+category; same-category errors, uncertainty and duplicate observations are excluded.
+These safeguards constrain the response, but do not establish linguistic accuracy.
+
+The Decisions API announced at [DevDay 2026](https://openai.com/index/devday-2026-recap/)
+is in limited preview as of September 30. No public endpoint/schema was verified.
+This version uses the existing structured text API; no speculative Decisions calls
+or model identifiers have been added. Assessment is kept separate from wording in
+the response so a documented decision evaluator can be integrated later.
 See [feedback validation](english-feedback.md) for coaching quality checks.
 
 `FeedbackController` owns the findings array, request generation, presentation,
 and persistence. Delivery and recording IDs prevent premature or stale panels.
 New transcripts cancel earlier analysis; disabling and shutdown invalidate it.
 S saves all lessons in one atomic write, excluding recognition issues; D clears
-the review without modifying saved history. Failed writes retain the review, and
+the review without saving lesson excerpts. Automatic progress is independent of S/D. Failed writes retain the review, and
 a late save cannot dismiss a newer generation. Neither path changes inserted text.
 
 `CorrectionStore` is an actor that stores a versioned JSON file in Application
 Support/Voxa. A failed load blocks mutations to protect unreadable data. Only
 explicitly accepted lessons reach disk; full transcripts and practice answers do
-not. Shutdown waits for explicit writes, never for the feedback service.
+not. `LearningProgressStore` separately persists bounded, versioned metadata for up
+to 200 reviews: ID, date, score band, and unique mistake/suggestion/success categories.
+It never persists the source evidence. `LearningProgress` queues serial writes,
+deduplicates recording IDs, protects corrupt files, and offers retry and clear.
+Recording progress requires validated analysis plus the delivery callback; it never
+waits on lesson acceptance. Failed progress writes do not hide feedback. Disabling
+cancels pending analysis, while already queued metadata writes finish. Shutdown
+waits for local writes, never for the feedback service. Files use mode 0600 and
+atomic replacement; application-support directories are created with mode 0700.
 
 Existing v1 preferences default a missing `englishFeedbackEnabled` to false.
 A custom transcription endpoint requires an explicit `VOXA_OPENAI_FEEDBACK_URL`

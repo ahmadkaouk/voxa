@@ -1,7 +1,7 @@
 import Foundation
 
 protocol FeedbackAnalyzing: Sendable {
-    func analyze(_ transcript: String, apiKey: String) async throws -> [EnglishFeedback]
+    func analyze(_ transcript: String, apiKey: String, knownPatterns: Set<LearningFocus>) async throws -> FeedbackAnalysis
 }
 
 /// A separate text request. No tools, conversation history, redirects, retries, or disk cache.
@@ -55,6 +55,35 @@ struct FeedbackClient: FeedbackAnalyzing {
     using the corrected pattern or conversational expression (maximum 240 characters).
     For transcription_issue, practicePrompt is empty; do not invent a learning lesson.
 
+    TEACH REUSABLE PATTERNS: pattern is a short reusable template (at most 90 characters), e.g.
+    'Could we + action?' or 'Yesterday + subject + past-tense verb'. Include it for phrasing and
+    paired alternatives. Use null when a template would only repeat the explanation.
+    focus identifies the closest stable learning category, or null if none fits. Grammar and
+    construction use only past_tense, agreement, articles, prepositions, question_order, verb_form,
+    plurals or sentence_structure. Phrasing/alternatives can also use polite_requests, giving_reasons,
+    connecting_ideas or expressing_uncertainty. For transcription_issue, focus and pattern are null.
+
+    GRAMMAR ESTIMATE: assessment judges the ORIGINAL final intended English, before correction.
+    Set status=too_short and band=null for fewer than 20 assessable English words, non_english for
+    insufficient English, or uncertain for unreliable recognition or ambiguous intended wording.
+    Otherwise status=assessed and choose exactly one fixed band:
+    10: no confident grammar/construction errors, including when there are optional alternatives.
+    8: mostly accurate; isolated minor errors, meaning clear throughout.
+    6: several errors or a recurring rule error, but meaning remains clear.
+    4: frequent grammar/construction errors sometimes obscure meaning.
+    2: pervasive grammar/construction errors often obscure meaning.
+    Consider errors relative to the amount of speech; do not subtract points for each finding.
+    Never penalise optional phrasing, informal speech, vocabulary sophistication, fillers,
+    punctuation, self-repairs or recognition mistakes. Never score the rewritten text.
+
+    successfulPatterns reports correct use of previously encountered categories listed in the
+    user's knownPatterns array. Check the ENTIRE original dictation, even when feedback is empty.
+    Return at most one observation per known category, with an exact contiguous evidence excerpt
+    (at most 400 characters). An actual opportunity must occur; absence of an error is not success.
+    Do not report success for a category that also has an uncorrected error in this dictation,
+    for a self-repair, uncertain recognition, or a wording you generated. These observations are
+    pattern practice, not claims that the speaker has mastered a rule. Return [] when none apply.
+
     Examples:
     'We discussed about the API change.' -> 'We discussed the API change.', grammar:
     'Use discuss directly with the topic, without about.'
@@ -96,9 +125,9 @@ struct FeedbackClient: FeedbackAnalyzing {
         return defaultEndpoint
     }
 
-    func analyze(_ transcript: String, apiKey: String) async throws -> [EnglishFeedback] {
+    func analyze(_ transcript: String, apiKey: String, knownPatterns: Set<LearningFocus> = []) async throws -> FeedbackAnalysis {
         try Task.checkCancellation()
-        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return FeedbackAnalysis(feedback: []) }
         guard transcript.count <= 40_000 else { throw FeedbackError.tooLong }
         guard let endpoint, endpoint.scheme == "https" ||
                 (endpoint.scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(endpoint.host ?? "")) else {
@@ -110,7 +139,7 @@ struct FeedbackClient: FeedbackAnalyzing {
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try Self.requestBody(transcript)
+        request.httpBody = try Self.requestBody(transcript, knownPatterns: knownPatterns)
         let data: Data, response: URLResponse
         do {
             (data, response) = try await session.data(for: request, delegate: FeedbackRequestDelegate())
@@ -126,25 +155,38 @@ struct FeedbackClient: FeedbackAnalyzing {
         case 429: throw FeedbackError.rateLimited
         default: throw FeedbackError.network
         }
-        return try Self.parse(data, transcript: transcript)
+        return try Self.parse(data, transcript: transcript, knownPatterns: knownPatterns)
     }
 
-    static func requestBody(_ transcript: String) throws -> Data {
+    static func requestBody(_ transcript: String, knownPatterns: Set<LearningFocus> = []) throws -> Data {
         let string: [String: Any] = ["type": "string"]
+        let pattern: [String: Any] = ["type": ["string", "null"]]
+        let focus: [String: Any] = ["anyOf": [
+            ["type": "string", "enum": LearningFocus.allCases.map(\.rawValue)], ["type": "null"]]]
         let alternative: [String: Any] = ["type": "object", "additionalProperties": false,
-            "required": ["wording", "explanation"],
-            "properties": ["wording": string, "explanation": string]]
+            "required": ["wording", "explanation", "pattern", "focus"],
+            "properties": ["wording": string, "explanation": string, "pattern": pattern, "focus": focus]]
         let properties: [String: Any] = [
             "kind": ["type": "string", "enum": FeedbackKind.allCases.map(\.rawValue)],
             "original": string, "suggestion": string, "explanation": string, "practicePrompt": string,
             "alternative": ["anyOf": [alternative, ["type": "null"]]],
+            "pattern": pattern, "focus": focus,
         ]
         let finding: [String: Any] = ["type": "object", "properties": properties,
                                      "required": properties.keys.sorted(), "additionalProperties": false]
+        let assessment: [String: Any] = ["type": "object", "additionalProperties": false,
+            "required": ["status", "band"], "properties": [
+                "status": ["type": "string", "enum": ["assessed", "too_short", "uncertain", "non_english"]],
+                "band": ["anyOf": [["type": "integer", "enum": GrammarBand.allCases.map(\.rawValue)], ["type": "null"]]]]]
+        let observation: [String: Any] = ["type": "object", "additionalProperties": false,
+            "required": ["focus", "evidence"], "properties": [
+                "focus": ["type": "string", "enum": LearningFocus.allCases.map(\.rawValue)], "evidence": string]]
         let schema: [String: Any] = ["type": "object", "additionalProperties": false,
-                                    "required": ["feedback"], "properties": [
-                                        "feedback": ["type": "array", "items": finding]]]
-        let input = try JSONSerialization.data(withJSONObject: ["transcript": transcript])
+            "required": ["feedback", "assessment", "successfulPatterns"], "properties": [
+                "feedback": ["type": "array", "items": finding], "assessment": assessment,
+                "successfulPatterns": ["type": "array", "items": observation]]]
+        let input = try JSONSerialization.data(withJSONObject: ["transcript": transcript,
+            "knownPatterns": knownPatterns.map(\.rawValue).sorted()])
         return try JSONSerialization.data(withJSONObject: [
             "model": model, "store": false, "reasoning_effort": "low", "max_completion_tokens": 16_384,
             "messages": [["role": "system", "content": instructions],
@@ -154,7 +196,7 @@ struct FeedbackClient: FeedbackAnalyzing {
         ])
     }
 
-    static func parse(_ data: Data, transcript: String) throws -> [EnglishFeedback] {
+    static func parse(_ data: Data, transcript: String, knownPatterns: Set<LearningFocus> = []) throws -> FeedbackAnalysis {
         struct Envelope: Decodable {
             struct Choice: Decodable {
                 struct Message: Decodable { let content: String?; let refusal: String? }
@@ -163,7 +205,6 @@ struct FeedbackClient: FeedbackAnalyzing {
             }
             let choices: [Choice]
         }
-        struct Result: Decodable { let feedback: [EnglishFeedback] }
         guard data.count <= 1_048_576,
               let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
               envelope.choices.count == 1, let choice = envelope.choices.first,
@@ -173,11 +214,11 @@ struct FeedbackClient: FeedbackAnalyzing {
         if choice.finish_reason == "length" { throw FeedbackError.incompleteResponse }
         guard choice.finish_reason == "stop", let content = choice.message.content,
               let object = try? JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any],
-              Set(object.keys) == ["feedback"],
-              let result = try? JSONDecoder().decode(Result.self, from: Data(content.utf8)) else {
+              Set(object.keys) == ["feedback", "assessment", "successfulPatterns"],
+              let result = try? JSONDecoder().decode(FeedbackAnalysis.self, from: Data(content.utf8)) else {
             throw FeedbackError.invalidResponse
         }
-        return try EnglishFeedback.validated(result.feedback, for: transcript)
+        return try result.validated(for: transcript, knownPatterns: knownPatterns)
     }
 }
 

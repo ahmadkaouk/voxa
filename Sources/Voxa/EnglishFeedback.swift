@@ -17,10 +17,18 @@ enum FeedbackKind: String, Codable, Sendable, CaseIterable {
 struct SpokenAlternative: Codable, Equatable, Sendable {
     let wording: String
     let explanation: String
+    let pattern: String?
+    let focus: LearningFocus?
+
+    init(wording: String, explanation: String, pattern: String? = nil, focus: LearningFocus? = nil) {
+        self.wording = wording; self.explanation = explanation
+        self.pattern = pattern; self.focus = focus
+    }
 
     var isValid: Bool {
         !wording.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && wording.count <= 400
             && !explanation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && explanation.count <= 180
+            && EnglishFeedback.validPattern(pattern)
     }
 }
 
@@ -31,15 +39,22 @@ struct EnglishFeedback: Codable, Equatable, Sendable {
     let explanation: String
     let practicePrompt: String
     let alternative: SpokenAlternative?
+    let pattern: String?
+    let focus: LearningFocus?
 
     init(kind: FeedbackKind, original: String, suggestion: String, explanation: String,
-         practicePrompt: String, alternative: SpokenAlternative? = nil) {
+         practicePrompt: String, alternative: SpokenAlternative? = nil,
+         pattern: String? = nil, focus: LearningFocus? = nil) {
         self.kind = kind; self.original = original; self.suggestion = suggestion
         self.explanation = explanation; self.practicePrompt = practicePrompt
         self.alternative = alternative
+        self.pattern = pattern; self.focus = focus
     }
 
     var isValid: Bool {
+        guard Self.validPattern(pattern) else { return false }
+        if kind == .transcriptionIssue, focus != nil || pattern != nil { return false }
+        if kind == .grammar || kind == .construction, let focus, !focus.isGrammar { return false }
         if let alternative {
             guard (kind == .grammar || kind == .construction), alternative.isValid,
                   alternative.wording != suggestion, alternative.wording != original else { return false }
@@ -48,6 +63,10 @@ struct EnglishFeedback: Codable, Equatable, Sendable {
         return required.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 }
             && original != suggestion && practicePrompt.count <= 240
             && (kind == .transcriptionIssue || !practicePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    static func validPattern(_ pattern: String?) -> Bool {
+        pattern.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 90 } ?? true
     }
 
     func validated(for transcript: String) throws -> EnglishFeedback {
@@ -59,8 +78,22 @@ struct EnglishFeedback: Codable, Equatable, Sendable {
         var unique: [EnglishFeedback] = []
         for finding in findings {
             let valid = try finding.validated(for: transcript)
-            if !unique.contains(where: { $0.original == valid.original && $0.suggestion == valid.suggestion }) {
+            // Spoken coaching should not become a punctuation/capitalisation review.
+            guard spokenWords(valid.original) != spokenWords(valid.suggestion) else { continue }
+            if let index = unique.firstIndex(where: { $0.original == valid.original && $0.suggestion == valid.suggestion }) {
+                // Resolve duplicate labels conservatively: uncertainty wins; an actual correction
+                // otherwise takes precedence over a duplicate optional rewrite.
+                if valid.kind == .transcriptionIssue || (unique[index].kind == .phrasing && valid.kind != .phrasing) {
+                    unique[index] = valid
+                }
+            } else {
                 unique.append(valid)
+            }
+        }
+        let corrections = unique.filter { $0.kind == .grammar || $0.kind == .construction }
+        unique.removeAll { finding in
+            finding.kind == .phrasing && corrections.contains {
+                $0.original == finding.original && $0.alternative?.wording == finding.suggestion
             }
         }
         // Keep independent fixes to the same excerpt, and retain model order for ties.
@@ -69,6 +102,11 @@ struct EnglishFeedback: Codable, Equatable, Sendable {
             let right = transcript.range(of: rhs.element.original)!.lowerBound
             return left == right ? lhs.offset < rhs.offset : left < right
         }.map(\.element)
+    }
+
+    private static func spokenWords(_ text: String) -> [String] {
+        text.lowercased().replacingOccurrences(of: "’", with: "'")
+            .split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map(String.init)
     }
 }
 
@@ -80,12 +118,16 @@ struct SavedCorrection: Codable, Identifiable, Equatable, Sendable {
 
 /// Word-level changes preserve the exact source text, including punctuation and whitespace.
 struct FeedbackDifference {
+    enum Change { case unchanged, removed, added }
+    struct InlineToken { let text: String; let change: Change }
     struct Token: Equatable {
         let text: String
         let changed: Bool
     }
     let original: [Token]
     let suggestion: [Token]
+    let inline: [InlineToken]
+    let isCompact: Bool
 
     init(original: String, suggestion: String) {
         func tokens(_ text: String) -> [String] {
@@ -105,6 +147,21 @@ struct FeedbackDifference {
         }
         self.original = before.enumerated().map { Token(text: $0.element, changed: removed.contains($0.offset)) }
         self.suggestion = after.enumerated().map { Token(text: $0.element, changed: added.contains($0.offset)) }
+        var merged: [InlineToken] = []
+        var left = 0, right = 0
+        while left < before.count || right < after.count {
+            if left < before.count, removed.contains(left) {
+                merged.append(InlineToken(text: before[left], change: .removed)); left += 1
+            } else if right < after.count, added.contains(right) {
+                merged.append(InlineToken(text: after[right], change: .added)); right += 1
+            } else if left < before.count, right < after.count {
+                merged.append(InlineToken(text: after[right], change: .unchanged)); left += 1; right += 1
+            } else { break }
+        }
+        self.inline = merged
+        let changedWords = merged.filter { $0.change != .unchanged && $0.text.contains(where: \.isLetter) }.count
+        let words = max(1, after.filter { $0.contains(where: \.isLetter) }.count)
+        self.isCompact = changedWords <= 8 && Double(changedWords) / Double(words) <= 0.8
     }
 }
 

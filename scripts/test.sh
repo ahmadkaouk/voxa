@@ -74,6 +74,7 @@ PLIST
         Sources/Voxa/Preferences.swift Sources/Voxa/Keychain.swift Sources/Voxa/CaptureGuard.swift
         Sources/Voxa/EnglishFeedback.swift Sources/Voxa/FeedbackClient.swift
         Sources/Voxa/FeedbackController.swift Sources/Voxa/CorrectionStore.swift
+        Sources/Voxa/LearningAssessment.swift Sources/Voxa/LearningProgress.swift
         Tests/VoxaTests/NativeSetupTests.swift Tests/VoxaTests/UnitChecksSupport.swift
         Tests/VoxaTests/NativePipelineChecksSupport.swift Tests/VoxaTests/DictationSessionTests.swift
         Tests/VoxaTests/TranscriptionClientTests.swift Tests/VoxaTests/AsyncTranscriptOutputTests.swift

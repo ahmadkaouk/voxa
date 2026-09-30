@@ -8,12 +8,16 @@ import XCTest
 @MainActor
 private final class FeedbackFixture: FeedbackAnalyzing {
     var findings: [EnglishFeedback] = [FeedbackChecks.lesson]
+    var assessment: GrammarAssessment = .tooShort
+    var successes: [PatternObservation] = []
+    var knownPatterns: [Set<LearningFocus>] = []
     var gate: PipelineGate?
     var error: Error?
     var calls = 0
-    func analyze(_ transcript: String, apiKey: String) async throws -> [EnglishFeedback] {
+    func analyze(_ transcript: String, apiKey: String, knownPatterns: Set<LearningFocus>) async throws -> FeedbackAnalysis {
         calls += 1
-        let captured = findings
+        self.knownPatterns.append(knownPatterns)
+        let captured = FeedbackAnalysis(feedback: findings, assessment: assessment, successfulPatterns: successes)
         await gate?.wait()
         if let error { throw error }
         return captured
@@ -34,12 +38,33 @@ private final class MemoryCorrections: CorrectionStoring {
 }
 
 @MainActor
+private final class MemoryLearningProgress: LearningProgressStoring {
+    var records: [LearningRecord] = []
+    var failLoad = false
+    var failSave = false
+    var loadGate: PipelineGate?
+    var saveGate: PipelineGate?
+    var writes = 0
+    func load() async throws -> [LearningRecord] {
+        await loadGate?.wait()
+        if failLoad { throw FeedbackError.unavailable }
+        return records
+    }
+    func save(_ records: [LearningRecord]) async throws {
+        writes += 1
+        await saveGate?.wait()
+        if failSave { throw FeedbackError.unavailable }
+        self.records = records
+    }
+}
+
+@MainActor
 enum FeedbackChecks {
     static func recognitionOnlyReview() async throws {
         let fixture = FeedbackFixture(), store = MemoryCorrections()
         fixture.findings = [EnglishFeedback(kind: .transcriptionIssue, original: lesson.original,
             suggestion: lesson.suggestion, explanation: "This may be a transcription issue.", practicePrompt: "")]
-        let controller = FeedbackController(client: fixture, store: store)
+        let controller = FeedbackController(client: fixture, store: store, progressStore: MemoryLearningProgress())
         controller.setEnabled(true)
         let id = UUID()
         start(controller, id: id); finish(controller, id: id)
@@ -59,7 +84,7 @@ enum FeedbackChecks {
             suggestion: "Cache the API.", explanation: "This may be a recognition error.", practicePrompt: "")
         let fixture = FeedbackFixture(), store = MemoryCorrections()
         fixture.findings = [issue, alternative, lesson, alternative]
-        let controller = FeedbackController(client: fixture, store: store)
+        let controller = FeedbackController(client: fixture, store: store, progressStore: MemoryLearningProgress())
         try await eventually { controller.storageReady }
         try unitExpect(!controller.saveAndClose() && !controller.discardReview())
         controller.setEnabled(true)
@@ -130,8 +155,8 @@ enum FeedbackChecks {
         let transcript = many.map(\.original).joined(separator: " ")
         let payload = String(decoding: try JSONEncoder().encode(many), as: UTF8.self)
         let data = try JSONSerialization.data(withJSONObject: ["choices": [["finish_reason": "stop",
-            "message": ["content": "{\"feedback\":\(payload)}"]]]])
-        try unitEqual(try FeedbackClient.parse(data, transcript: transcript), many)
+            "message": ["content": "{\"feedback\":\(payload),\"assessment\":{\"status\":\"too_short\",\"band\":null},\"successfulPatterns\":[]}"]]]])
+        try unitEqual(try FeedbackClient.parse(data, transcript: transcript).feedback, many)
         // No arbitrary list cap, and separate corrections to the same sentence survive.
         let request = try JSONSerialization.jsonObject(with: FeedbackClient.requestBody(transcript)) as! [String: Any]
         let format = request["response_format"] as! [String: Any]
@@ -156,7 +181,7 @@ enum FeedbackChecks {
 
     static func deliveryAndPrivacyGates() async throws {
         let fixture = FeedbackFixture(), store = MemoryCorrections()
-        let controller = FeedbackController(client: fixture, store: store)
+        let controller = FeedbackController(client: fixture, store: store, progressStore: MemoryLearningProgress())
         try await eventually { controller.storageReady }
         let id = UUID()
         start(controller, id: id)
@@ -184,7 +209,7 @@ enum FeedbackChecks {
 
     static func staleResultsAndCancellation() async throws {
         let fixture = FeedbackFixture(), store = MemoryCorrections(), firstGate = PipelineGate()
-        let controller = FeedbackController(client: fixture, store: store)
+        let controller = FeedbackController(client: fixture, store: store, progressStore: MemoryLearningProgress())
         controller.setEnabled(true)
         fixture.gate = firstGate
         let first = UUID()
@@ -224,7 +249,7 @@ enum FeedbackChecks {
     static func oldFeedbackDoesNotInterruptNewRecording() async throws {
         let fixture = FeedbackFixture(), gate = PipelineGate()
         fixture.gate = gate
-        let controller = FeedbackController(client: fixture, store: MemoryCorrections())
+        let controller = FeedbackController(client: fixture, store: MemoryCorrections(), progressStore: MemoryLearningProgress())
         controller.setEnabled(true)
         let first = UUID(), second = UUID()
         start(controller, id: first)
@@ -242,7 +267,7 @@ enum FeedbackChecks {
 
     static func analysisFailuresAndRecovery() async throws {
         let fixture = FeedbackFixture(), store = MemoryCorrections()
-        let controller = FeedbackController(client: fixture, store: store)
+        let controller = FeedbackController(client: fixture, store: store, progressStore: MemoryLearningProgress())
         controller.setEnabled(true)
         fixture.findings = []
         let empty = UUID()
@@ -277,19 +302,19 @@ enum FeedbackChecks {
         try unitEqual(messages.count, 2)
         try unitEqual(messages[0]["role"], "system")
         try unitExpect(!messages[0]["content"]!.contains(hostile))
-        let input = try JSONSerialization.jsonObject(with: Data(messages[1]["content"]!.utf8)) as! [String: String]
-        try unitEqual(input["transcript"], hostile)
+        let input = try JSONSerialization.jsonObject(with: Data(messages[1]["content"]!.utf8)) as! [String: Any]
+        try unitEqual(input["transcript"] as? String, hostile)
         try unitExpect(FeedbackClient.configuredEndpoint(environment: ["VOXA_OPENAI_TRANSCRIPTIONS_URL": "http://localhost/transcribe"]) == nil)
 
         func envelope(_ content: String, finish: String = "stop") throws -> Data {
             try JSONSerialization.data(withJSONObject: ["choices": [["finish_reason": finish, "message": ["content": content]]]])
         }
         let payload = String(decoding: try JSONEncoder().encode(lesson), as: UTF8.self)
-        let valid = try envelope("{\"feedback\":[\(payload)]}")
-        try unitEqual(try FeedbackClient.parse(valid, transcript: hostile), [lesson])
-        let noFinding = try FeedbackClient.parse(envelope("{\"feedback\":[]}"), transcript: hostile)
-        try unitExpect(noFinding.isEmpty)
-        for bad in [try envelope("{}"), try envelope("{\"feedback\":\(payload)}"),
+        let valid = try envelope("{\"feedback\":[\(payload)],\"assessment\":{\"status\":\"too_short\",\"band\":null},\"successfulPatterns\":[]}")
+        try unitEqual(try FeedbackClient.parse(valid, transcript: hostile).feedback, [lesson])
+        let noFinding = try FeedbackClient.parse(envelope("{\"feedback\":[],\"assessment\":{\"status\":\"too_short\",\"band\":null},\"successfulPatterns\":[]}"), transcript: hostile)
+        try unitExpect(noFinding.feedback.isEmpty)
+        for bad in [try envelope("{}"), try envelope("{\"feedback\":\(payload),\"assessment\":{\"status\":\"too_short\",\"band\":null},\"successfulPatterns\":[]}"),
                     try envelope("{\"feedback\":null}"),
                     Data("invalid".utf8)] {
             do { _ = try FeedbackClient.parse(bad, transcript: hostile); try unitExpect(false) }
@@ -297,8 +322,8 @@ enum FeedbackChecks {
         }
         do { _ = try FeedbackClient.parse(envelope("{\"feedback\":[", finish: "length"), transcript: hostile); try unitExpect(false) }
         catch FeedbackError.incompleteResponse { }
-        let duplicate = try envelope("{\"feedback\":[\(payload),\(payload)]}")
-        try unitEqual(try FeedbackClient.parse(duplicate, transcript: hostile), [lesson])
+        let duplicate = try envelope("{\"feedback\":[\(payload),\(payload)],\"assessment\":{\"status\":\"too_short\",\"band\":null},\"successfulPatterns\":[]}")
+        try unitEqual(try FeedbackClient.parse(duplicate, transcript: hostile).feedback, [lesson])
         do { _ = try FeedbackClient.parse(valid, transcript: "A different transcript"); try unitExpect(false) }
         catch FeedbackError.invalidResponse { }
         let diff = FeedbackDifference(original: lesson.original, suggestion: lesson.suggestion)
@@ -317,8 +342,8 @@ enum FeedbackChecks {
             explanation: lesson.explanation, practicePrompt: lesson.practicePrompt, alternative: option)
         let payload = String(decoding: try JSONEncoder().encode(paired), as: UTF8.self)
         let response = try JSONSerialization.data(withJSONObject: ["choices": [["finish_reason": "stop",
-            "message": ["content": "{\"feedback\":[\(payload)]}"]]]])
-        try unitEqual(try FeedbackClient.parse(response, transcript: lesson.original), [paired])
+            "message": ["content": "{\"feedback\":[\(payload)],\"assessment\":{\"status\":\"too_short\",\"band\":null},\"successfulPatterns\":[]}"]]]])
+        try unitEqual(try FeedbackClient.parse(response, transcript: lesson.original).feedback, [paired])
         // Existing saved lessons have no alternative key and must continue to decode.
         let oldData = try JSONEncoder().encode(lesson)
         try unitExpect(!String(decoding: oldData, as: UTF8.self).contains("alternative"))
@@ -341,7 +366,7 @@ enum FeedbackChecks {
         try unitEqual(try await store.load(), items)
         let fixture = FeedbackFixture()
         fixture.findings = [paired]
-        let controller = FeedbackController(client: fixture, store: MemoryCorrections())
+        let controller = FeedbackController(client: fixture, store: MemoryCorrections(), progressStore: MemoryLearningProgress())
         controller.setEnabled(true)
         let id = UUID()
         start(controller, id: id); finish(controller, id: id)
@@ -366,7 +391,7 @@ enum FeedbackChecks {
         let text = String(decoding: try Data(contentsOf: url), as: UTF8.self)
         try unitExpect(!text.contains("apiKey") && !text.contains("transcript"))
         try Data("broken".utf8).write(to: url)
-        let controller = FeedbackController(client: FeedbackFixture(), store: store)
+        let controller = FeedbackController(client: FeedbackFixture(), store: store, progressStore: MemoryLearningProgress())
         try await eventually { !controller.isSaving }
         try unitExpect(!controller.storageReady && controller.storageError != nil)
         controller.deleteAll() // Never overwrite a file we couldn't read.
@@ -376,7 +401,238 @@ enum FeedbackChecks {
         try unitEqual(try await store.load(), [])
     }
 
+    static let focusedLesson = EnglishFeedback(kind: .grammar, original: lesson.original,
+        suggestion: lesson.suggestion, explanation: lesson.explanation, practicePrompt: lesson.practicePrompt,
+        pattern: "Yesterday + subject + past-tense verb", focus: .pastTense)
+    static let longTranscript = lesson.original + " We are reviewing the API response today, and I would like to check the latest changes with the team before we ship."
+
+    static func grammarRubricAndAbstention() throws {
+        let correction = FeedbackAnalysis(feedback: [focusedLesson], assessment: .init(status: .assessed, band: .minor))
+        try unitEqual(try correction.validated(for: longTranscript).assessment.band, .minor)
+        try unitEqual(try correction.validated(for: lesson.original).assessment, .tooShort)
+        let inaccurate = FeedbackAnalysis(feedback: [focusedLesson], assessment: .init(status: .assessed, band: .accurate))
+        try unitEqual(try inaccurate.validated(for: longTranscript).assessment, .uncertain)
+        let inventedError = FeedbackAnalysis(feedback: [], assessment: .init(status: .assessed, band: .recurring))
+        try unitEqual(try inventedError.validated(for: longTranscript).assessment, .uncertain)
+        let recognition = EnglishFeedback(kind: .transcriptionIssue, original: lesson.original,
+            suggestion: lesson.suggestion, explanation: "Check the recognition.", practicePrompt: "")
+        let uncertain = FeedbackAnalysis(feedback: [recognition], assessment: .init(status: .assessed, band: .minor))
+        try unitEqual(try uncertain.validated(for: longTranscript).assessment, .uncertain)
+        let optional = EnglishFeedback(kind: .phrasing, original: "I would like to check the latest changes with the team before we ship.",
+            suggestion: "Could we review the latest changes before shipping?", explanation: "A shorter polite request.",
+            practicePrompt: "Ask for another review.", pattern: "Could we + action?", focus: .politeRequests)
+        let natural = FeedbackAnalysis(feedback: [optional], assessment: .init(status: .assessed, band: .accurate))
+        try unitEqual(try natural.validated(for: longTranscript).assessment.band, .accurate) // Optional changes cost no points.
+        for invalid in [GrammarAssessment(status: .assessed, band: nil), .init(status: .tooShort, band: .minor)] {
+            do { _ = try invalid.validated(for: longTranscript, findings: []); try unitExpect(false) }
+            catch FeedbackError.invalidResponse {}
+        }
+        let payload = "{\"feedback\":[],\"assessment\":{\"status\":\"assessed\",\"band\":9},\"successfulPatterns\":[]}"
+        let data = try JSONSerialization.data(withJSONObject: ["choices": [["finish_reason": "stop", "message": ["content": payload]]]])
+        do { _ = try FeedbackClient.parse(data, transcript: longTranscript); try unitExpect(false) }
+        catch FeedbackError.invalidResponse {} // No invented precision between the fixed bands.
+        let wrongFocus = EnglishFeedback(kind: .grammar, original: lesson.original, suggestion: lesson.suggestion,
+            explanation: lesson.explanation, practicePrompt: lesson.practicePrompt, focus: .politeRequests)
+        try unitExpect(!wrongFocus.isValid)
+    }
+
+    static func groundedPatternSuccesses() throws {
+        let text = "Yesterday I went to the office. Could we review the API changes tomorrow? I think the current approach might work, but we should check it."
+        let success = PatternObservation(focus: .pastTense, evidence: "Yesterday I went to the office.")
+        let polite = PatternObservation(focus: .politeRequests, evidence: "Could we review the API changes tomorrow?")
+        let unknown = PatternObservation(focus: .expressingUncertainty, evidence: "might work")
+        let raw = FeedbackAnalysis(feedback: [], assessment: .init(status: .assessed, band: .accurate),
+                                   successfulPatterns: [success, polite, success, unknown])
+        let valid = try raw.validated(for: text, knownPatterns: [.pastTense, .politeRequests])
+        try unitEqual(valid.successfulPatterns, [success, polite])
+        let record = LearningRecord(id: UUID(), date: Date(), analysis: valid)
+        try unitEqual(Set(record.successes), [.pastTense, .politeRequests])
+        try unitExpect(record.mistakes.isEmpty && record.suggestions.isEmpty)
+        let json = String(decoding: try JSONEncoder().encode(record), as: UTF8.self)
+        try unitExpect(!json.contains("evidence") && !json.contains("Yesterday") && !json.contains("API"))
+        let mixed = FeedbackAnalysis(feedback: [focusedLesson], assessment: .init(status: .assessed, band: .minor),
+                                    successfulPatterns: [success, polite])
+        let filtered = try mixed.validated(for: text + " " + lesson.original, knownPatterns: [.pastTense, .politeRequests])
+        try unitEqual(filtered.successfulPatterns, [polite]) // Same-pattern errors prevent a success claim.
+        let fabricated = FeedbackAnalysis(feedback: [], successfulPatterns: [success])
+        do { _ = try fabricated.validated(for: "Different words", knownPatterns: [.pastTense]); try unitExpect(false) }
+        catch FeedbackError.invalidResponse {}
+        let uncertain = FeedbackAnalysis(feedback: [], assessment: .uncertain, successfulPatterns: [success])
+        let unscored = try uncertain.validated(for: text, knownPatterns: [.pastTense])
+        try unitExpect(unscored.successfulPatterns.isEmpty)
+        let request = try JSONSerialization.jsonObject(with: FeedbackClient.requestBody(text, knownPatterns: [.pastTense])) as! [String: Any]
+        let messages = request["messages"] as! [[String: String]]
+        let input = try JSONSerialization.jsonObject(with: Data(messages[1]["content"]!.utf8)) as! [String: Any]
+        try unitEqual(input["knownPatterns"] as? [String], ["past_tense"])
+        try unitEqual(input.count, 2) // No saved excerpts or history in the request.
+    }
+
+    static func automaticProgressAndCleanReviews() async throws {
+        let fixture = FeedbackFixture(), lessons = MemoryCorrections(), history = MemoryLearningProgress()
+        fixture.findings = [focusedLesson]; fixture.assessment = .init(status: .assessed, band: .minor)
+        let controller = FeedbackController(client: fixture, store: lessons, progressStore: history)
+        try await eventually { controller.progress.ready }
+        controller.setEnabled(true)
+        let first = UUID()
+        controller.updateDictation(.starting(.init(id: first, origin: .manual, settings: .init()), requested: nil))
+        controller.analyze(id: first, transcript: longTranscript, apiKey: "fixture")
+        try await eventually { !controller.isAnalyzing }
+        try unitExpect(history.records.isEmpty && !controller.panelVisible) // Never record failed delivery as a review.
+        finish(controller, id: first)
+        try await eventually { history.records.count == 1 }
+        try unitEqual(history.records[0].mistakes, [.pastTense])
+        try unitEqual(controller.previousOccurrences(of: .pastTense), 0)
+        try unitExpect(lessons.items.isEmpty)
+        try unitExpect(controller.discardReview())
+        try unitEqual(history.records.count, 1) // Closing only discards lesson excerpts.
+
+        let next = UUID()
+        fixture.findings = []; fixture.assessment = .init(status: .assessed, band: .accurate)
+        fixture.successes = [.init(focus: .pastTense, evidence: lesson.suggestion)]
+        controller.updateDictation(.starting(.init(id: next, origin: .manual, settings: .init()), requested: nil))
+        controller.analyze(id: next, transcript: longTranscript.replacingOccurrences(of: lesson.original, with: lesson.suggestion), apiKey: "fixture")
+        finish(controller, id: next)
+        try await eventually { history.records.count == 2 }
+        try unitExpect(controller.panelVisible && controller.hasReview && !controller.hasLessons && controller.findings.isEmpty)
+        try unitEqual(controller.assessment?.band, .accurate)
+        try unitEqual(fixture.knownPatterns.last, [.pastTense])
+        try unitEqual(history.records[0].successes, [.pastTense])
+        try unitEqual(controller.progress.patterns.first?.successes, 1)
+        controller.deliveryFinished(id: next)
+        try unitEqual(history.writes, 2)
+        try unitExpect(controller.saveAndClose()) // A score-only review can close with S, without a lesson write.
+        try unitExpect(!controller.hasReview && lessons.items.isEmpty)
+
+        let gate = PipelineGate()
+        fixture.gate = gate
+        let cancelled = UUID()
+        controller.updateDictation(.starting(.init(id: cancelled, origin: .manual, settings: .init()), requested: nil))
+        controller.analyze(id: cancelled, transcript: longTranscript, apiKey: "fixture")
+        finish(controller, id: cancelled)
+        try await eventually { gate.entered }
+        controller.setEnabled(false); gate.open()
+        await controller.shutdown()
+        try unitEqual(history.records.count, 2)
+    }
+
+    static func progressQueueAndRecovery() async throws {
+        let store = MemoryLearningProgress(), load = PipelineGate()
+        store.loadGate = load
+        let progress = LearningProgress(store: store)
+        let record = LearningRecord(id: UUID(), date: Date(), analysis: .init(feedback: [focusedLesson]))
+        progress.record(record); progress.record(record)
+        try await eventually { load.entered }
+        try unitEqual(store.writes, 0)
+        store.failSave = true; load.open()
+        try await eventually { progress.error != nil }
+        try unitExpect(progress.ready && progress.records.isEmpty)
+        store.failSave = false
+        let save = PipelineGate()
+        store.saveGate = save; progress.retry()
+        try await eventually { save.entered }
+        let newer = LearningRecord(id: UUID(), date: Date().addingTimeInterval(1), analysis: .init(feedback: [focusedLesson]))
+        progress.record(newer); progress.record(newer)
+        save.open()
+        await progress.finishPendingWrites()
+        try unitEqual(store.records.map(\.id), [newer.id, record.id])
+        try unitEqual(store.writes, 3) // Failure, successful retry, then the later review.
+        progress.clear()
+        await progress.finishPendingWrites()
+        try unitExpect(store.records.isEmpty && progress.records.isEmpty)
+        let broken = MemoryLearningProgress()
+        broken.failLoad = true
+        let protected = LearningProgress(store: broken)
+        protected.record(record)
+        try await eventually { protected.error != nil }
+        protected.clear()
+        try unitEqual(broken.writes, 0)
+        broken.failLoad = false; protected.retry()
+        await protected.finishPendingWrites()
+        try unitEqual(broken.records, [record])
+    }
+
+    static func progressPersistenceAndPrivacy() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("voxa-progress-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("progress.json")
+        let store = LearningProgressStore(url: url)
+        let option = SpokenAlternative(wording: "I visited the office yesterday.", explanation: "A concise account.",
+                                       pattern: "I visited + place + time", focus: .pastTense)
+        let paired = EnglishFeedback(kind: .grammar, original: lesson.original, suggestion: lesson.suggestion,
+            explanation: lesson.explanation, practicePrompt: lesson.practicePrompt, alternative: option, focus: .pastTense)
+        let record = LearningRecord(id: UUID(), date: Date(), analysis: .init(feedback: [paired]))
+        try await store.save([record])
+        try unitEqual(try await store.load(), [record])
+        let data = try Data(contentsOf: url)
+        let text = String(decoding: data, as: UTF8.self)
+        for content in ["Yesterday", "visited", "transcript", "explanation", "apiKey", "evidence", "wording"] {
+            try unitExpect(!text.contains(content))
+        }
+        let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+        try unitEqual(mode, 0o600)
+        try Data("broken".utf8).write(to: url)
+        let progress = LearningProgress(store: store)
+        try await eventually { progress.error != nil }
+        progress.record(record); progress.clear()
+        try unitEqual(try Data(contentsOf: url), Data("broken".utf8))
+        try data.write(to: url)
+        progress.retry(); await progress.finishPendingWrites()
+        try unitEqual(try await store.load(), [record]) // Pending duplicate does not duplicate persisted review.
+    }
+
+    static func compactDifferencesAndGrouping() async throws {
+        for pair in [("Yesterday I go home.", "Yesterday I went home."), ("We discussed about the API.", "We discussed the API."),
+                     ("She ready.", "She is ready."), ("", "Hello"), ("Hello", ""),
+                     ("API_v2  isn’t ready…", "API_v2 isn't ready.")] {
+            let diff = FeedbackDifference(original: pair.0, suggestion: pair.1)
+            try unitEqual(diff.inline.filter { $0.change != .added }.map(\.text).joined(), pair.0)
+            try unitEqual(diff.inline.filter { $0.change != .removed }.map(\.text).joined(), pair.1)
+        }
+        try unitExpect(FeedbackDifference(original: lesson.original, suggestion: lesson.suggestion).isCompact)
+        try unitExpect(!FeedbackDifference(original: "This wording is completely different.", suggestion: "We prefer another version.").isCompact)
+        let fixture = FeedbackFixture()
+        let option = EnglishFeedback(kind: .phrasing, original: "Please let me know if we can review it.",
+            suggestion: "Could we review it?", explanation: "A more direct request.", practicePrompt: "Make another request.",
+            pattern: "Could we + action?", focus: .politeRequests)
+        let issue = EnglishFeedback(kind: .transcriptionIssue, original: "Cash the API.", suggestion: "Cache the API.",
+                                   explanation: "Check recognition.", practicePrompt: "")
+        fixture.findings = [option, issue, focusedLesson]
+        let controller = FeedbackController(client: fixture, store: MemoryCorrections(), progressStore: MemoryLearningProgress())
+        controller.setEnabled(true)
+        controller.analyze(id: UUID(), transcript: fixture.findings.map(\.original).joined(separator: " "), apiKey: "fixture")
+        try await eventually { !controller.isAnalyzing }
+        try unitEqual(controller.corrections.map(\.feedback), [focusedLesson])
+        try unitEqual(controller.alternatives.map(\.feedback), [option])
+        try unitEqual(controller.transcriptionIssues.map(\.feedback), [issue])
+        await controller.shutdown()
+    }
+
+    static func noiseAndDuplicateFiltering() throws {
+        let punctuation = EnglishFeedback(kind: .grammar, original: "I went home", suggestion: "I went home.",
+            explanation: "Add punctuation.", practicePrompt: "Try another sentence.")
+        let alternative = SpokenAlternative(wording: "I went to the office yesterday.", explanation: "Another sentence order.")
+        let paired = EnglishFeedback(kind: .grammar, original: lesson.original, suggestion: lesson.suggestion,
+            explanation: lesson.explanation, practicePrompt: lesson.practicePrompt, alternative: alternative)
+        let duplicate = EnglishFeedback(kind: .phrasing, original: paired.original, suggestion: alternative.wording,
+            explanation: alternative.explanation, practicePrompt: lesson.practicePrompt)
+        let mislabeled = EnglishFeedback(kind: .phrasing, original: lesson.original, suggestion: lesson.suggestion,
+            explanation: lesson.explanation, practicePrompt: lesson.practicePrompt)
+        let result = try EnglishFeedback.validated([punctuation, duplicate, mislabeled, paired],
+                                                   for: "I went home " + lesson.original)
+        try unitEqual(result, [paired])
+        let uncertain = EnglishFeedback(kind: .transcriptionIssue, original: lesson.original, suggestion: lesson.suggestion,
+            explanation: "Check this against what you said.", practicePrompt: "")
+        try unitEqual(try EnglishFeedback.validated([paired, uncertain, mislabeled], for: lesson.original), [uncertain])
+    }
+
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("feedback: cosmetic noise and duplicate optional alternatives", noiseAndDuplicateFiltering),
+        ("feedback: fixed grammar rubric, score consistency and abstention", grammarRubricAndAbstention),
+        ("feedback: grounded pattern successes and minimal request context", groundedPatternSuccesses),
+        ("feedback: delivery-gated automatic progress and clean reviews", automaticProgressAndCleanReviews),
+        ("feedback: progress write ordering, duplication, failure and recovery", progressQueueAndRecovery),
+        ("feedback: progress privacy, file permissions and corruption protection", progressPersistenceAndPrivacy),
+        ("feedback: compact word differences and corrections-first grouping", compactDifferencesAndGrouping),
         ("feedback: paired alternatives, validation and legacy lesson compatibility", pairedAlternativeCompatibility),
         ("feedback: whole-review acceptance, discard, optional coaching and failed saves", multipleCorrectionsAndDiscard),
         ("feedback: full correction arrays and multiple fixes per sentence", multipleResponseContract),
@@ -392,6 +648,13 @@ enum FeedbackChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class FeedbackTests: XCTestCase {
+    func testNoiseFiltering() async throws { try await FeedbackChecks.noiseAndDuplicateFiltering() }
+    func testGrammarRubric() async throws { try await FeedbackChecks.grammarRubricAndAbstention() }
+    func testPatternSuccesses() async throws { try await FeedbackChecks.groundedPatternSuccesses() }
+    func testAutomaticProgress() async throws { try await FeedbackChecks.automaticProgressAndCleanReviews() }
+    func testProgressRecovery() async throws { try await FeedbackChecks.progressQueueAndRecovery() }
+    func testProgressPersistence() async throws { try await FeedbackChecks.progressPersistenceAndPrivacy() }
+    func testCompactDifferences() async throws { try await FeedbackChecks.compactDifferencesAndGrouping() }
     func testPairedAlternatives() async throws { try await FeedbackChecks.pairedAlternativeCompatibility() }
     func testMultipleCorrections() async throws { try await FeedbackChecks.multipleCorrectionsAndDiscard() }
     func testMultipleResponseContract() async throws { try await FeedbackChecks.multipleResponseContract() }

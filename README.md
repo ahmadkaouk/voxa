@@ -106,22 +106,38 @@ Enable **Voxa Settings → English Learning → Feedback after dictation** for
 background English coaching. Dictation is inserted normally and never rewritten;
 feedback failures do not interrupt it.
 
-The review puts grammar and sentence-construction corrections first. **Original**
-and **Corrected** use equal-size text, highlighting only changed words in red/green.
-A short reason teaches the rule. A useful **Another way to say it · Optional** can
-appear underneath in neutral text. The coach is instructed to preserve meaning,
-conversational tone and technical terms, and ignore clear self-corrections.
-No useful finding means no panel. Text alone cannot assess pronunciation or
-reliably distinguish every recognition error from a spoken mistake.
+The Quick scan review puts actual grammar and construction errors first. Small
+changes appear inline: a subdued struck-through word followed by its correction.
+Larger changes show readable before/after text. A short teaching reason stays
+visible. Useful alternatives appear directly below the related correction, then
+standalone alternatives follow. Each can teach a reusable expression, such as
+**Could we + action?** Alternatives may cover any useful phrase or sentence across
+the dictation, including correct sentences; they are never collapsed or forced
+onto every sentence. The coach preserves meaning, tone, uncertainty and technical
+terms, and ignores fillers and clear self-corrections.
+
+A **grammar estimate** uses fixed 2, 4, 6, 8 and 10 bands on the original intended
+English. Optional phrasing never lowers it. Samples shorter than 20 assessable
+English words, uncertain recognition and non-English samples receive no score.
+This is a coaching estimate, not a proficiency test or a pronunciation/fluency
+assessment. A clean, scored dictation can still show a short positive review.
 
 The panel appears after delivery without taking focus or disappearing on a timer.
 A new recording hides it; **English Learning → Show Latest Feedback** reopens the
 latest review until another transcript replaces it.
 
-- **✓ Accept & save all / S:** save all lessons together, then close. Possible
-  transcription issues are excluded; a recognition-only review offers **Done / S**.
-- **× Discard all / D:** close without saving or changing earlier saved lessons.
-- **English Learning → Saved Lessons…:** review, practise, or delete saved lessons.
+- **Save lessons / S:** save all corrections and alternatives, then close.
+  Recognition issues are excluded. S also closes a review with no lessons.
+- **Close / D:** close without saving lessons. Local progress remains available.
+- **English Learning → Lessons & Progress…:** review, practise, or delete saved
+  lessons, and view or clear progress separately.
+
+Progress tracks up to 200 recent reviews automatically while feedback is enabled.
+Repeated mistakes are counted by rule, and correct use of previously encountered
+patterns is recognised in later dictations, including those with no corrections.
+Absence of an error does not count as a success; an actual source example is
+required. Counts are per review, not a mastery percentage. The Progress tab shows
+recent grammar estimates and patterns to practise.
 
 A failed save keeps the review open. While feedback is visible, S and D act on it
 instead of typing in the focused app; modified shortcuts such as Command+S still
@@ -132,9 +148,12 @@ OpenAI request using the same API key, with additional usage cost. It uses
 `gpt-6-luna` with low reasoning effort and requests `store: false`, which does
 not guarantee zero provider retention; see [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data).
 Only accepted excerpts, suggestions, explanations, dates, and practice prompts
-are stored in `~/Library/Application Support/Voxa/corrections.json`. Practice
-answers stay in memory. Disabling feedback cancels pending requests and clears
-unsaved findings; saved lessons remain until deleted.
+are stored in `~/Library/Application Support/Voxa/corrections.json`. Automatic
+progress stores only review IDs, dates, score bands and pattern categories in
+`~/Library/Application Support/Voxa/learning-progress.json`; source evidence is
+validated in memory and discarded. Only category IDs, not saved lesson excerpts,
+are included as context for later feedback. Practice answers stay in memory. Disabling feedback cancels pending requests and clears
+unsaved findings; saved lessons and existing progress remain until deleted.
 
 ### Dictation data
 
@@ -142,7 +161,7 @@ Voxa records audio locally and sends the completed recording to OpenAI for
 transcription. **Transcription requires internet access.**
 
 The app holds recordings and the latest transcript in memory; it does not save
-an audio or full-transcript history to disk. Only explicitly saved English lessons
+an audio or full-transcript history to disk. Explicitly saved English lessons and text-free learning progress
 are persisted. API keys entered in the app are stored
 in macOS Keychain, and preferences are saved locally. See the
 [architecture guide](docs/architecture.md) for details about data handling and

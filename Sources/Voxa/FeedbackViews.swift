@@ -4,180 +4,234 @@ import SwiftUI
 // Disambiguate the macOS 13 property wrapper from the newer SDK's State macro.
 private typealias FeedbackViewState<Value> = SwiftUI.State<Value>
 
-private enum FeedbackPalette {
-    static let removed = Color(nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 1, green: 0.55, blue: 0.59, alpha: 1)
-            : NSColor(red: 0.68, green: 0.18, blue: 0.23, alpha: 1)
-    })
+enum FeedbackPalette {
     static let added = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(red: 0.40, green: 0.85, blue: 0.62, alpha: 1)
             : NSColor(red: 0.12, green: 0.44, blue: 0.28, alpha: 1)
     })
-    static let accent = Color(nsColor: .systemTeal)
+    static let accent = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.42, green: 0.81, blue: 0.84, alpha: 1)
+            : NSColor(red: 0.12, green: 0.40, blue: 0.45, alpha: 1)
+    })
 }
 
 struct FeedbackLessonView: View {
     let feedback: EnglishFeedback
 
     var body: some View {
-        let difference = FeedbackDifference(original: feedback.original, suggestion: feedback.suggestion)
-        VStack(alignment: .leading, spacing: 12) {
-            phrase(difference.original, title: "Original", added: false)
+        VStack(alignment: .leading, spacing: 8) {
             if feedback.kind == .phrasing {
-                alternative(feedback.suggestion, explanation: feedback.explanation)
+                Text(feedback.original).font(.system(size: 12)).foregroundStyle(.secondary)
+                alternative(feedback.suggestion, explanation: feedback.explanation, pattern: feedback.pattern,
+                            showLabel: false)
+            } else if feedback.kind == .transcriptionIssue {
+                Text(feedback.original).font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(feedback.suggestion).font(.system(size: 15, weight: .medium))
+                explanation(feedback.explanation)
             } else {
-                phrase(difference.suggestion,
-                       title: feedback.kind == .transcriptionIssue ? "Possible wording · Check transcription" : "Corrected",
-                       added: true)
-                Text(feedback.explanation)
-                    .font(.system(size: 12)).foregroundStyle(.secondary).lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
+                correction
+                explanation(feedback.explanation)
                 if let option = feedback.alternative {
-                    alternative(option.wording, explanation: option.explanation)
-                        .padding(.top, 4)
+                    alternative(option.wording, explanation: option.explanation, pattern: option.pattern)
+                        .padding(.leading, 12).padding(.vertical, 2)
+                        .overlay(alignment: .leading) { Rectangle().fill(.primary.opacity(0.12)).frame(width: 2) }
+                        .padding(.top, 6)
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func alternative(_ wording: String, explanation: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("Another way to say it · Optional")
-                .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-            Text(wording).font(.system(size: 15)).foregroundStyle(.primary).lineSpacing(3)
-            Text(explanation).font(.system(size: 12)).foregroundStyle(.secondary).lineSpacing(3)
-        }
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func phrase(_ tokens: [FeedbackDifference.Token], title: String, added: Bool) -> some View {
-        let isCorrection = feedback.kind != .phrasing
-        let color = added ? FeedbackPalette.added : FeedbackPalette.removed
-        return VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
-            tokens.reduce(Text("")) { result, token in
-                let fragment = Text(token.text)
-                return result + (token.changed && isCorrection
-                    ? fragment.foregroundColor(color).bold().strikethrough(!added).underline(added)
-                    : fragment.foregroundColor(.primary))
-            }
-            .font(.system(size: 16)).lineSpacing(4)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityLabel("\(title): \(tokens.map(\.text).joined())")
-        }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-}
 
-private struct FeedbackActionStyle: ButtonStyle {
-    let color: Color
-    @Environment(\.isEnabled) private var enabled
+    @ViewBuilder private var correction: some View {
+        let diff = FeedbackDifference(original: feedback.original, suggestion: feedback.suggestion)
+        if diff.isCompact {
+            inline(diff).font(.system(size: 16)).lineSpacing(5)
+                .accessibilityLabel("You said: \(feedback.original) Corrected: \(feedback.suggestion)")
+        } else {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("You said · \(feedback.original)").font(.system(size: 12)).foregroundStyle(.secondary)
+                diff.suggestion.reduce(Text("")) { result, token in
+                    result + (token.changed ? Text(token.text).foregroundColor(FeedbackPalette.added).bold()
+                              : Text(token.text))
+                }.font(.system(size: 16)).lineSpacing(5)
+                    .accessibilityLabel("Corrected: \(feedback.suggestion)")
+            }
+        }
+    }
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 10).padding(.vertical, 10)
-            .foregroundStyle(color)
-            .background(color.opacity(configuration.isPressed ? 0.24 : 0.12),
-                        in: RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(color.opacity(0.35)))
-            .opacity(enabled ? 1 : 0.45)
+    private func inline(_ difference: FeedbackDifference) -> Text {
+        var result = Text("")
+        var previous: FeedbackDifference.InlineToken?
+        for token in difference.inline {
+            if previous?.change == .removed, token.change == .added,
+               previous?.text.last?.isWhitespace == false, token.text.first?.isWhitespace == false {
+                result = result + Text(" ")
+            }
+            switch token.change {
+            case .unchanged: result = result + Text(token.text)
+            case .removed: result = result + Text(token.text).foregroundColor(.secondary).strikethrough()
+            case .added: result = result + Text(token.text).foregroundColor(FeedbackPalette.added).bold()
+            }
+            previous = token
+        }
+        return result
+    }
+
+    private func alternative(_ wording: String, explanation: String, pattern: String?, showLabel: Bool = true) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if showLabel {
+                Text("Another way to say it · Optional").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+            }
+            Text(wording).font(.system(size: 15, weight: .medium)).lineSpacing(3)
+            if let pattern {
+                Text(pattern).font(.system(size: 11, weight: .medium)).foregroundStyle(FeedbackPalette.accent)
+                    .accessibilityLabel("Reusable pattern: \(pattern)")
+            }
+            self.explanation(explanation)
+        }
+    }
+
+    private func explanation(_ text: String) -> some View {
+        Text(text).font(.system(size: 12)).foregroundStyle(.secondary).lineSpacing(3)
     }
 }
 
 struct FeedbackReviewView: View {
     @ObservedObject var controller: FeedbackController
-    var maximumHeight: CGFloat = 620
+    var maximumHeight: CGFloat = 640
     static let width: CGFloat = 480
 
     private var listHeight: CGFloat {
-        min(controller.findings.count > 1 ? 440 : 260, max(120, maximumHeight - 160))
+        let desired: CGFloat = controller.findings.count > 1 ? 360 : (controller.findings.isEmpty ? 80 : 240)
+        let footer: CGFloat = controller.storageError == nil && controller.progress.error == nil ? 180 : 220
+        return min(desired, max(80, maximumHeight - footer))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 9) {
-                Text("English feedback")
-                    .font(.system(size: 15, weight: .semibold))
-                Text("\(controller.findings.count) \(controller.findings.count == 1 ? "suggestion" : "suggestions")")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                Spacer()
-                Button { controller.dismiss() } label: {
-                    Image(systemName: "xmark").font(.system(size: 11, weight: .semibold))
-                        .frame(width: 26, height: 26)
-                        .background(.primary.opacity(0.06), in: Circle())
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("English feedback").font(.system(size: 16, weight: .semibold))
+                    Text(summary).font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Dismiss this English review")
+                Spacer(minLength: 0)
+                score
+                Button { controller.dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .medium)).frame(width: 22, height: 22)
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityLabel("Close this English review")
             }
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(orderedFindings.enumerated()), id: \.element.id) { index, item in
-                        if index > 0 { Divider() }
-                        FeedbackLessonView(feedback: item.feedback).padding(.vertical, 14).padding(.trailing, 5)
+                VStack(alignment: .leading, spacing: 20) {
+                    if !controller.corrections.isEmpty {
+                        section("Corrections", items: controller.corrections)
+                    } else if controller.transcriptionIssues.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("No clear grammar errors", systemImage: "checkmark")
+                                .font(.system(size: 14, weight: .medium)).foregroundStyle(FeedbackPalette.added)
+                            if controller.assessment?.status == .tooShort {
+                                Text("A longer sample will give you a grammar estimate.")
+                                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                            }
+                        }
                     }
-                }
+                    if !controller.alternatives.isEmpty {
+                        section("Other ways to say it · Optional", items: controller.alternatives)
+                    }
+                    if !controller.transcriptionIssues.isEmpty {
+                        section("Check the transcription", items: controller.transcriptionIssues)
+                    }
+                    if !controller.successfulPatterns.isEmpty {
+                        Text("Used well: " + controller.successfulPatterns.map(\.label).joined(separator: ", "))
+                            .font(.system(size: 11)).foregroundStyle(FeedbackPalette.added)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }.padding(.trailing, 6).padding(.vertical, 2)
             }
             .frame(height: listHeight)
-            .id(controller.findings.first?.id) // Every new review starts with its original text visible.
+            .id(controller.findings.first?.id)
             Divider()
-            if !controller.findings.isEmpty {
-                HStack(spacing: 10) {
+            HStack {
+                Text(controller.hasLessons ? "Save for later practice" : "Keep practising in your next dictation")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if controller.hasLessons {
                     Button { controller.saveAndClose() } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "checkmark.circle.fill")
-                            Text(controller.hasLessons ? "Accept & save all" : "Done")
-                            keycap(FeedbackShortcut.saveLabel)
-                        }
+                        HStack(spacing: 7) { Text("Save lessons"); keycap(FeedbackShortcut.saveLabel) }
                     }
-                    .buttonStyle(FeedbackActionStyle(color: FeedbackPalette.added))
-                    .disabled(controller.isSaving || (controller.hasLessons && !controller.storageReady))
-                    .help("Save all lessons in this review and close it. Possible transcription issues are not saved. Inserted text is unchanged.")
-                    Button { controller.discardReview() } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "xmark.circle.fill")
-                            Text("Discard all")
-                            keycap(FeedbackShortcut.discardLabel)
-                        }
-                    }
-                    .buttonStyle(FeedbackActionStyle(color: FeedbackPalette.removed))
-                    .disabled(controller.isSaving)
-                    .help("Close this entire review without saving it. Previously saved lessons stay unchanged.")
+                    .buttonStyle(.borderedProminent).tint(FeedbackPalette.accent)
+                    .disabled(controller.isSaving || !controller.storageReady)
+                    .help("Save the corrections and alternatives. Your inserted text stays unchanged.")
                 }
-            }
-            VStack(alignment: .leading, spacing: 5) {
-                Text(controller.storageError ?? "Accept saves all lessons. Your inserted text stays unchanged.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(controller.storageError == nil ? Color.secondary : .orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                if controller.findings.contains(where: { $0.feedback.kind == .transcriptionIssue }) {
-                    Text("Possible transcription issues are not saved as lessons.")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                if !controller.storageReady, !controller.isSaving {
-                    Button("Retry saved lessons") { controller.reloadSaved() }.font(.caption)
+                Button { controller.discardReview() } label: {
+                    HStack(spacing: 7) { Text("Close"); keycap(FeedbackShortcut.discardLabel) }
+                }.buttonStyle(.bordered).disabled(controller.isSaving)
+                    .help("Close without saving lessons. Local progress is kept in Lessons & Progress.")
+            }.controlSize(.small)
+            if let error = controller.storageError ?? controller.progress.error {
+                HStack(alignment: .top) {
+                    Text(error).font(.system(size: 10)).foregroundStyle(.secondary)
+                    Button("Retry") { controller.reloadSaved(); controller.progress.retry() }
+                        .font(.system(size: 10)).disabled(controller.isSaving || controller.progress.isSaving)
                 }
             }
         }
-        .padding(18)
-        .frame(width: Self.width)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22))
-        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.primary.opacity(0.1)))
+        .padding(20).frame(width: Self.width)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.primary.opacity(0.09)))
     }
 
-    private var orderedFindings: [SavedCorrection] {
-        controller.findings.filter { $0.feedback.kind != .phrasing }
-            + controller.findings.filter { $0.feedback.kind == .phrasing }
+    private var summary: String {
+        let errors = controller.corrections.count
+        let alternatives = controller.alternatives.count + controller.corrections.filter { $0.feedback.alternative != nil }.count
+        if errors == 0 && alternatives == 0 { return "A quick look at your dictation" }
+        let corrections = "\(errors) \(errors == 1 ? "correction" : "corrections")"
+        guard alternatives > 0 else { return corrections }
+        return corrections + " · \(alternatives) \(alternatives == 1 ? "alternative" : "alternatives")"
+    }
+
+    @ViewBuilder private var score: some View {
+        if let assessment = controller.assessment {
+            if let band = assessment.band {
+                VStack(alignment: .trailing, spacing: 2) {
+                    (Text("\(band.rawValue)").font(.system(size: 23, weight: .medium, design: .rounded))
+                     + Text(" / 10").font(.system(size: 11)).foregroundColor(.secondary))
+                    Text("Grammar estimate").font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+                .help("\(band.label). \(assessment.explanation)")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Grammar estimate: \(band.rawValue) out of 10. \(band.label). \(assessment.explanation)")
+            } else {
+                Text(assessment.status == .tooShort ? "Short sample" : "Unscored")
+                    .font(.system(size: 10)).foregroundStyle(.secondary).help(assessment.explanation)
+                    .accessibilityLabel(assessment.explanation)
+            }
+        }
+    }
+
+    private func section(_ title: String, items: [SavedCorrection]) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 { Divider().opacity(0.6) }
+                VStack(alignment: .leading, spacing: 7) {
+                    FeedbackLessonView(feedback: item.feedback)
+                    if let focus = item.feedback.focus, focus.isGrammar,
+                       item.feedback.kind != .phrasing, controller.previousOccurrences(of: focus) > 0 {
+                        let count = controller.previousOccurrences(of: focus)
+                        Text("\(focus.label) · also seen in \(count) earlier \(count == 1 ? "review" : "reviews")")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
     }
 
     private func keycap(_ key: String) -> some View {
-        Text(key).font(.system(size: 10, weight: .bold, design: .monospaced))
-            .padding(.horizontal, 5).padding(.vertical, 2)
-            .background(.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+        Text(key).font(.system(size: 9, weight: .medium, design: .monospaced)).opacity(0.7)
     }
 }
 
@@ -220,6 +274,17 @@ final class FeedbackPanelController {
 
 struct SavedCorrectionsView: View {
     @ObservedObject var controller: FeedbackController
+
+    var body: some View {
+        TabView {
+            SavedLessonsView(controller: controller).tabItem { Text("Saved lessons") }
+            LearningProgressView(progress: controller.progress).tabItem { Text("Progress") }
+        }.padding(12)
+    }
+}
+
+private struct SavedLessonsView: View {
+    @ObservedObject var controller: FeedbackController
     @FeedbackViewState private var selection: UUID?
     @FeedbackViewState private var confirmDeleteAll = false
 
@@ -252,7 +317,7 @@ struct SavedCorrectionsView: View {
                     Image(systemName: "bookmark").font(.system(size: 32, weight: .light)).foregroundStyle(FeedbackPalette.accent)
                     Text(controller.isSaving ? "Opening your lessons…" : "Keep the lessons that click.")
                         .font(.system(size: 18, weight: .medium))
-                    Text("Choose Accept & save on a correction.\nThen come here to try it in a new sentence.")
+                    Text("Choose Save lessons after a dictation.\nThen come here to try it in a new sentence.")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
