@@ -1,4 +1,5 @@
 #if canImport(XCTest) || VOXA_STANDALONE_TESTS
+import AppKit
 import Foundation
 #if !VOXA_STANDALONE_TESTS
 import XCTest
@@ -6,80 +7,143 @@ import XCTest
 #endif
 
 enum HotkeyOptionChecks {
-    static func testDefaultHotkeysRoundTrip() throws {
-        try unitEqual(HotkeyOption.defaultToggle, .optionF)
-        try unitEqual(HotkeyOption.defaultHold, .optionG)
-        try unitEqual(HotkeyOption.fromRawOrDefault("option_f"), .optionF)
-        try unitEqual(HotkeyOption.fromRawOrDefault("option_g"), .optionG)
-        try unitEqual(HotkeyOption.fromRawOrDefault("invalid"), .optionF)
-        try unitEqual(HotkeyOption.fromRawOrDefault("invalid", fallback: .optionG), .optionG)
-        try unitEqual(HotkeyOption.optionF.persistedValue, "option_f")
-        try unitEqual(HotkeyOption.optionG.persistedValue, "option_g")
-        try unitEqual(HotkeyOption.optionF.label, "Opt+F")
-        try unitEqual(HotkeyOption.optionG.label, "Opt+G")
+    static func testFeedbackShortcuts() throws {
+        for target in [KeyCode.s, KeyCode.d] {
+            var shortcut = FeedbackShortcut(keyCode: target)
+            var activations = 0
+            func press(_ down: Bool, key: UInt16? = nil, flags: HotkeyModifiers = [],
+                       repeated: Bool = false, accepted: Bool = true) -> Bool {
+                shortcut.consume(keyCode: key ?? target, isDown: down, flags: flags, isRepeat: repeated) {
+                    activations += 1
+                    return accepted
+                }
+            }
+            try unitExpect(!press(true, flags: .option))
+            try unitExpect(!press(true, flags: .command))
+            try unitExpect(!press(true, flags: .shift))
+            try unitExpect(!press(true, flags: .control))
+            try unitExpect(!press(true, flags: [.option, .command]))
+            try unitExpect(!press(true, flags: [.option, .shift]))
+            try unitExpect(!press(true, key: KeyCode.f))
+            try unitExpect(!press(true, repeated: true))
+            try unitEqual(activations, 0)
+            try unitExpect(!press(true, accepted: false)) // No visible eligible card: pass through.
+            try unitExpect(!press(false))
+            try unitExpect(press(true))
+            // Closing the card must not leak repeats or the key-up to the focused app.
+            try unitExpect(press(true, flags: [], repeated: true, accepted: false))
+            try unitExpect(press(false, flags: [], accepted: false))
+            try unitEqual(activations, 2)
+            try unitExpect(!press(false))
+            try unitExpect(press(true))
+            try unitEqual(activations, 3)
+        }
     }
 
     static func testPresetHotkeysRoundTrip() throws {
-        try unitEqual(HotkeyOption.fromRawOrDefault("right_option"), .rightOption)
-        try unitEqual(HotkeyOption.fromRawOrDefault("fn"), .functionKey)
-        try unitEqual(HotkeyOption.fromRawOrDefault("fn_space"), .functionSpace)
-        try unitEqual(HotkeyOption.fromRawOrDefault("cmd_space"), .commandSpace)
-
-        try unitEqual(HotkeyOption.rightOption.persistedValue, "right_option")
-        try unitEqual(HotkeyOption.functionKey.persistedValue, "fn")
-        try unitEqual(HotkeyOption.functionSpace.persistedValue, "fn_space")
-        try unitEqual(HotkeyOption.commandSpace.persistedValue, "cmd_space")
+        let presets: [(HotkeyOption, String, String)] = [
+            (.optionF, "option_f", "Opt+F"), (.optionG, "option_g", "Opt+G"),
+            (.rightOption, "right_option", "Right Option"), (.functionKey, "fn", "Fn"),
+            (.functionSpace, "fn_space", "Fn+Space"), (.commandSpace, "cmd_space", "Cmd+Space"),
+        ]
+        for (hotkey, saved, label) in presets {
+            try unitEqual(hotkey.persistedValue, saved)
+            try unitEqual(HotkeyOption.fromRaw(saved), hotkey)
+            try unitEqual(hotkey.label, label)
+        }
+        try unitEqual(HotkeyOption.fromRawOrDefault("invalid"), .optionF)
+        try unitEqual(HotkeyOption.fromRawOrDefault("invalid", fallback: .optionG), .optionG)
     }
 
     static func testCustomHotkeyRoundTripPreservesBinding() throws {
-        let custom = HotkeyOption(
-            keyCodes: [KeyCode.f18],
-            modifiers: [.control, .shift],
-            keyDisplays: ["F18"]
-        )
-
-        let roundTrip = HotkeyOption.fromRaw(custom.persistedValue)
-
-        try unitEqual(roundTrip, custom)
-        try unitEqual(roundTrip?.label, "Ctrl+Shift+F18")
+        for (custom, label) in [
+            (HotkeyOption(keyCodes: [KeyCode.f18], modifiers: [.control, .shift]), "Ctrl+Shift+F18"),
+            (HotkeyOption(keyCodes: [KeyCode.j, KeyCode.k], modifiers: [.control]), "Ctrl+J+K"),
+        ] {
+            let roundTrip = HotkeyOption.fromRaw(custom.persistedValue)
+            try unitEqual(roundTrip, custom)
+            try unitEqual(roundTrip?.label, label)
+        }
+        try unitExpect(HotkeyOption.fromRaw(#"{"modifiers":["unknown"]}"#) == nil)
     }
 
-    static func testMultiKeyHotkeyRoundTripPreservesBinding() throws {
-        let custom = HotkeyOption(
-            keyCodes: [KeyCode.j, KeyCode.k],
-            modifiers: [.control],
-            keyDisplays: ["J", "K"]
-        )
-
-        let roundTrip = HotkeyOption.fromRaw(custom.persistedValue)
-
-        try unitEqual(roundTrip, custom)
-        try unitEqual(roundTrip?.label, "Ctrl+J+K")
+    static func testModifiers() throws {
+        let appFlags: NSEvent.ModifierFlags = [.control, .option, .shift, .command, .function, .capsLock]
+        let cgFlags: CGEventFlags = [.maskControl, .maskAlternate, .maskShift, .maskCommand, .maskSecondaryFn, .maskAlphaShift]
+        let expected: HotkeyModifiers = [.control, .option, .shift, .command, .function]
+        try unitEqual(HotkeyModifiers(eventFlags: appFlags), expected)
+        try unitEqual(HotkeyModifiers(cgFlags: cgFlags), expected)
+        try unitEqual(expected.displayParts, ["Ctrl", "Opt", "Shift", "Cmd", "Fn"])
+        try unitEqual(expected.persistedParts, ["control", "option", "shift", "command", "function"])
+        try unitEqual(HotkeyModifiers.fromPersistedParts(expected.persistedParts), expected)
+        try unitEqual(HotkeyModifiers(eventFlags: [.capsLock]), [])
+        try unitEqual(HotkeyModifiers(cgFlags: [.maskAlphaShift]), [])
+        try unitEqual(HotkeyModifiers.fromPersistedParts([]), [])
     }
 
     static func testSubsetDetectionSupportsOverlapResolution() throws {
-        let shorter = HotkeyOption.functionKey
-        let longer = HotkeyOption.functionSpace
+        let chord = HotkeyOption(keyCodes: [KeyCode.j, KeyCode.k], modifiers: [.control, .shift])
+        let single = HotkeyOption(keyCodes: [KeyCode.j], modifiers: [.control])
+        try unitExpect(HotkeyOption.functionKey.isStrictSubset(of: .functionSpace))
+        try unitExpect(!HotkeyOption.functionSpace.isStrictSubset(of: .functionKey))
+        try unitExpect(single.isStrictSubset(of: chord))
+        try unitExpect(!chord.isStrictSubset(of: single))
+        try unitExpect(!chord.isStrictSubset(of: chord))
+        try unitExpect(!HotkeyOption.optionF.isStrictSubset(of: .optionG))
+        try unitExpect(!HotkeyOption.commandSpace.isStrictSubset(of: .functionSpace))
+    }
 
-        try unitExpect(shorter.isStrictSubset(of: longer))
-        try unitExpect(!(longer.isStrictSubset(of: shorter)))
+    static func testFinishAndSubmitShortcut() throws {
+        for binding in [HotkeyOption.defaultFinishAndSubmit,
+                        HotkeyOption(keyCodes: [KeyCode.returnKey], modifiers: [.control, .command])] {
+            var shortcut = FinishAndSubmitShortcut(hotkey: binding)
+            var activations = 0
+            func press(_ down: Bool, key: UInt16? = nil, flags: HotkeyModifiers? = nil,
+                       repeated: Bool = false, accepted: Bool = true) -> Bool {
+                shortcut.consume(keyCode: key ?? binding.keyCodes[0], isDown: down,
+                                 flags: flags ?? binding.modifiers, isRepeat: repeated) {
+                    activations += 1
+                    return accepted
+                }
+            }
+            for key: UInt16 in [KeyCode.returnKey, 76, KeyCode.g] {
+                try unitExpect(!press(true, key: key, flags: [])) // Plain typing never submits.
+                try unitExpect(!press(false, key: key, flags: []))
+            }
+            try unitExpect(!press(true, flags: .shift))
+            try unitExpect(!press(true, repeated: true))
+            try unitEqual(activations, 0)
+            try unitExpect(!press(true, accepted: false)) // Idle, disabled or non-Autopaste: pass through.
+            try unitExpect(!press(false))
+            try unitExpect(press(true))
+            try unitExpect(press(true, repeated: true))
+            try unitExpect(press(false, flags: [])) // Releasing the modifier first never leaks the key-up.
+            try unitEqual(activations, 2) // One accepted action, regardless of repeats.
+            try unitExpect(!press(false))
+        }
+        for invalid in [HotkeyOption(keyCodes: [KeyCode.returnKey], modifiers: []), .rightOption,
+                        HotkeyOption(keyCodes: [KeyCode.g, KeyCode.h], modifiers: .option)] {
+            try unitExpect(!invalid.isValidForSubmit)
+        }
     }
 
     static let all: [(String, () throws -> Void)] = [
-        ("HotkeyOption.testDefaultHotkeysRoundTrip", testDefaultHotkeysRoundTrip),
+        ("HotkeyOption.testFeedbackShortcuts", testFeedbackShortcuts),
+        ("HotkeyOption.testFinishAndSubmitShortcut", testFinishAndSubmitShortcut),
         ("HotkeyOption.testPresetHotkeysRoundTrip", testPresetHotkeysRoundTrip),
         ("HotkeyOption.testCustomHotkeyRoundTripPreservesBinding", testCustomHotkeyRoundTripPreservesBinding),
-        ("HotkeyOption.testMultiKeyHotkeyRoundTripPreservesBinding", testMultiKeyHotkeyRoundTripPreservesBinding),
+        ("HotkeyOption.testModifiers", testModifiers),
         ("HotkeyOption.testSubsetDetectionSupportsOverlapResolution", testSubsetDetectionSupportsOverlapResolution),
     ]
 }
 
 #if !VOXA_STANDALONE_TESTS
 final class HotkeyOptionTests: XCTestCase {
-    func testDefaultHotkeysRoundTrip() throws { try HotkeyOptionChecks.testDefaultHotkeysRoundTrip() }
+    func testFeedbackShortcuts() throws { try HotkeyOptionChecks.testFeedbackShortcuts() }
+    func testFinishAndSubmitShortcut() throws { try HotkeyOptionChecks.testFinishAndSubmitShortcut() }
     func testPresetHotkeysRoundTrip() throws { try HotkeyOptionChecks.testPresetHotkeysRoundTrip() }
     func testCustomHotkeyRoundTripPreservesBinding() throws { try HotkeyOptionChecks.testCustomHotkeyRoundTripPreservesBinding() }
-    func testMultiKeyHotkeyRoundTripPreservesBinding() throws { try HotkeyOptionChecks.testMultiKeyHotkeyRoundTripPreservesBinding() }
+    func testModifiers() throws { try HotkeyOptionChecks.testModifiers() }
     func testSubsetDetectionSupportsOverlapResolution() throws { try HotkeyOptionChecks.testSubsetDetectionSupportsOverlapResolution() }
 }
 #endif

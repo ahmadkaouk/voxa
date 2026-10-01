@@ -6,7 +6,7 @@ import XCTest
 #endif
 
 @MainActor
-private final class SessionRecorderFixture: DictationRecording {
+final class SessionRecorderFixture: DictationRecording {
     var starts: [UUID] = []
     var stops: [UUID] = []
     var cancels: [UUID] = []
@@ -42,7 +42,7 @@ private final class SessionRecorderFixture: DictationRecording {
 }
 
 @MainActor
-private final class SessionTranscriberFixture: DictationTranscribing {
+final class SessionTranscriberFixture: DictationTranscribing {
     var calls: [(Data, ModelOption, String)] = []
     var response = "  hello world \n"
     var error: TranscriptionError?
@@ -59,8 +59,9 @@ private final class SessionTranscriberFixture: DictationTranscribing {
 }
 
 @MainActor
-private final class SessionOutputFixture: DictationOutputting {
+final class SessionOutputFixture: DictationOutputting {
     var calls: [(String, OutputModeOption)] = []
+    var submitTargets: [pid_t?] = []
     var copies: [String] = []
     var drains = 0
     var completions = 0
@@ -68,9 +69,10 @@ private final class SessionOutputFixture: DictationOutputting {
     var result: TranscriptOutputOutcome = .copied
     var pasteRead: (@MainActor @Sendable () -> Void)?
     private var drainWaiters: [CheckedContinuation<Void, Never>] = []
-    func deliver(_ text: String, mode: OutputModeOption,
+    func deliver(_ text: String, mode: OutputModeOption, submitTo: pid_t?,
                  onPasteRead: @escaping @MainActor @Sendable () -> Void) async -> TranscriptOutputOutcome {
         calls.append((text, mode))
+        submitTargets.append(submitTo)
         pasteRead = onPasteRead
         let result = result
         await gate?.wait()
@@ -104,11 +106,12 @@ private extension DictationState {
 }
 
 @MainActor
-private final class SessionFixture {
+final class SessionFixture {
     let recorder = SessionRecorderFixture()
     let transcriber = SessionTranscriberFixture()
     let output = SessionOutputFixture()
     var timingLog: DictationTimingLog?
+    var textContext: (any TextContextCapturing)?
     var time = 0.0
     var pause: (TimeInterval) async throws -> Void = { _ in
         try await Task.sleep(nanoseconds: 1_000_000)
@@ -117,13 +120,47 @@ private final class SessionFixture {
                                        recorder: recorder, transcriber: transcriber, output: output,
                                        clock: DictationClock(now: { [unowned self] in self.time }, pause: { [unowned self] seconds in
         try await self.pause(seconds)
-    }), timingLog: timingLog)
+    }), timingLog: timingLog, textContext: textContext)
     func wait(_ phase: String) async throws { try await eventually { self.session.state.tag == phase } }
     func record() async throws { session.start(prepare: { "fixture-key" }); try await wait("recording") }
 }
 
 @MainActor
 enum DictationSessionChecks {
+    static func feedbackNeverBlocksDelivery() async throws {
+        let f = SessionFixture()
+        let network = PipelineGate(), output = PipelineGate()
+        var analyzed: String?
+        var analysisCompleted = false
+        var delivered: UUID?
+        var feedbackTask: Task<Void, Never>?
+        f.session.onFeedbackTranscript = { _, text, key, _ in
+            analyzed = text
+            feedbackTask = Task { await network.wait(); analysisCompleted = true }
+        }
+        f.session.onDeliveryFinished = { delivered = $0 }
+        try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardOnly, englishFeedbackEnabled: true)))
+        f.output.gate = output
+        try await f.record()
+        let id = f.session.state.context!.id
+        // The opt-in value is captured at recording start, like other dictation preferences.
+        try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardOnly, englishFeedbackEnabled: false)))
+        f.session.stop()
+        try await eventually { output.entered && network.entered }
+        try unitEqual(analyzed, "hello world")
+        try unitEqual(f.output.calls.first?.0, "hello world")
+        try unitExpect(delivered == nil && !analysisCompleted)
+        output.open()
+        try await f.wait("idle")
+        try unitEqual(delivered, id)
+        try unitExpect(!analysisCompleted)
+        network.open(); await feedbackTask?.value
+        analyzed = nil
+        try await f.record(); f.session.stop(); try await f.wait("idle")
+        try unitExpect(analyzed == nil)
+        await f.session.shutdown()
+    }
+
     static func timingBreakdownAndOverlappingCleanup() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("voxa-timing-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -222,7 +259,7 @@ enum DictationSessionChecks {
     }
 
     static func restartDuringClipboardRestoration() async throws {
-        for origin in [RecordingOrigin.manual, .hotkeyToggle, .hotkeyHold] {
+        for origin in [RecordingOrigin.manual, .hotkeyToggle] {
             let f = SessionFixture()
             try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardAutopaste, maxRecordingSeconds: 10)))
             let cleanup = PipelineGate()
@@ -253,7 +290,7 @@ enum DictationSessionChecks {
             f.output.gate = nil
             f.output.result = .copied
             f.transcriber.response = "Second dictation"
-            if origin == .hotkeyHold { f.session.holdReleased() } else { f.session.stop() }
+            f.session.stop()
             try await f.wait("idle")
             try unitEqual(f.session.lastTranscript, "Second dictation")
             try unitEqual(f.session.lastOutcome, .copied)
@@ -307,24 +344,22 @@ enum DictationSessionChecks {
     }
 
     static func commandsInterruptMeterWait() async throws {
-        for command in ["stop", "toggle", "release", "cancel", "shutdown"] {
+        for command in ["stop", "toggle", "cancel", "shutdown"] {
             let f = SessionFixture()
             var waiting = false
             var interrupted = false
-            f.pause = { interval in
-                try unitEqual(interval, 0.05) // Meter cadence stays the same.
+            f.pause = { _ in
                 waiting = true
                 do { try await Task.sleep(nanoseconds: 30_000_000_000) }
                 catch is CancellationError { interrupted = true; throw CancellationError() }
             }
-            let id = f.session.start(origin: command == "release" ? .hotkeyHold : .manual,
+            let id = f.session.start(origin: .manual,
                                      prepare: { "fixture-key" })!
             try await eventually { waiting }
             var shutdown: Task<Void, Never>?
             switch command {
             case "stop": f.session.stop(); f.session.stop()
             case "toggle": f.session.toggle(prepare: { "ignored" })
-            case "release": f.session.holdReleased()
             case "cancel": f.session.cancel(); f.session.stop()
             default: shutdown = Task { await f.session.shutdown() }
             }
@@ -382,9 +417,9 @@ enum DictationSessionChecks {
             let f = SessionFixture()
             let starting = PipelineGate()
             f.recorder.startGate = starting
-            let id = f.session.start(origin: .hotkeyHold, prepare: { "fixture-key" })!
+            let id = f.session.start(origin: .hotkeyToggle, prepare: { "fixture-key" })!
             try await eventually { starting.entered }
-            f.session.holdReleased()
+            f.session.stop()
             if cancel { f.session.cancel() }
             f.session.stop() // cannot undo cancellation
             try unitEqual(f.session.state.tag, "starting")
@@ -403,9 +438,11 @@ enum DictationSessionChecks {
     static func originsAndBusyCommands() async throws {
         for origin in [RecordingOrigin.manual, .hotkeyToggle] {
             let f = SessionFixture()
-            f.session.start(origin: origin, prepare: { "fixture-key" })
+            if origin == .hotkeyToggle { f.session.toggle(prepare: { "fixture-key" }) }
+            else { f.session.start(origin: origin, prepare: { "fixture-key" }) }
             try await f.wait("recording")
-            f.session.holdReleased(); f.session.start(origin: .hotkeyHold, prepare: { "other-key" })
+            try unitEqual(f.session.state.context?.origin, origin)
+            f.session.start(origin: .hotkeyToggle, prepare: { "other-key" })
             try unitEqual(f.session.state.tag, "recording")
             try unitEqual(f.recorder.starts.count, 1)
             f.session.toggle(prepare: { "ignored" })
@@ -413,17 +450,6 @@ enum DictationSessionChecks {
             try unitEqual(f.recorder.stops.count, 1)
             await f.session.shutdown()
         }
-        let f = SessionFixture()
-        f.session.toggle(prepare: { "fixture-key" })
-        try await f.wait("recording")
-        try unitEqual(f.session.state.context?.origin, .hotkeyToggle)
-        f.session.cancel()
-        try await f.wait("idle")
-        f.session.start(origin: .hotkeyHold, prepare: { "fixture-key" })
-        try await f.wait("recording")
-        f.session.holdReleased()
-        try await f.wait("idle")
-        await f.session.shutdown()
     }
 
     static func cancelDuringStopAndCleanup() async throws {
@@ -461,7 +487,9 @@ enum DictationSessionChecks {
     static func clockLimitAndSettings() async throws {
         let f = SessionFixture()
         try await f.record()
-        try unitExpect(!f.session.updateSettings(.init(outputMode: .none, maxRecordingSeconds: 20)))
+        let next = DictationSettings(model: .gpt4oMiniTranscribe, outputMode: .none, maxRecordingSeconds: 20)
+        try unitExpect(f.session.updateSettings(next))
+        try unitEqual(f.session.settings, next)
         f.time = 9.999
         // Allow the monitor to inspect several snapshots before the exact deadline.
         try await Task.sleep(nanoseconds: 10_000_000)
@@ -470,15 +498,18 @@ enum DictationSessionChecks {
         try await f.wait("idle")
         try unitEqual(f.recorder.stops.count, 1)
         try unitEqual(f.recorder.limits, [10])
+        try unitEqual(f.transcriber.calls[0].1, .gptTranscribe)
         try unitEqual(f.output.calls[0].1, .clipboardOnly)
         try unitExpect(!f.session.updateSettings(.init(maxRecordingSeconds: .nan)))
-        try unitExpect(f.session.updateSettings(.init(outputMode: .none, maxRecordingSeconds: 20)))
+        try unitEqual(f.session.settings, next)
         try await f.record()
         f.recorder.current.phase = .finished // recorder's sample cap may finish before the wall clock
         try await f.wait("idle")
         try unitEqual(f.recorder.limits, [10, 20])
+        try unitEqual(f.transcriber.calls[1].1, .gpt4oMiniTranscribe)
         try unitEqual(f.output.calls[1].1, .none)
         await f.session.shutdown()
+        try unitExpect(!f.session.updateSettings(next))
     }
 
     static func errorsAndRecovery() async throws {
@@ -559,12 +590,12 @@ enum DictationSessionChecks {
         for command in ["stop", "cancel", "shutdown"] {
             let f = SessionFixture()
             let gate = PipelineGate()
-            f.session.start(origin: .hotkeyHold, prepare: { await gate.wait(); return "fixture-key" })
+            f.session.start(origin: .hotkeyToggle, prepare: { await gate.wait(); return "fixture-key" })
             try unitEqual(f.session.state.tag, "starting")
             try await eventually { gate.entered }
             var shutdown: Task<Void, Never>?
             switch command {
-            case "stop": f.session.holdReleased()
+            case "stop": f.session.stop()
             case "cancel": f.session.cancel()
             default:
                 shutdown = Task { await f.session.shutdown() }
@@ -589,16 +620,47 @@ enum DictationSessionChecks {
         try unitEqual(f.output.calls.count, 1)
     }
 
+    static func finishAndSubmit() async throws {
+        let f = SessionFixture()
+        try unitExpect(!f.session.stopAndSubmit(to: 123))
+        try await f.record()
+        try unitExpect(!f.session.stopAndSubmit(to: 123)) // Clipboard-only mode cannot submit.
+        f.session.cancel()
+        try await f.wait("idle")
+        try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardAutopaste)))
+        let cleanup = PipelineGate()
+        f.output.gate = cleanup
+        try await f.record()
+        try unitExpect(!f.session.stopAndSubmit(to: getpid()))
+        try unitExpect(f.session.stopAndSubmit(to: 123))
+        try unitExpect(!f.session.stopAndSubmit(to: 456))
+        try await eventually { cleanup.entered }
+        try unitEqual(f.output.submitTargets, [123])
+        f.output.pasteRead?()
+        try unitEqual(f.session.state.tag, "delivering") // Do not start another recording before Enter is sent.
+        try unitExpect(f.session.start(prepare: { "fixture-key" }) == nil)
+        cleanup.open()
+        try await f.wait("idle")
+        f.output.gate = nil
+        try await f.record()
+        f.session.stop()
+        try await f.wait("idle")
+        try unitEqual(f.output.submitTargets, [123, nil]) // Submission is per recording.
+        await f.session.shutdown()
+    }
+
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("session: feedback is independent, opt-in and preserves delivered text", feedbackNeverBlocksDelivery),
+        ("session: Finish & Send submits only its own recording", finishAndSubmit),
         ("session: timing breakdown, clipboard cleanup and overlapping recordings", timingBreakdownAndOverlappingCleanup),
         ("session: opt-in timing, cancellation, API errors and log failures", timingFailuresAndConfiguration),
         ("session: restart while clipboard restores and ignore stale completion", restartDuringClipboardRestoration),
         ("session: clipboard restoration outcomes and shutdown barrier", clipboardRestorationCompletionAndShutdown),
-        ("session: stop, toggle, hold release, cancel and shutdown interrupt the meter wait", commandsInterruptMeterWait),
-        ("session: preparation release, cancellation, shutdown and recovery", preparationCommandsAndRecovery),
+        ("session: stop, toggle, cancel and shutdown interrupt the meter wait", commandsInterruptMeterWait),
+        ("session: preparation stop, cancellation, shutdown and recovery", preparationCommandsAndRecovery),
         ("session: one ordered workflow and output completion", workflowAndOutputCompletion),
-        ("session: hold release and cancellation during startup", startupStopAndCancel),
-        ("session: hold/toggle origins and busy commands", originsAndBusyCommands),
+        ("session: stop and cancellation during startup", startupStopAndCancel),
+        ("session: manual/toggle origins and busy commands", originsAndBusyCommands),
         ("session: stop/cancel race and cleanup before restart", cancelDuringStopAndCleanup),
         ("session: exact clock limit and settings snapshots", clockLimitAndSettings),
         ("session: capture, transcription and output error recovery", errorsAndRecovery),
@@ -609,6 +671,8 @@ enum DictationSessionChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class DictationSessionTests: XCTestCase {
+    func testFeedbackNeverBlocksDelivery() async throws { try await DictationSessionChecks.feedbackNeverBlocksDelivery() }
+    func testFinishAndSubmit() async throws { try await DictationSessionChecks.finishAndSubmit() }
     func testTimingBreakdownAndOverlappingCleanup() async throws { try await DictationSessionChecks.timingBreakdownAndOverlappingCleanup() }
     func testTimingFailuresAndConfiguration() async throws { try await DictationSessionChecks.timingFailuresAndConfiguration() }
     func testRestartDuringClipboardRestoration() async throws { try await DictationSessionChecks.restartDuringClipboardRestoration() }

@@ -12,11 +12,21 @@ struct VoxaApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            VoxaPopoverView(controller: appDelegate.controller)
+            VoxaMenuView(controller: appDelegate.controller)
         } label: {
             MenuBarLabel(controller: appDelegate.controller)
         }
-        .menuBarExtraStyle(.window)
+        .menuBarExtraStyle(.menu)
+
+        Window("Voxa Settings", id: "settings") {
+            VoxaSettingsView(controller: appDelegate.controller)
+        }
+        .windowResizability(.contentSize)
+
+        Window("English Learning", id: "english-lessons") {
+            SavedCorrectionsView(controller: appDelegate.controller.feedback,
+                                 onShortReview: { appDelegate.controller.startShortReview() })
+        }
     }
 }
 
@@ -27,249 +37,147 @@ private struct MenuBarLabel: View {
 }
 
 @MainActor
-struct VoxaPopoverView: View {
+struct VoxaMenuView: View {
     @ObservedObject var controller: AppController
-    @ObservedObject var session: DictationSession
+    @Environment(\.openWindow) private var openWindow
 
-    init(controller: AppController) {
-        self.controller = controller
-        self.session = controller.session
-    }
-    @State private var expandedMenu: ExpandedMenu?
-    @State private var showsAPIKeyEditor = false
-    @StateObject private var hotkeyRecorder = HotkeyRecorder()
-
-    enum ExpandedMenu: Hashable {
-        case model
-        case output
-        case maxRecording
-        case toggle
-        case hold
-    }
+    // AppController forwards state and preference changes. Observing the session
+    // directly also rebuilds native menus for every audio-level sample, which
+    // interrupts submenu tracking and makes the selection highlight flicker.
+    private var session: DictationSession { controller.session }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            statusSection
-
-            if let lastError = controller.errorMessage, !lastError.isEmpty {
-                Divider()
-                sectionGroup {
-                    statusMessageRow(
-                        title: "Last error",
-                        value: lastError,
-                        systemImage: "exclamationmark.triangle.fill"
-                    )
-                }
-                Divider()
-            }
-
-            generalSection
-            Divider()
-            hotkeysSection
-            Divider()
-            accountSection
-            Divider()
-            footerActions
-        }
-        .padding(.vertical, 7)
-        .frame(width: 324)
-        .animation(.easeInOut(duration: 0.14), value: expandedMenu)
-        .onChange(of: controller.apiKeySaveCount) { _ in
-            showsAPIKeyEditor = false
-        }
-        .onChange(of: expandedMenu) { newValue in
-            if hotkeyRecorder.target?.menu != newValue {
-                hotkeyRecorder.stop()
-            }
-        }
-        .onAppear {
-            configureHotkeyRecorder()
-        }
-        .onDisappear {
-            hotkeyRecorder.stop()
-        }
-    }
-
-    private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(statusTint.opacity(0.14))
-                        .frame(width: 30, height: 30)
-
-                    Circle()
-                        .fill(statusTint)
-                        .frame(width: 9, height: 9)
-                }
-                .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(statusMenuTitle)
-                        .font(.system(size: 14, weight: .semibold))
-
-                    Text(statusSubtitle)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 4)
-            }
-
+        Section {
             Button(action: performPrimaryAction) {
-                HStack(spacing: 8) {
-                    Image(systemName: primaryActionSymbol)
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(primaryActionTitle)
-                        .font(.system(size: 13, weight: .semibold))
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
-                .padding(.horizontal, 4)
+                Label(primaryActionTitle, systemImage: primaryActionSymbol)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(primaryActionTint)
             .disabled(primaryActionDisabled)
             .accessibilityHint(primaryActionAccessibilityHint)
+        } header: {
+            Text(statusMenuTitle)
         }
-        .padding(13)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.7)
-        )
-        .padding(.horizontal, 10)
-        .padding(.bottom, 7)
-        .accessibilityElement(children: .contain)
-    }
 
-    private var generalSection: some View {
-        sectionGroup("General") {
-            expandableRow(
-                .model,
-                title: "Model",
-                systemImage: "waveform",
-                value: controller.model.label
-            ) {
+        if let error = controller.errorMessage, !error.isEmpty {
+            Button("View Error…") { showSettings() }
+                .help(error)
+        }
+
+        Divider()
+
+        Menu {
+            nextRecordingNotice
+            Picker("Model", selection: Binding(get: { controller.model }, set: { controller.setModel($0) })) {
                 ForEach(ModelOption.allCases) { model in
-                    optionButton(
-                        title: model.label,
-                        isSelected: controller.model == model
-                    ) {
-                        controller.setModel(model)
-                    }
+                    Text(model.label).tag(model)
                 }
             }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Label("Model", systemImage: "waveform")
+                .labelStyle(.titleAndIcon)
+        }
+        .disabled(!controller.canEditDictationSettings)
 
-            expandableRow(
-                .output,
-                title: "Output",
-                systemImage: "square.and.arrow.up",
-                value: controller.outputMode.label
-            ) {
+        Menu {
+            nextRecordingNotice
+            Picker("Output", selection: Binding(get: { controller.outputMode }, set: { controller.setOutputMode($0) })) {
                 ForEach(OutputModeOption.allCases) { mode in
-                    optionButton(
-                        title: mode.label,
-                        isSelected: controller.outputMode == mode
-                    ) {
-                        controller.setOutputMode(mode)
-                    }
+                    Text(mode.label).tag(mode)
                 }
-                Divider()
-                Button("Copy Last Transcript") {
-                    controller.copyLastTranscript()
-                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+            Divider()
+            Button("Copy Last Transcript") { controller.copyLastTranscript() }
                 .disabled(session.lastTranscript == nil)
-            }
+        } label: {
+            Label("Output", systemImage: "text.bubble")
+                .labelStyle(.titleAndIcon)
+        }
+        .disabled(!controller.canEditDictationSettings)
 
-            expandableRow(
-                .maxRecording,
-                title: "Max Recording",
-                systemImage: "timer",
-                value: formattedRecordingDuration(controller.maxRecordingSeconds)
-            ) {
+        Menu {
+            nextRecordingNotice
+            Picker("Max Recording", selection: Binding(
+                get: { controller.maxRecordingSeconds }, set: { controller.setMaxRecordingSeconds($0) }
+            )) {
                 ForEach(maxRecordingOptions, id: \.self) { seconds in
-                    optionButton(
-                        title: formattedRecordingDuration(seconds),
-                        isSelected: controller.maxRecordingSeconds == seconds
-                    ) {
-                        controller.setMaxRecordingSeconds(seconds)
-                    }
+                    Text(formattedRecordingDuration(seconds)).tag(seconds)
                 }
             }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Label("Max Recording", systemImage: "timer")
+                .labelStyle(.titleAndIcon)
         }
-        .disabled(controller.isBusy || !controller.isReady)
+        .disabled(!controller.canEditDictationSettings)
+
+        Divider()
+        Menu {
+            Toggle("English feedback", isOn: Binding(
+                get: { controller.preferences.englishFeedbackEnabled },
+                set: { controller.setEnglishFeedbackEnabled($0) }))
+                .disabled(!controller.canEditDictationSettings)
+            Toggle("Use Nearby Text Automatically", isOn: Binding(
+                get: { controller.preferences.automaticContextEnabled },
+                set: { controller.setAutomaticContextEnabled($0) }))
+                .disabled(!controller.canEditDictationSettings || !controller.preferences.englishFeedbackEnabled)
+                .help("Sends a short text excerpt from the active app to your feedback service. No screenshots; excerpts aren’t saved locally. Manage excluded apps in Voxa Settings.")
+            if controller.feedback.isAnalyzing { Text("Reviewing your English…") }
+            if let status = controller.feedback.status { Text(status) }
+            Button("Show Latest Feedback") { controller.feedback.showLatest() }
+                .disabled(!controller.feedback.hasReview || session.state.context != nil || controller.practice.isPresented)
+            Button("One-minute Review…") { controller.startShortReview() }
+                .disabled(!controller.canOpenPractice || !controller.practice.history.ready || controller.practice.history.isSaving || controller.practice.history.error != nil)
+            if let error = controller.practice.history.error {
+                Text(error)
+                Button("Retry Review History") { controller.practice.history.retry() }.disabled(controller.practice.history.isSaving)
+            }
+            Button("Lessons & Progress…") {
+                openWindow(id: "english-lessons")
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
+        } label: {
+            Label("English Learning", systemImage: "text.bubble")
+        }
+
+        Divider()
+        if controller.permissions.microphone == .denied || controller.permissions.microphone == .restricted {
+            Button("Enable Microphone…") { Permissions.openSettings("Microphone") }
+        }
+        if !controller.permissions.accessibility {
+            Button("Enable Accessibility…") { Permissions.openSettings("Accessibility") }
+        }
+        if !controller.permissions.inputMonitoring {
+            Button("Enable Input Monitoring…") { Permissions.openSettings("ListenEvent") }
+        }
+        Button { showSettings() } label: {
+            Label("Voxa Settings…", systemImage: "gearshape")
+        }
+        .keyboardShortcut(",")
+        Button("Quit Voxa") { controller.quit() }
+            .keyboardShortcut("q")
     }
 
-    private var hotkeysSection: some View {
-        sectionGroup("Hotkeys") {
-            hotkeyEditor(
-                .toggle,
-                title: "Toggle",
-                systemImage: "switch.2",
-                current: controller.toggleHotkey,
-                target: .toggle
-            )
-
-            hotkeyEditor(
-                .hold,
-                title: "Hold",
-                systemImage: "hand.raised",
-                current: controller.holdHotkey,
-                target: .hold
-            )
-        }
-        .disabled(controller.isBusy || !controller.isReady)
+    private func showSettings() {
+        openWindow(id: "settings")
+        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
-    private var accountSection: some View {
-        sectionGroup("OpenAI") {
-            apiKeyStatusRow
-
-            menuActionRow(
-                controller.isAPIKeySet ? "Update API Key…" : "Add API Key…",
-                systemImage: "key"
-            ) {
-                showsAPIKeyEditor.toggle()
-            }
-
-            if showsAPIKeyEditor {
-                apiKeyEditor
-            }
-        }
-    }
-
-    private var footerActions: some View {
-        sectionGroup {
-            if controller.permissions.microphone == .denied || controller.permissions.microphone == .restricted {
-                menuActionRow("Enable Microphone…", systemImage: "mic.fill") {
-                    Permissions.openSettings("Microphone")
-                }
-            }
-            if !controller.permissions.accessibility {
-                menuActionRow("Enable Accessibility…", systemImage: "hand.raised.fill") {
-                    Permissions.openSettings("Accessibility")
-                }
-            }
-            if !controller.permissions.inputMonitoring {
-                menuActionRow("Enable Input Monitoring…", systemImage: "keyboard") {
-                    Permissions.openSettings("ListenEvent")
-                }
-            }
-            menuActionRow("Retry Setup", systemImage: "arrow.clockwise") { controller.retrySetup() }
-                .disabled(controller.isBusy)
-            menuActionRow("Quit", systemImage: "power") { controller.quit() }
+    @ViewBuilder
+    private var nextRecordingNotice: some View {
+        if session.state.isBusy {
+            Text("Changes apply to the next recording")
+            Divider()
         }
     }
 
     private var statusMenuTitle: String {
         if controller.isSettingUp { return "Voxa is starting" }
         if !controller.isReady { return "Voxa needs attention" }
+        if controller.practice.isPresented || controller.practice.isBusy { return "Voxa is practising English" }
         switch session.state {
         case .idle, .restoringClipboard: return controller.isAPIKeySet ? "Voxa is ready" : "Set up Voxa"
         case .starting: return "Preparing microphone"
@@ -281,36 +189,12 @@ struct VoxaPopoverView: View {
         }
     }
 
-    private var statusTint: Color {
-        if controller.errorMessage != nil { return Color(nsColor: .systemRed) }
-        if controller.isSettingUp { return Color(nsColor: .systemOrange) }
-        return session.state.isBusy ? Color(nsColor: .controlAccentColor) : Color(nsColor: .systemGreen)
-    }
-
-    private var statusSubtitle: String {
-        if let error = controller.setupError { return error }
-        if controller.isSettingUp { return "Loading settings and checking access…" }
-        switch session.state {
-        case .idle, .restoringClipboard:
-            if !controller.isAPIKeySet { return "Add an API key to start transcribing" }
-            if controller.permissions.microphone == .denied { return "Enable Microphone access in System Settings" }
-            if !controller.permissions.accessibility || !controller.permissions.inputMonitoring {
-                return "Enable input permissions for hotkeys and autopaste"
-            }
-            return controller.statusMessage
-        case .starting: return "Checking microphone and Keychain access"
-        case .recording: return "Listening for your transcript"
-        case .finishing: return "Closing the microphone"
-        case .transcribing: return "Turning speech into text"
-        case .delivering: return "Sending transcript to the selected output"
-        case .failed(_, let message): return message
-        }
-    }
-
-    private enum PrimaryAction { case addAPIKey, setup, start, stop, retry, working }
+    private enum PrimaryAction { case addAPIKey, setup, start, stop, retry, working, practice }
     private var primaryActionKind: PrimaryAction {
         if controller.isSettingUp || controller.isSavingKey { return .working }
         if !controller.isReady { return .setup }
+        if controller.practice.isPresented { return .practice }
+        if controller.practice.isBusy { return .working }
         switch session.state {
         case .starting(_, nil), .recording: return .stop
         case .starting, .finishing, .transcribing, .delivering: return .working
@@ -320,12 +204,13 @@ struct VoxaPopoverView: View {
     }
     private var primaryActionTitle: String {
         switch primaryActionKind {
-        case .addAPIKey: return "Add API Key"
-        case .setup: return "Retry Setup"
+        case .addAPIKey: return "Add API Key…"
+        case .setup: return "Check Setup"
         case .start: return "Start Recording"
         case .stop: return "Stop Recording"
         case .retry: return "Try Again"
         case .working: return "Working…"
+        case .practice: return "Return to Practice…"
         }
     }
     private var primaryActionSymbol: String {
@@ -335,10 +220,8 @@ struct VoxaPopoverView: View {
         case .start: return "mic.fill"
         case .stop: return "stop.fill"
         case .working: return "hourglass"
+        case .practice: return "text.bubble"
         }
-    }
-    private var primaryActionTint: Color {
-        primaryActionKind == .stop ? Color(nsColor: .systemRed) : Color(nsColor: .controlAccentColor)
     }
     private var primaryActionDisabled: Bool { primaryActionKind == .working }
     private var primaryActionAccessibilityHint: String {
@@ -348,25 +231,18 @@ struct VoxaPopoverView: View {
         case .start, .retry: return "Starts a new dictation"
         case .stop: return "Stops recording and begins transcription"
         case .working: return "Voxa is processing the current operation"
+        case .practice: return "Opens your practice window; close it to resume dictation"
         }
-    }
-
-    private var apiKeyStatusTitle: String { controller.isAPIKeySet ? "Configured" : "Missing" }
-    private var apiKeyStatusDetail: String {
-        controller.isAPIKeySet ? "Ready to use" : "Add an OpenAI API key to enable transcription"
-    }
-
-    private var apiKeySourceLabel: String {
-        controller.apiKeySource.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     private func performPrimaryAction() {
         switch primaryActionKind {
-        case .addAPIKey: showsAPIKeyEditor = true
+        case .addAPIKey: showSettings()
         case .setup: controller.retrySetup()
         case .stop: session.stop()
         case .start, .retry: controller.startRecording()
         case .working: break
+        case .practice: controller.showPractice()
         }
     }
 
@@ -386,307 +262,133 @@ struct VoxaPopoverView: View {
 
         return "\(seconds)s"
     }
+}
 
-    private func toggleExpandedMenu(_ menu: ExpandedMenu) {
-        expandedMenu = expandedMenu == menu ? nil : menu
+@MainActor
+struct VoxaSettingsView: View {
+    @ObservedObject var controller: AppController
+    @StateObject private var hotkeyRecorder = HotkeyRecorder()
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section("Hotkeys") {
+                    hotkeyRow("Start / Stop", detail: "Press again to finish and paste.",
+                              current: controller.toggleHotkey, target: .toggle)
+                    hotkeyRow("Finish & Send", detail: "While recording, paste and press Return.",
+                              current: controller.finishAndSubmitHotkey, target: .finishAndSubmit)
+                    if controller.outputMode != .clipboardAutopaste {
+                        Label("Finish & Send requires Autopaste.", systemImage: "info.circle")
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                    if hotkeyRecorder.target != nil {
+                        Text("Hold the full combination, then release it to save. Press Esc to cancel.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(controller.isBusy || !controller.isReady)
+
+                Section("English Learning") {
+                    EnglishLearningSettingsView(feedbackEnabled: Binding(
+                        get: { controller.preferences.englishFeedbackEnabled },
+                        set: { controller.setEnglishFeedbackEnabled($0) }), contextEnabled: Binding(
+                        get: { controller.preferences.automaticContextEnabled },
+                        set: { controller.setAutomaticContextEnabled($0) }),
+                        excludedApps: controller.preferences.contextExcludedApps,
+                        hasAccessibility: controller.permissions.accessibility,
+                        canEdit: controller.canEditDictationSettings,
+                        onExclude: controller.excludeContextApp,
+                        onAllow: controller.allowContextApp,
+                        onOpenLessons: { openWindow(id: "english-lessons") })
+                }
+
+                Section("OpenAI API Key") {
+                    LabeledContent("API key") {
+                        if controller.isAPIKeySet {
+                            Text("••••••••")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(.primary)
+                                .accessibilityLabel("API key configured")
+                        } else {
+                            Text("Not configured")
+                        }
+                    }
+                    LabeledContent("Storage", value: controller.apiKeySource.replacingOccurrences(of: "_", with: " ").capitalized)
+                    SecureField(controller.isAPIKeySet ? "Replace API key" : "API key", text: $controller.apiKeyInput)
+                        .disabled(controller.isBusy)
+                        .accessibilityLabel("OpenAI API key")
+                        .accessibilityHint(controller.isAPIKeySet ? "A key is saved. Enter a new key to replace it." : "Enter your API key.")
+                    if let error = controller.apiKeyError, !error.isEmpty {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button(controller.isSavingKey ? "Saving…" : (controller.isAPIKeySet ? "Replace Key" : "Save Key")) {
+                        controller.saveAPIKey()
+                    }
+                        .disabled(controller.isBusy || controller.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if let error = controller.errorMessage, !error.isEmpty {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Try Again") { controller.retrySetup() }
+                            .disabled(controller.isBusy)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+            .padding([.horizontal, .bottom])
+        }
+        .frame(width: 480, height: 700)
+        .onExitCommand {
+            if hotkeyRecorder.target != nil {
+                hotkeyRecorder.stop()
+            } else {
+                dismiss()
+            }
+        }
+        .onAppear { configureHotkeyRecorder() }
+        .onDisappear {
+            hotkeyRecorder.stop()
+            controller.apiKeyInput = ""
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            hotkeyRecorder.stop()
+        }
+    }
+
+    private func hotkeyRow(_ title: String, detail: String, current: HotkeyOption, target: HotkeyRecordingTarget) -> some View {
+        SettingsShortcutRow(title: title, detail: detail,
+            shortcut: hotkeyRecorder.target == target ? (hotkeyRecorder.preview?.label ?? "Press keys") : current.label,
+            recording: hotkeyRecorder.target == target,
+            onRecord: { hotkeyRecorder.start(target: target, current: current) },
+            onCancel: { hotkeyRecorder.stop() })
     }
 
     private func configureHotkeyRecorder() {
         hotkeyRecorder.onCommit = { target, hotkey in
             switch target {
-            case .toggle:
-                controller.setToggleHotkey(hotkey)
-            case .hold:
-                controller.setHoldHotkey(hotkey)
+            case .toggle: controller.setToggleHotkey(hotkey)
+            case .finishAndSubmit: controller.setFinishAndSubmitHotkey(hotkey)
             }
         }
-        hotkeyRecorder.onCaptureStateChanged = { isRecording in
-            controller.setHotkeyCaptureEnabled(isRecording)
-        }
-    }
-
-    private func sectionGroup<Content: View>(_ title: String? = nil, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let title {
-                Text(title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                    .padding(.horizontal, 11)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                content()
-            }
-            .padding(.vertical, 1)
-        }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func expandableRow<Content: View>(
-        _ menu: ExpandedMenu,
-        title: String,
-        systemImage: String,
-        value: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                toggleExpandedMenu(menu)
-            } label: {
-                MenuRowChrome {
-                    HStack(alignment: .center, spacing: 8) {
-                        Image(systemName: systemImage)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 14)
-
-                        Text(title)
-                            .font(.system(size: 13))
-
-                        Spacer(minLength: 8)
-
-                        Text(value)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                            .rotationEffect(.degrees(expandedMenu == menu ? 90 : 0))
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(title)
-            .accessibilityValue(
-                [value, expandedMenu == menu ? "Expanded" : "Collapsed"]
-                    .joined(separator: ", ")
-            )
-            .accessibilityHint("Shows available \(title.lowercased()) options")
-
-            if expandedMenu == menu {
-                VStack(alignment: .leading, spacing: 0) {
-                    content()
-                }
-                .padding(.leading, 16)
-                .padding(.trailing, 5)
-                .padding(.bottom, 3)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func hotkeyEditor(
-        _ menu: ExpandedMenu,
-        title: String,
-        systemImage: String,
-        current: HotkeyOption,
-        target: HotkeyRecordingTarget
-    ) -> some View {
-        expandableRow(menu, title: title, systemImage: systemImage, value: current.label) {
-            menuValueRow("Current", value: current.label, systemImage: "keyboard")
-
-            if hotkeyRecorder.target == target {
-                menuInfoRow(hotkeyRecorder.preview?.label ?? "Press a shortcut")
-                menuInfoRow("Hold the full combination, then release it to save. Press Esc to cancel.")
-
-                menuActionRow("Cancel Recording", systemImage: "xmark") {
-                    hotkeyRecorder.stop()
-                }
-            } else {
-                menuActionRow("Record Shortcut…", systemImage: "keyboard") {
-                    hotkeyRecorder.start(target: target, current: current)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func menuValueRow(
-        _ title: String,
-        value: String,
-        systemImage: String
-    ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 14)
-
-            Text(title)
-                .font(.system(size: 13))
-
-            Spacer(minLength: 8)
-
-            Text(value)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 7)
-    }
-
-    private func menuInfoRow(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 15)
-            .padding(.vertical, 6)
-    }
-
-    private var apiKeyStatusRow: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Image(systemName: controller.isAPIKeySet ? "checkmark.circle.fill" : "exclamationmark.circle")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(
-                    controller.isAPIKeySet
-                        ? Color(nsColor: .systemGreen)
-                        : Color(nsColor: .systemOrange)
-                )
-                .frame(width: 14)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(apiKeyStatusTitle)
-                    .font(.system(size: 13, weight: .medium))
-
-                Text(apiKeyStatusDetail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer(minLength: 8)
-
-            Text(apiKeySourceLabel)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 15)
-        .padding(.vertical, 6)
-    }
-
-    private var apiKeyEditor: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SecureField("OPENAI_API_KEY", text: $controller.apiKeyInput)
-                .textFieldStyle(.roundedBorder)
-                .disabled(controller.isBusy)
-                .accessibilityLabel("OpenAI API key")
-                .accessibilityHint("Enter the API key used for transcription")
-
-            if let apiKeyError = controller.apiKeyError, !apiKeyError.isEmpty {
-                Text(apiKeyError)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color(nsColor: .systemRed))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack(spacing: 8) {
-                Button("Save Key") {
-                    controller.saveAPIKey()
-                }
-                .disabled(controller.isBusy || controller.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                Button("Cancel") {
-                    showsAPIKeyEditor = false
-                    controller.apiKeyInput = ""
-                }
-                .disabled(controller.isBusy)
-
-                Spacer()
-            }
-            .controlSize(.small)
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 2)
-        .padding(.bottom, 7)
-    }
-
-    private func menuActionRow(
-        _ title: String,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            MenuRowChrome {
-                HStack(alignment: .center, spacing: 8) {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 14)
-
-                    Text(title)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.primary)
-
-                    Spacer(minLength: 12)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func optionButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button {
-            action()
-            expandedMenu = nil
-        } label: {
-            MenuRowChrome {
-                HStack(spacing: 8) {
-                    Text(title)
-                        .font(.system(size: 12.5))
-
-                    Spacer(minLength: 8)
-
-                    if isSelected {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func statusMessageRow(title: String, value: String, systemImage: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 12)
-
-            Text(value)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.trailing)
-        }
-        .font(.system(size: 11))
-        .padding(.horizontal, 11)
-        .padding(.vertical, 6)
+        hotkeyRecorder.onCaptureStateChanged = { controller.setHotkeyCaptureEnabled($0) }
     }
 }
 
 private enum HotkeyRecordingTarget: Equatable {
     case toggle
-    case hold
-
-    var menu: VoxaPopoverView.ExpandedMenu {
-        switch self {
-        case .toggle:
-            return .toggle
-        case .hold:
-            return .hold
-        }
-    }
+    case finishAndSubmit
 }
 
 private final class HotkeyRecorder: ObservableObject {
@@ -710,7 +412,10 @@ private final class HotkeyRecorder: ObservableObject {
         onCaptureStateChanged?(true)
 
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
-            self?.handle(event) ?? event
+            guard let self else { return event }
+            // A nil result consumes the event, including Escape; don't forward it
+            // to the Settings window's cancel action or its focused text field.
+            return self.handle(event)
         }
     }
 
@@ -823,39 +528,5 @@ private final class HotkeyRecorder: ObservableObject {
 
         stop()
         onCommit?(target, hotkey)
-    }
-}
-
-private struct MenuRowChrome<Content: View>: View {
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.colorScheme) private var colorScheme
-
-    let content: () -> Content
-    @State private var isHovered = false
-
-    var body: some View {
-        let isHighlighted = isEnabled && isHovered
-
-        content()
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(isHighlighted ? hoverColor : .clear)
-            )
-            .padding(.horizontal, 5)
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .opacity(isEnabled ? 1 : 0.45)
-            .onHover { hovering in
-                isHovered = hovering
-            }
-    }
-
-    private var hoverColor: Color {
-        if colorScheme == .dark {
-            return Color.white.opacity(0.08)
-        }
-
-        return Color.black.opacity(0.05)
     }
 }

@@ -1,6 +1,7 @@
 #if canImport(XCTest) || VOXA_STANDALONE_TESTS
 import Foundation
 import Security
+import CoreGraphics
 #if !VOXA_STANDALONE_TESTS
 import XCTest
 @testable import Voxa
@@ -31,6 +32,69 @@ enum NativeSetupChecks {
         try inspect()
     }
 
+    static func submitShortcutMigration() throws {
+        for legacy in ["option_g", "right_option", "option_f",
+                       HotkeyOption(keyCodes: [KeyCode.returnKey], modifiers: []).persistedValue] {
+            var old = savedPreferences
+            old["toggleHotkey"] = "option_f"; old["holdHotkey"] = legacy
+            old["englishFeedbackEnabled"] = true; old["automaticContextEnabled"] = true
+            let data = try JSONSerialization.data(withJSONObject: old)
+            let migrated = try JSONDecoder().decode(Preferences.self, from: data).validated()
+            let submit = HotkeyOption.fromRaw(migrated.finishAndSubmitHotkey)!
+            try unitExpect(submit.isValidForSubmit && !submit.overlaps(.optionF))
+            try unitExpect(migrated.englishFeedbackEnabled && migrated.automaticContextEnabled)
+            try unitEqual(migrated.toggleHotkey, "option_f")
+            let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(migrated)) as! [String: Any]
+            try unitExpect(encoded["holdHotkey"] == nil && encoded["finishAndSubmitHotkey"] != nil)
+            try unitEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(migrated)), migrated)
+        }
+    }
+
+    static func globalShortcutRouting() async throws {
+        let bridge = GlobalHotkeyBridge()
+        var submits = 0, toggles = 0, canSubmit = false
+        bridge.onFinishAndSubmit = { submits += 1; return canSubmit }
+        bridge.onToggleActivated = { toggles += 1 }
+        bridge.updateBindings(toggle: .optionF, finishAndSubmit: .optionG)
+        func swallowed(_ key: UInt16, down: Bool = true, flags: CGEventFlags = [], repeated: Bool = false) -> Bool {
+            let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: down)!
+            event.flags = flags
+            event.setIntegerValueField(.keyboardEventAutorepeat, value: repeated ? 1 : 0)
+            return bridge.handleTapEvent(type: down ? .keyDown : .keyUp, event: event) == nil
+        }
+        for key: UInt16 in [KeyCode.returnKey, 76] {
+            try unitExpect(!swallowed(key)); try unitExpect(!swallowed(key, down: false))
+        }
+        try unitEqual(submits, 0)
+        try unitExpect(!swallowed(KeyCode.g, flags: .maskAlternate))
+        try unitExpect(!swallowed(KeyCode.g, down: false))
+        try unitEqual(submits, 1)
+        await Task.yield(); try unitEqual(toggles, 0) // The retired hold binding cannot start recording.
+        canSubmit = true
+        try unitExpect(swallowed(KeyCode.g, flags: .maskAlternate))
+        canSubmit = false
+        try unitExpect(swallowed(KeyCode.g, repeated: true))
+        try unitExpect(swallowed(KeyCode.g, down: false))
+        try unitEqual(submits, 2)
+        try unitExpect(swallowed(KeyCode.f, flags: .maskAlternate))
+        _ = swallowed(KeyCode.f, down: false)
+        try await eventually { toggles == 1 }
+        let custom = HotkeyOption(keyCodes: [KeyCode.returnKey], modifiers: [.command, .control])
+        bridge.updateBindings(toggle: .optionF, finishAndSubmit: custom)
+        canSubmit = true
+        try unitExpect(!swallowed(KeyCode.g, flags: .maskAlternate))
+        _ = swallowed(KeyCode.g, down: false)
+        try unitExpect(!swallowed(KeyCode.returnKey)); _ = swallowed(KeyCode.returnKey, down: false)
+        try unitExpect(swallowed(KeyCode.returnKey, flags: [.maskCommand, .maskControl]))
+        try unitExpect(swallowed(KeyCode.returnKey, down: false))
+        try unitEqual(submits, 3)
+        bridge.setEnabled(false)
+        try unitExpect(!swallowed(KeyCode.returnKey, flags: [.maskCommand, .maskControl]))
+        _ = swallowed(KeyCode.returnKey, down: false)
+        try unitEqual(submits, 3)
+        bridge.stop()
+    }
+
     private static func withStore(_ run: (UserDefaults) throws -> Void) throws {
         let name = "com.voxa.tests.preferences.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
@@ -57,13 +121,16 @@ enum NativeSetupChecks {
             try unitEqual(value.toggleHotkey, savedPreferences["toggleHotkey"] as? String)
             try unitEqual(HotkeyOption.fromRaw(value.toggleHotkey),
                           HotkeyOption(keyCodes: [79], modifiers: [.control, .shift], keyDisplays: ["F18"]))
-            try unitEqual(value.holdHotkey, "fn_space")
+            try unitEqual(HotkeyOption.fromRaw(value.toggleHotkey)?.label, "Ctrl+Shift+F18")
+            try unitEqual(value.finishAndSubmitHotkey, "fn_space")
             try unitEqual(value.model, "gpt-transcribe")
             try unitEqual(value.outputMode, "none")
             try unitEqual(value.maxRecordingSeconds, 120)
             try unitEqual(value.apiKeySource, "env")
+            try unitExpect(!value.englishFeedbackEnabled)
             try unitEqual(defaults.data(forKey: PreferencesStore.storageKey), original)
             value.maxRecordingSeconds = 60
+            value.englishFeedbackEnabled = true
             try store.save(value)
             try unitEqual(try PreferencesStore(defaults: defaults).load(), value)
         }
@@ -78,7 +145,9 @@ enum NativeSetupChecks {
                 defaults.set(record, forKey: PreferencesStore.storageKey)
                 try rejected { _ = try store.load() }
             }
-            for (key, value) in [("toggleHotkey", "unknown"), ("holdHotkey", savedPreferences["toggleHotkey"]!),
+            for (key, value) in [("toggleHotkey", "unknown"), ("finishAndSubmitHotkey", savedPreferences["toggleHotkey"]!),
+                                 ("finishAndSubmitHotkey", "unknown"), ("finishAndSubmitHotkey", "right_option"),
+                                 ("finishAndSubmitHotkey", HotkeyOption(keyCodes: [KeyCode.returnKey], modifiers: []).persistedValue),
                                  ("model", "unknown"), ("outputMode", "unknown"), ("apiKeySource", "unknown"),
                                  ("maxRecordingSeconds", 0), ("maxRecordingSeconds", 3601),
                                  ("maxRecordingSeconds", "60")] as [(String, Any)] {
@@ -106,7 +175,7 @@ enum NativeSetupChecks {
             try unitEqual(try store.load(), value)
             try store.save(update)
             try unitEqual(try store.load(), update)
-            update.holdHotkey = update.toggleHotkey
+            update.finishAndSubmitHotkey = update.toggleHotkey
             try rejected { try store.save(update) }
             try unitEqual(try store.load().maxRecordingSeconds, 60)
         }
@@ -165,6 +234,8 @@ enum NativeSetupChecks {
         ("setup: duplicate app protection before and after prompts", duplicateAppProtection),
         ("setup: invalid saved configuration rejected without overwriting it", rejectsInvalidSettings),
         ("setup: existing v1 settings and relaunch preserved", savedSettingsSurviveRelaunch),
+        ("setup: retired hold shortcut migrates without losing enabled features", submitShortcutMigration),
+        ("shortcuts: plain Enter passes through and Finish & Send is contextual", globalShortcutRouting),
         ("setup: save failure recovery and clean install", saveFailureRecovery),
         ("setup: credential sources, denied access and worker isolation", credentialSourcesAndErrors),
         ("setup: native Keychain add/read/update with disposable item", nativeKeychainRoundTrip),
@@ -176,6 +247,8 @@ final class NativeSetupTests: XCTestCase {
     func testDuplicateAppProtection() async throws { try await NativeSetupChecks.duplicateAppProtection() }
     func testRejectsInvalidSettings() async throws { try await NativeSetupChecks.rejectsInvalidSettings() }
     func testSavedSettingsSurviveRelaunch() async throws { try await NativeSetupChecks.savedSettingsSurviveRelaunch() }
+    func testSubmitShortcutMigration() async throws { try await NativeSetupChecks.submitShortcutMigration() }
+    func testGlobalShortcutRouting() async throws { try await NativeSetupChecks.globalShortcutRouting() }
     func testSaveFailureRecovery() async throws { try await NativeSetupChecks.saveFailureRecovery() }
     func testCredentialSourcesAndErrors() async throws { try await NativeSetupChecks.credentialSourcesAndErrors() }
     func testNativeKeychainRoundTrip() async throws { try await NativeSetupChecks.nativeKeychainRoundTrip() }

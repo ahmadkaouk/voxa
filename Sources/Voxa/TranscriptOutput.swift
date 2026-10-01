@@ -15,7 +15,7 @@ enum TranscriptOutputOutcome: Equatable {
     /// Fallbacks and a newer clipboard are useful outcomes, but must not show a success checkmark.
     var showsSuccess: Bool {
         switch self {
-        case .disabled, .copied, .paste(.restored): return true
+        case .disabled, .copied, .paste(.restored), .paste(.submitted): return true
         default: return false
         }
     }
@@ -37,7 +37,7 @@ enum TranscriptOutputOutcome: Equatable {
 final class TranscriptOutput: @unchecked Sendable {
     private let worker = DispatchQueue(label: "com.voxa.transcript-output", qos: .userInitiated)
     private let copyText: (String) -> Bool
-    private let pasteText: (String, pid_t?, () -> Void) -> ClipboardPasteResult
+    private let pasteText: (String, pid_t?, Bool, () -> Void) -> ClipboardPasteResult
 
     init(copy: @escaping (String) -> Bool = { text in
         onPasteboardThread {
@@ -45,9 +45,13 @@ final class TranscriptOutput: @unchecked Sendable {
             board.clearContents()
             return board.setString(text, forType: .string)
         }
-    }, paste: @escaping (String, pid_t?, () -> Void) -> ClipboardPasteResult = { text, target, onRead in
+    }, paste: @escaping (String, pid_t?, Bool, () -> Void) -> ClipboardPasteResult = { text, target, submit, onRead in
         let board = onPasteboardThread { NSPasteboard.general }
-        return ClipboardAutopaster(pasteboard: board).paste(text, onRead: onRead) { ownedCount in
+        let sendReturn: ((Int) -> Bool)? = submit ? { ownedCount in
+            guard let target else { return false }
+            return sendSubmitReturn(to: target, clipboardChangeCount: ownedCount)
+        } : nil
+        return ClipboardAutopaster(pasteboard: board).paste(text, onRead: onRead, sendReturn: sendReturn) { ownedCount in
             guard let target, target != getpid() else { return false }
             return sendPasteShortcut(to: target, clipboardChangeCount: ownedCount)
         }
@@ -58,10 +62,10 @@ final class TranscriptOutput: @unchecked Sendable {
 
     /// The read callback permits another recording; the result still waits for clipboard cleanup.
     @MainActor
-    func deliver(_ text: String, mode: OutputModeOption,
+    func deliver(_ text: String, mode: OutputModeOption, submitTo: pid_t? = nil,
                  onPasteRead: @escaping @MainActor @Sendable () -> Void = {}) async -> TranscriptOutputOutcome {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .empty }
-        let target = mode == .clipboardAutopaste ? NSWorkspace.shared.frontmostApplication?.processIdentifier : nil
+        let target = mode == .clipboardAutopaste ? (submitTo ?? NSWorkspace.shared.frontmostApplication?.processIdentifier) : nil
         return await withCheckedContinuation { continuation in
             worker.async {
                 let outcome: TranscriptOutputOutcome
@@ -69,7 +73,7 @@ final class TranscriptOutput: @unchecked Sendable {
                 case .none: outcome = .disabled
                 case .clipboardOnly: outcome = self.copyText(text) ? .copied : .copyFailed
                 case .clipboardAutopaste:
-                    outcome = .paste(self.pasteText(text, target) {
+                    outcome = .paste(self.pasteText(text, target, submitTo != nil) {
                         DispatchQueue.main.async { onPasteRead() }
                     })
                 }

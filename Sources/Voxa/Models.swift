@@ -3,11 +3,11 @@ import Foundation
 enum RecordingOrigin {
     case manual
     case hotkeyToggle
-    case hotkeyHold
 }
 
 enum ModelOption: String, CaseIterable, Identifiable {
     case gptTranscribe = "gpt-transcribe"
+    case gpt4oMiniTranscribe = "gpt-4o-mini-transcribe"
 
     var id: String { rawValue }
 
@@ -15,6 +15,8 @@ enum ModelOption: String, CaseIterable, Identifiable {
         switch self {
         case .gptTranscribe:
             return "GPT-Transcribe"
+        case .gpt4oMiniTranscribe:
+            return "GPT-4o Mini Transcribe"
         }
     }
 

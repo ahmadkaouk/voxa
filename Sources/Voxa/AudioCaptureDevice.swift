@@ -4,7 +4,9 @@ import AVFoundation
 // This narrow boundary lets lifecycle tests drive the actual recorder without opening a microphone.
 protocol AudioCaptureDevice: AnyObject {
     var format: AVAudioFormat { get }
-    func start(receive: @escaping (AVAudioPCMBuffer) -> Void, interrupted: @escaping () -> Void) throws
+    func start(receive: @escaping (AVAudioPCMBuffer) -> Void,
+               configurationChanged: @escaping () -> Void,
+               interrupted: @escaping () -> Void) throws
     /// Returns after capture is stopped. AudioRecorder never starts a successor before this returns.
     func stop()
 }
@@ -25,12 +27,14 @@ final class EngineAudioCaptureDevice: AudioCaptureDevice {
         guard AudioWAVEncoder.supports(format) else { throw AudioRecorderError.unsupportedFormat }
     }
 
-    func start(receive: @escaping (AVAudioPCMBuffer) -> Void, interrupted: @escaping () -> Void) throws {
+    func start(receive: @escaping (AVAudioPCMBuffer) -> Void,
+               configurationChanged: @escaping () -> Void,
+               interrupted: @escaping () -> Void) throws {
         // Notification callbacks only signal the worker. Tearing down the engine inside its
         // configuration callback can deadlock on AVAudioEngine's internal notification queue.
         configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { _ in interrupted() }
+        ) { _ in configurationChanged() }
         sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: nil
         ) { _ in interrupted() }
@@ -123,10 +127,10 @@ final class AudioCaptureInbox {
         lock.unlock()
     }
 
-    func interrupt(signal: DispatchSourceUserDataOr) {
+    func interrupt(_ failure: AudioRecorderError = .interrupted, signal: DispatchSourceUserDataOr) {
         lock.lock()
-        if !closed {
-            fault = .interrupted
+        if !closed, fault == nil {
+            fault = failure
             signal.or(data: Self.audioReady)
         }
         lock.unlock()

@@ -54,6 +54,8 @@ struct ClipboardSnapshot {
 
 enum ClipboardPasteResult: Equatable {
     case restored
+    case submitted
+    case submitSkipped
     case manualPaste
     case unconfirmed
     case clipboardChanged
@@ -65,6 +67,10 @@ enum ClipboardPasteResult: Equatable {
         switch self {
         case .restored:
             return "Transcript pasted; previous clipboard restored"
+        case .submitted:
+            return "Transcript pasted; Enter sent"
+        case .submitSkipped:
+            return "Paste requested; Enter not sent—submit manually"
         case .manualPaste:
             return "Transcript copied; press ⌘V to paste"
         case .unconfirmed:
@@ -100,7 +106,7 @@ final class ClipboardAutopaster {
         self.settlingDelay = settlingDelay
     }
 
-    func paste(_ text: String, onRead: () -> Void = {}, sendShortcut: (Int) -> Bool) -> ClipboardPasteResult {
+    func paste(_ text: String, onRead: () -> Void = {}, sendReturn: ((Int) -> Bool)? = nil, sendShortcut: (Int) -> Bool) -> ClipboardPasteResult {
         precondition(!Thread.isMainThread, "Paste delivery waits must not block the main run loop")
         guard let snapshot = ClipboardSnapshot(pasteboard: pasteboard) else {
             return .snapshotFailed
@@ -159,8 +165,11 @@ final class ClipboardAutopaster {
         onRead()
         Thread.sleep(forTimeInterval: settlingDelay)
         guard stillOwnsClipboard() else { return .clipboardChanged }
-        return snapshot.restore(to: pasteboard, ifUnchangedSince: ownedCount)
-            ? .restored : .restoreFailed
+        let submitted = sendReturn?(ownedCount)
+        guard stillOwnsClipboard() else { return .clipboardChanged }
+        guard snapshot.restore(to: pasteboard, ifUnchangedSince: ownedCount) else { return .restoreFailed }
+        if let submitted { return submitted ? .submitted : .submitSkipped }
+        return .restored
     }
 }
 
@@ -227,4 +236,28 @@ func sendPasteShortcut(to targetPID: pid_t, clipboardChangeCount: Int) -> Bool {
     keyDown.postToPid(targetPID)
     keyUp.postToPid(targetPID)
     return true
+}
+
+/// Send Return only to the app that received the paste, after the paste settling interval.
+func sendSubmitReturn(to targetPID: pid_t, clipboardChangeCount: Int) -> Bool {
+    let modifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift, .maskSecondaryFn]
+    let deadline = ProcessInfo.processInfo.systemUptime + 1.5
+    while !CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty
+        || CGEventSource.keyState(.combinedSessionState, key: 36)
+        || CGEventSource.keyState(.combinedSessionState, key: 76) {
+        guard ProcessInfo.processInfo.systemUptime < deadline else { return false }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return onPasteboardThread {
+        guard AXIsProcessTrusted(), targetPID != getpid(),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID,
+              NSPasteboard.general.changeCount == clipboardChangeCount,
+              let source = CGEventSource(stateID: .privateState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: false)
+        else { return false }
+        down.flags = []; up.flags = []
+        down.postToPid(targetPID); up.postToPid(targetPID)
+        return true
+    }
 }

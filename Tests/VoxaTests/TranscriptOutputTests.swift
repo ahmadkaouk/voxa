@@ -61,33 +61,6 @@ private enum OutputChecks {
         }
     }
 
-    static func failedAndUnconfirmedPaste() throws {
-        for sent in [false, true] {
-            try withPasteboard { board in
-                put("Original", on: board)
-                var reads = 0
-                let result = ClipboardAutopaster(pasteboard: board, readTimeout: 0.04, settlingDelay: 0.01).paste("Manual recovery", onRead: { reads += 1 }) { _ in sent }
-                try expect(reads == 0, "Failed or unconsumed paste must not report early readiness")
-                try expect(result == (sent ? .unconfirmed : .manualPaste), "Unconsumed text must be retained: \(result)")
-                try expect(onPasteboardThread { board.string(forType: .string) } == "Manual recovery", "Manual paste must outlive the temporary provider")
-            }
-        }
-    }
-
-    static func newerCopy() throws {
-        try withPasteboard { board in
-            put("Original", on: board)
-            var reads = 0
-            let result = ClipboardAutopaster(pasteboard: board).paste("Dictation", onRead: { reads += 1 }) { _ in
-                put("User copied something newer", on: board)
-                return true
-            }
-            try expect(reads == 0, "An intervening clipboard owner must not report early readiness")
-            try expect(result == .clipboardChanged, "Newer clipboard owner must be detected")
-            try expect(onPasteboardThread { board.string(forType: .string) } == "User copied something newer", "Never overwrite a newer copy")
-        }
-    }
-
     static func newerCopyAfterRead() throws {
         try withPasteboard { board in
             put("Original", on: board)
@@ -132,11 +105,44 @@ private enum OutputChecks {
         }
     }
 
+    static func submitAfterPaste() throws {
+        for scenario in ["success", "focus changed", "not read", "not sent", "new copy"] {
+            try withPasteboard { board in
+                put("Original", on: board)
+                var events: [String] = []
+                let result = ClipboardAutopaster(pasteboard: board, readTimeout: 0.04, settlingDelay: 0.01).paste(
+                    "Dictation", onRead: { events.append("read") }, sendReturn: { count in
+                        events.append("enter")
+                        return onPasteboardThread { board.changeCount == count && board.string(forType: .string) == "Dictation" }
+                            && scenario != "focus changed"
+                    }) { _ in
+                        events.append("paste")
+                        if scenario != "not read" && scenario != "not sent" {
+                            _ = onPasteboardThread { board.string(forType: .string) }
+                        }
+                        if scenario == "new copy" { put("Newer", on: board) }
+                        return scenario != "not sent"
+                    }
+                if scenario == "success" || scenario == "focus changed" {
+                    try expect(events == ["paste", "read", "enter"], "Enter must follow a read and precede restoration")
+                    try expect(result == (scenario == "success" ? .submitted : .submitSkipped), "Report submission outcome")
+                    try expect(onPasteboardThread { board.string(forType: .string) } == "Original", "Restore even when submission is skipped")
+                } else {
+                    try expect(events == ["paste"], "Never send Enter for unconfirmed or interrupted delivery")
+                    let expected: ClipboardPasteResult = scenario == "new copy" ? .clipboardChanged
+                        : scenario == "not sent" ? .manualPaste : .unconfirmed
+                    try expect(result == expected, "Report interrupted delivery: \(result)")
+                    try expect(onPasteboardThread { board.string(forType: .string) } == (scenario == "new copy" ? "Newer" : "Dictation"),
+                               "Keep newer copies and retain unconsumed text for manual paste")
+                }
+            }
+        }
+    }
+
     static let all: [(String, () throws -> Void)] = [
+        ("submit only after successful paste", submitAfterPaste),
         ("rich clipboard with multiple items", richClipboard),
         ("empty clipboard", emptyClipboard),
-        ("failed and unconfirmed paste", failedAndUnconfirmedPaste),
-        ("newer copy", newerCopy),
         ("newer copy after read", newerCopyAfterRead),
         ("delayed consumer", delayedConsumer),
         ("snapshot ownership", snapshotOwnership),

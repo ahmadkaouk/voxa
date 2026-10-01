@@ -2,7 +2,7 @@ import Foundation
 
 enum AudioRecorderError: LocalizedError, Equatable {
     case busy, invalidLimit, microphonePermission, unsupportedFormat, noAudio, cancelled
-    case staleSession, captureOverrun, interrupted, stalled, conversionFailed
+    case staleSession, captureOverrun, configurationChanged, interrupted, stalled, conversionFailed
 
     var errorDescription: String? {
         switch self {
@@ -14,7 +14,7 @@ enum AudioRecorderError: LocalizedError, Equatable {
         case .cancelled: return "Recording cancelled."
         case .staleSession: return "This recording is no longer active."
         case .captureOverrun: return "Audio capture could not keep up. Try recording again."
-        case .interrupted: return "The microphone changed or the Mac went to sleep. Try recording again."
+        case .configurationChanged, .interrupted: return "The microphone changed or the Mac went to sleep. Try recording again."
         case .stalled: return "The microphone stopped providing audio. Try recording again."
         case .conversionFailed: return "The recorded audio could not be converted."
         }
@@ -38,21 +38,27 @@ final class AudioRecorder: @unchecked Sendable {
         let id: UUID
         let device: AudioCaptureDevice
         let encoder: AudioWAVEncoder
+        let limit: TimeInterval
         let inbox: AudioCaptureInbox
         let signal: DispatchSourceUserDataOr
         let timer: DispatchSourceTimer
+        let startupRecoveryCount: Int
         var lastBufferAt: TimeInterval
         var start: CheckedContinuation<Void, Error>?
 
-        init(id: UUID, device: AudioCaptureDevice, encoder: AudioWAVEncoder, inbox: AudioCaptureInbox,
+        init(id: UUID, device: AudioCaptureDevice, encoder: AudioWAVEncoder, limit: TimeInterval,
+             inbox: AudioCaptureInbox,
              signal: DispatchSourceUserDataOr, timer: DispatchSourceTimer,
-             requestedAt: TimeInterval, start: CheckedContinuation<Void, Error>) {
+             requestedAt: TimeInterval, startupRecoveryCount: Int,
+             start: CheckedContinuation<Void, Error>) {
             self.id = id
             self.device = device
             self.encoder = encoder
+            self.limit = limit
             self.inbox = inbox
             self.signal = signal
             self.timer = timer
+            self.startupRecoveryCount = startupRecoveryCount
             lastBufferAt = requestedAt
             self.start = start
         }
@@ -68,6 +74,9 @@ final class AudioRecorder: @unchecked Sendable {
     private let worker = DispatchQueue(label: "com.voxa.audio-recorder", qos: .userInitiated)
     private let makeDevice: () throws -> AudioCaptureDevice
     private let bufferTimeout: TimeInterval
+    // Opening an AirPods microphone can switch Bluetooth from A2DP playback to HFP capture.
+    // Rebuilding once after that startup-only format change binds the new engine to HFP.
+    private let maximumStartupRecoveries = 1
     private var capture: Capture?
     private var state = AudioRecorderSnapshot()
     private var completed: Result<Data, Error>?
@@ -83,38 +92,52 @@ final class AudioRecorder: @unchecked Sendable {
     func start(id: UUID, limit: TimeInterval) async throws {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            worker.async {
+            worker.async { [self] in
                 guard self.capture == nil else { continuation.resume(throwing: AudioRecorderError.busy); return }
                 self.state = AudioRecorderSnapshot(id: id, phase: .starting)
                 self.completed = nil
                 do {
                     guard limit.isFinite, (1...3600).contains(limit) else { throw AudioRecorderError.invalidLimit }
-                    let device = try self.makeDevice()
-                    let encoder = try AudioWAVEncoder(format: device.format, limit: limit)
-                    let inbox = try AudioCaptureInbox(format: device.format)
-                    let signal = DispatchSource.makeUserDataOrSource(queue: self.worker)
-                    let timer = DispatchSource.makeTimerSource(queue: self.worker)
-                    let capture = Capture(id: id, device: device, encoder: encoder, inbox: inbox,
-                                          signal: signal, timer: timer, requestedAt: requestedAt, start: continuation)
-                    self.capture = capture
-                    signal.setEventHandler { [weak self] in self?.receive(id: id) }
-                    timer.setEventHandler { [weak self] in self?.checkTimeout(id: id) }
-                    timer.schedule(deadline: .now() + self.bufferTimeout, repeating: min(0.25, self.bufferTimeout))
-                    signal.resume()
-                    timer.resume()
-                    try device.start(receive: { inbox.receive($0, signal: signal) }, interrupted: {
-                        inbox.interrupt(signal: signal)
-                    })
+                    try self.beginCapture(id: id, limit: limit, requestedAt: requestedAt,
+                                          startupRecoveryCount: 0, continuation: continuation)
                 } catch {
-                    if self.capture != nil { self.finish(id: id, failure: error) }
-                    else {
-                        self.state.phase = .failed
-                        self.state.error = error.localizedDescription
-                        self.completed = .failure(error)
-                        continuation.resume(throwing: error)
-                    }
+                    self.failStart(id: id, continuation: continuation, error: error)
                 }
             }
+        }
+    }
+
+    private func beginCapture(id: UUID, limit: TimeInterval, requestedAt: TimeInterval,
+                              startupRecoveryCount: Int,
+                              continuation: CheckedContinuation<Void, Error>) throws {
+        let device = try makeDevice()
+        let encoder = try AudioWAVEncoder(format: device.format, limit: limit)
+        let inbox = try AudioCaptureInbox(format: device.format)
+        let signal = DispatchSource.makeUserDataOrSource(queue: worker)
+        let timer = DispatchSource.makeTimerSource(queue: worker)
+        let capture = Capture(id: id, device: device, encoder: encoder, limit: limit, inbox: inbox,
+                              signal: signal, timer: timer, requestedAt: requestedAt,
+                              startupRecoveryCount: startupRecoveryCount, start: continuation)
+        self.capture = capture
+        signal.setEventHandler { [weak self] in self?.receive(id: id) }
+        timer.setEventHandler { [weak self] in self?.checkTimeout(id: id) }
+        timer.schedule(deadline: .now() + bufferTimeout, repeating: min(0.25, bufferTimeout))
+        signal.resume()
+        timer.resume()
+        try device.start(receive: { inbox.receive($0, signal: signal) }, configurationChanged: {
+            inbox.interrupt(.configurationChanged, signal: signal)
+        }, interrupted: {
+            inbox.interrupt(signal: signal)
+        })
+    }
+
+    private func failStart(id: UUID, continuation: CheckedContinuation<Void, Error>, error: Error) {
+        if capture != nil { finish(id: id, failure: error) }
+        else {
+            state.phase = .failed
+            state.error = error.localizedDescription
+            completed = .failure(error)
+            continuation.resume(throwing: error)
         }
     }
 
@@ -150,11 +173,35 @@ final class AudioRecorder: @unchecked Sendable {
 
     private func receive(id: UUID) {
         guard let capture, capture.id == id else { return }
-        if let failure = capture.inbox.failure { finish(id: id, failure: failure); return }
+        if let failure = capture.inbox.failure {
+            if failure == .configurationChanged, let continuation = capture.start,
+               capture.startupRecoveryCount < maximumStartupRecoveries {
+                recoverStartup(capture, continuation: continuation)
+            } else {
+                finish(id: id, failure: failure)
+            }
+            return
+        }
         do {
             try drain(capture)
             if capture.encoder.reachedLimit { finish(id: id) }
         } catch { finish(id: id, failure: error) }
+    }
+
+    private func recoverStartup(_ capture: Capture, continuation: CheckedContinuation<Void, Error>) {
+        let id = capture.id
+        let limit = capture.limit
+        let nextRecoveryCount = capture.startupRecoveryCount + 1
+        capture.start = nil
+        capture.close()
+        self.capture = nil
+        state = AudioRecorderSnapshot(id: id, phase: .starting)
+        do {
+            try beginCapture(id: id, limit: limit, requestedAt: ProcessInfo.processInfo.systemUptime,
+                             startupRecoveryCount: nextRecoveryCount, continuation: continuation)
+        } catch {
+            failStart(id: id, continuation: continuation, error: error)
+        }
     }
 
     private func drain(_ capture: Capture) throws {
