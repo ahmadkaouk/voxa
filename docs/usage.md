@@ -222,4 +222,3 @@ are persisted. API keys entered in the app are stored
 in macOS Keychain, and preferences are saved locally. See the
 [architecture guide](architecture.md) for details about data handling and
 clipboard recovery.
-
