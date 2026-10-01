@@ -40,7 +40,7 @@ struct FeedbackClient: FeedbackAnalyzing {
     such as 'wanna', or accepted dialects. Skip non-English passages.
     If a phrase could plausibly be a recognition error, use kind=transcription_issue and explain
     the uncertainty, or omit it when no useful alternative exists. Never blame the speaker.
-    Never assess pronunciation, accent, speaking speed, fluency scores or overall ability from text.
+    Never assess pronunciation, accent, speaking speed, listening or conversational fluency from text.
 
     original must be an exact contiguous excerpt of the transcript, including its punctuation.
     suggestion must be a concrete replacement for that excerpt: minimal for grammar/construction,
@@ -75,6 +75,31 @@ struct FeedbackClient: FeedbackAnalyzing {
     Consider errors relative to the amount of speech; do not subtract points for each finding.
     Never penalise optional phrasing, informal speech, vocabulary sophistication, fillers,
     punctuation, self-repairs or recognition mistakes. Never score the rewritten text.
+
+    EXPRESSION PROFILE: expression estimates only the language demonstrated in the ORIGINAL
+    intended English, not full English proficiency. It is independent of the grammar score.
+    Use status=too_short below 40 assessable English words, limited for repetitive/very narrow
+    material that cannot support all five dimensions, non_english for insufficient English,
+    or uncertain for unreliable recognition. For these, purpose=null and dimensions=[].
+    Simple, correct, short speech is insufficient evidence, never evidence of low proficiency.
+    Otherwise use status=assessed, identify the main purpose (request, explanation, narrative,
+    opinion, description) and exactly one entry for each dimension:
+    accuracy (control of grammar in the range attempted), vocabulary (precision and flexibility),
+    phrasing (natural combinations and expressions), range (variety and control of sentence forms),
+    coherence (clear ideas and connections). Each entry has a level and an exact contiguous evidence
+    excerpt, at most 400 characters, from the original transcript. Never cite your own correction.
+    Apply these CEFR-inspired expression descriptors to each dimension separately:
+    A1: isolated basic words/formulae and very limited control or connection.
+    A2: basic everyday expressions and simple clauses linked with and/but/because.
+    B1: connected familiar-topic speech, reasons and accounts, with some limitations in range/control.
+    B2: clear developed ideas, varied forms and fairly precise choices, with generally good control.
+    C1: flexible, precise, well-structured expression including complex ideas and consistently good control.
+    C2: sustained nuanced distinctions and flexible reformulation with consistently precise control.
+    A clean grammar result does NOT imply C1/C2; long sentences, jargon and formal vocabulary do NOT
+    by themselves indicate an advanced level. Accept dialect and informal language. An optional
+    alternative alone is never evidence of a weakness. Do not reward verbosity or penalise concise
+    wording. Abstain if the task offers too little evidence to distinguish levels. These are
+    provisional observations for aggregation across varied dictations, not a CEFR examination.
 
     successfulPatterns reports correct use of previously encountered categories listed in the
     user's knownPatterns array. Check the ENTIRE original dictation, even when feedback is empty.
@@ -129,6 +154,13 @@ struct FeedbackClient: FeedbackAnalyzing {
         try Task.checkCancellation()
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return FeedbackAnalysis(feedback: []) }
         guard transcript.count <= 40_000 else { throw FeedbackError.tooLong }
+        let data = try await response(body: Self.requestBody(transcript, knownPatterns: knownPatterns), apiKey: apiKey)
+        return try Self.parse(data, transcript: transcript, knownPatterns: knownPatterns)
+    }
+
+    /// Shared transport for explicit practice checks; same endpoint and privacy boundaries.
+    func response(body: Data, apiKey: String) async throws -> Data {
+        try Task.checkCancellation()
         guard let endpoint, endpoint.scheme == "https" ||
                 (endpoint.scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(endpoint.host ?? "")) else {
             throw FeedbackError.unavailable
@@ -139,7 +171,7 @@ struct FeedbackClient: FeedbackAnalyzing {
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try Self.requestBody(transcript, knownPatterns: knownPatterns)
+        request.httpBody = body
         let data: Data, response: URLResponse
         do {
             (data, response) = try await session.data(for: request, delegate: FeedbackRequestDelegate())
@@ -155,7 +187,7 @@ struct FeedbackClient: FeedbackAnalyzing {
         case 429: throw FeedbackError.rateLimited
         default: throw FeedbackError.network
         }
-        return try Self.parse(data, transcript: transcript, knownPatterns: knownPatterns)
+        return data
     }
 
     static func requestBody(_ transcript: String, knownPatterns: Set<LearningFocus> = []) throws -> Data {
@@ -181,22 +213,48 @@ struct FeedbackClient: FeedbackAnalyzing {
         let observation: [String: Any] = ["type": "object", "additionalProperties": false,
             "required": ["focus", "evidence"], "properties": [
                 "focus": ["type": "string", "enum": LearningFocus.allCases.map(\.rawValue)], "evidence": string]]
+        let dimension: [String: Any] = ["type": "object", "additionalProperties": false,
+            "required": ["dimension", "level", "evidence"], "properties": [
+                "dimension": ["type": "string", "enum": ExpressionDimension.allCases.map(\.rawValue)],
+                "level": ["type": "string", "enum": ExpressionLevel.allCases.map(\.rawValue)], "evidence": string]]
+        let expression: [String: Any] = ["type": "object", "additionalProperties": false,
+            "required": ["status", "purpose", "dimensions"], "properties": [
+                "status": ["type": "string", "enum": ["assessed", "too_short", "limited", "uncertain", "non_english"]],
+                "purpose": ["anyOf": [["type": "string", "enum": ExpressionPurpose.allCases.map(\.rawValue)], ["type": "null"]]],
+                "dimensions": ["type": "array", "items": dimension]]]
         let schema: [String: Any] = ["type": "object", "additionalProperties": false,
-            "required": ["feedback", "assessment", "successfulPatterns"], "properties": [
+            "required": ["feedback", "assessment", "successfulPatterns", "expression"], "properties": [
                 "feedback": ["type": "array", "items": finding], "assessment": assessment,
-                "successfulPatterns": ["type": "array", "items": observation]]]
-        let input = try JSONSerialization.data(withJSONObject: ["transcript": transcript,
-            "knownPatterns": knownPatterns.map(\.rawValue).sorted()])
+                "successfulPatterns": ["type": "array", "items": observation], "expression": expression]]
+        return try structuredRequest(instructions: instructions, input: ["transcript": transcript,
+            "knownPatterns": knownPatterns.map(\.rawValue).sorted()], schema: schema, name: "english_feedback")
+    }
+
+    static func structuredRequest(instructions: String, input: [String: Any], schema: [String: Any],
+                                  name: String, maxTokens: Int = 16_384) throws -> Data {
+        let input = try JSONSerialization.data(withJSONObject: input)
         return try JSONSerialization.data(withJSONObject: [
-            "model": model, "store": false, "reasoning_effort": "low", "max_completion_tokens": 16_384,
+            "model": model, "store": false, "reasoning_effort": "low", "max_completion_tokens": maxTokens,
             "messages": [["role": "system", "content": instructions],
                          ["role": "user", "content": String(decoding: input, as: UTF8.self)]],
             "response_format": ["type": "json_schema", "json_schema": [
-                "name": "english_feedback", "strict": true, "schema": schema]],
+                "name": name, "strict": true, "schema": schema]],
         ])
     }
 
     static func parse(_ data: Data, transcript: String, knownPatterns: Set<LearningFocus> = []) throws -> FeedbackAnalysis {
+        let content = try structuredContent(data)
+        guard let object = try? JSONSerialization.jsonObject(with: content) as? [String: Any],
+              // Older compatible feedback services may still return the grammar-only contract.
+              Set(object.keys) == ["feedback", "assessment", "successfulPatterns"] ||
+                Set(object.keys) == ["feedback", "assessment", "successfulPatterns", "expression"],
+              let result = try? JSONDecoder().decode(FeedbackAnalysis.self, from: content) else {
+            throw FeedbackError.invalidResponse
+        }
+        return try result.validated(for: transcript, knownPatterns: knownPatterns)
+    }
+
+    static func structuredContent(_ data: Data) throws -> Data {
         struct Envelope: Decodable {
             struct Choice: Decodable {
                 struct Message: Decodable { let content: String?; let refusal: String? }
@@ -212,13 +270,10 @@ struct FeedbackClient: FeedbackAnalyzing {
             throw FeedbackError.invalidResponse
         }
         if choice.finish_reason == "length" { throw FeedbackError.incompleteResponse }
-        guard choice.finish_reason == "stop", let content = choice.message.content,
-              let object = try? JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any],
-              Set(object.keys) == ["feedback", "assessment", "successfulPatterns"],
-              let result = try? JSONDecoder().decode(FeedbackAnalysis.self, from: Data(content.utf8)) else {
+        guard choice.finish_reason == "stop", let content = choice.message.content else {
             throw FeedbackError.invalidResponse
         }
-        return try result.validated(for: transcript, knownPatterns: knownPatterns)
+        return Data(content.utf8)
     }
 }
 

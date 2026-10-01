@@ -15,6 +15,8 @@ final class FeedbackController: ObservableObject {
     @Published private(set) var assessment: GrammarAssessment?
     @Published private(set) var successfulPatterns: [LearningFocus] = []
     let progress: LearningProgress
+    var onPractice: ((PracticeTarget) -> Void)?
+    var onLessonsDeleted: ((Set<UUID>) -> Void)?
 
     private let client: any FeedbackAnalyzing
     private let store: any CorrectionStoring
@@ -25,6 +27,7 @@ final class FeedbackController: ObservableObject {
     private var currentRequest: UUID?
     private var delivered: UUID?
     private var busy = false
+    private var practiceActive = false
     private var closed = false
     private var learningRecord: LearningRecord?
     private var progressSubscription: AnyCancellable?
@@ -83,7 +86,7 @@ final class FeedbackController: ObservableObject {
                 }
                 self.assessment = valid.assessment
                 self.successfulPatterns = valid.successfulPatterns.map(\.focus)
-                self.learningRecord = LearningRecord(id: id, date: date, analysis: valid)
+                self.learningRecord = LearningRecord(id: id, date: date, analysis: valid, transcript: transcript)
                 self.recordProgressIfReady()
                 self.presentIfReady()
             } catch {
@@ -119,17 +122,27 @@ final class FeedbackController: ObservableObject {
     }
 
     private func presentIfReady() {
-        guard enabled, !closed, !busy, hasReview, let currentRequest,
+        guard enabled, !closed, !busy, !practiceActive, hasReview, let currentRequest,
               delivered == currentRequest, latestRecording == currentRequest else { return }
         panelVisible = true
     }
 
     func showLatest() {
-        guard enabled, !closed, !busy, hasReview, let currentRequest, delivered == currentRequest else { return }
+        guard enabled, !closed, !busy, !practiceActive, hasReview, let currentRequest, delivered == currentRequest else { return }
         panelVisible = true
     }
 
     func dismiss() { findings = []; assessment = nil; successfulPatterns = []; panelVisible = false }
+
+    func setPracticeActive(_ active: Bool) {
+        practiceActive = active
+        if active { panelVisible = false }
+    }
+
+    func practise(_ item: SavedCorrection, alternative: Bool = false) {
+        guard !closed, !busy, !practiceActive, item.feedback.kind != .transcriptionIssue else { return }
+        onPractice?(PracticeTarget(lesson: item, alternative: alternative))
+    }
 
     var hasLessons: Bool { findings.contains { $0.feedback.kind != .transcriptionIssue } }
 
@@ -183,7 +196,9 @@ final class FeedbackController: ObservableObject {
             do {
                 try await store.save(items)
                 guard let self, !self.closed else { return }
+                let removed = Set(self.saved.map(\.id)).subtracting(items.map(\.id))
                 self.saved = items; self.storageError = nil; self.isSaving = false
+                if !removed.isEmpty { self.onLessonsDeleted?(removed) }
                 if let dismissGeneration, self.generation == dismissGeneration { self.dismiss() }
             } catch {
                 guard let self, !self.closed else { return }

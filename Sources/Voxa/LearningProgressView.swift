@@ -1,4 +1,3 @@
-import Charts
 import SwiftUI
 
 private typealias ProgressViewState<Value> = SwiftUI.State<Value>
@@ -6,12 +5,7 @@ private typealias ProgressViewState<Value> = SwiftUI.State<Value>
 struct LearningProgressView: View {
     @ObservedObject var progress: LearningProgress
     @ProgressViewState private var confirmClear = false
-
-    private var scores: [Int] { Array(progress.recentScores.prefix(10).reversed()) }
-    private var average: String {
-        guard !scores.isEmpty else { return "—" }
-        return String(format: "%.1f", Double(scores.reduce(0, +)) / Double(scores.count))
-    }
+    private var profile: ExpressionProfile { progress.expressionProfile }
 
     var body: some View {
         ScrollView {
@@ -19,7 +13,7 @@ struct LearningProgressView: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Your English, over time.").font(.system(size: 23, weight: .semibold))
-                        Text("Notice what repeats. Practise it. Notice when you use it well.")
+                        Text("A picture of how you express your ideas while you work.")
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -32,65 +26,57 @@ struct LearningProgressView: View {
                         Button("Retry") { progress.retry() }.disabled(progress.isSaving)
                     }
                 }
-                if progress.records.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "chart.xyaxis.line").font(.system(size: 32, weight: .light)).foregroundStyle(FeedbackPalette.accent)
-                        Text(progress.error != nil ? "Progress is temporarily unavailable." :
-                                (progress.ready ? "Your next dictations start the picture." : "Opening your progress…"))
-                            .font(.system(size: 17, weight: .medium))
-                        Text("With English feedback on, grammar estimates and patterns build up here automatically.\nCorrect uses count too, even when there’s nothing to correct.")
-                            .font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    }.frame(maxWidth: .infinity).padding(.vertical, 48)
-                } else {
-                    HStack(alignment: .top, spacing: 36) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            (Text(average).font(.system(size: 36, weight: .medium, design: .rounded))
-                             + Text(" / 10").font(.system(size: 14)).foregroundColor(.secondary))
-                            Text("Recent grammar estimate").font(.system(size: 12, weight: .medium))
-                            Text(scores.isEmpty ? "Longer samples will add scores" : "Latest \(scores.count) scored reviews")
-                                .font(.system(size: 11)).foregroundStyle(.secondary)
-                        }.frame(minWidth: 190, alignment: .leading)
-                        if !scores.isEmpty {
-                            Chart(Array(scores.enumerated()), id: \.offset) { item in
-                                LineMark(x: .value("Review", item.offset + 1), y: .value("Grammar estimate", item.element))
-                                    .foregroundStyle(FeedbackPalette.accent)
-                                PointMark(x: .value("Review", item.offset + 1), y: .value("Grammar estimate", item.element))
-                                    .foregroundStyle(FeedbackPalette.accent).symbolSize(22)
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("English expression · Estimated from dictation")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                    Text(profile.label).font(.system(size: profile.ready ? 36 : 24, weight: .medium, design: .rounded))
+                    Text(profile.ready ? profile.trend : profile.guidance).font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(profile.coverage).font(.system(size: 11)).foregroundStyle(.secondary)
+                    if profile.ready {
+                        Divider().padding(.vertical, 2)
+                        ForEach(ExpressionDimension.allCases, id: \.self) { dimension in
+                            HStack {
+                                Text(dimension.label).font(.system(size: 13))
+                                Spacer()
+                                Text(ExpressionProfile.label(profile.median(dimension)))
+                                    .font(.system(size: 13, weight: .medium)).foregroundStyle(FeedbackPalette.accent)
                             }
-                            .chartYScale(domain: 0...10).chartXAxis(.hidden)
-                            .chartYAxis {
-                                AxisMarks(values: [0, 5, 10]) { _ in
-                                    AxisGridLine()
-                                    AxisValueLabel(anchor: .leading)
-                                }
-                            }
-                            .frame(height: 100)
-                            .accessibilityLabel("Grammar estimates, oldest to newest: " + scores.map(String.init).joined(separator: ", "))
                         }
-                    }.padding(20)
-                        .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
+                        if let focus = profile.nextFocus {
+                            Text("Try next · " + focus.practiceAdvice)
+                                .font(.system(size: 12, weight: .medium)).padding(.top, 6)
+                        }
+                    } else {
+                        Text("Short or uncertain samples won’t pull your level down. Grammar-only history stays saved; the broader estimate starts with new dictations.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(3)
+                    }
+                }
+                .padding(22).frame(maxWidth: .infinity, alignment: .leading)
+                .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
+                Text(ExpressionProfile.limitation).font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(3)
 
-                    if !progress.patterns.isEmpty {
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text("Patterns to practise").font(.system(size: 16, weight: .semibold))
-                            Text("Counts are per review. A correct use needs an actual example; silence doesn’t count as success.")
-                                .font(.system(size: 11)).foregroundStyle(.secondary)
-                            ForEach(progress.patterns) { pattern in
-                                HStack(alignment: .firstTextBaseline) {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(pattern.focus.label).font(.system(size: 13, weight: .medium))
-                                        Text(context(pattern)).font(.system(size: 11)).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Text("\(pattern.successes) \(pattern.successes == 1 ? "correct use" : "correct uses")")
-                                        .font(.system(size: 12)).foregroundStyle(pattern.successes > 0 ? FeedbackPalette.accent : .secondary)
+                if !progress.patterns.isEmpty {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Patterns to practise").font(.system(size: 16, weight: .semibold))
+                        Text("Correct uses need an actual example in your dictation. Practice exercises are tracked separately.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        ForEach(progress.patterns) { pattern in
+                            HStack(alignment: .firstTextBaseline) {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(pattern.focus.label).font(.system(size: 13, weight: .medium))
+                                    Text(pattern.corrections > 0 ? "Corrections in \(pattern.corrections) dictations" :
+                                            "Introduced in \(pattern.suggestions) dictations")
+                                        .font(.system(size: 11)).foregroundStyle(.secondary)
                                 }
-                                Divider()
+                                Spacer()
+                                Text("\(pattern.successes) \(pattern.successes == 1 ? "correct use" : "correct uses")")
+                                    .font(.system(size: 12)).foregroundStyle(pattern.successes > 0 ? FeedbackPalette.accent : .secondary)
                             }
+                            Divider()
                         }
                     }
                 }
-                Text("Stored on this Mac: score bands and pattern counts from up to 200 recent reviews. No dictated text is kept in progress. Optional alternatives don’t lower your score. Estimates describe grammar in the transcript, not pronunciation or overall speaking ability.")
+                Text("Stored on this Mac: assessment bands, word counts, speaking-task categories and pattern counts from up to 200 dictations. The level estimate uses up to 30 qualifying samples from the last 90 days. No dictated text is kept in progress.")
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(3)
             }.padding(28)
         }
@@ -98,16 +84,6 @@ struct LearningProgressView: View {
         .alert("Clear your learning progress?", isPresented: $confirmClear) {
             Button("Clear progress", role: .destructive) { progress.clear() }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("This removes score and pattern history from this Mac. Your saved lessons stay available.") }
-    }
-
-    private func context(_ pattern: PatternProgress) -> String {
-        if pattern.corrections > 0 {
-            return "Corrections in \(pattern.corrections) \(pattern.corrections == 1 ? "review" : "reviews")"
-        }
-        if pattern.suggestions > 0 {
-            return "Introduced in \(pattern.suggestions) \(pattern.suggestions == 1 ? "review" : "reviews")"
-        }
-        return "Keep using this pattern in new sentences"
+        } message: { Text("This removes level and pattern history from this Mac. Your saved lessons and review timing stay available.") }
     }
 }

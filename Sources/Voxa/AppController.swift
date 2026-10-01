@@ -7,6 +7,7 @@ import SwiftUI
 @MainActor
 final class AppController: ObservableObject {
     let session: DictationSession
+    let practice: PracticeController
     let feedback = FeedbackController()
     @Published private(set) var preferences = Preferences()
     @Published private(set) var isSettingUp = false
@@ -24,6 +25,7 @@ final class AppController: ObservableObject {
     private let hotkeys = GlobalHotkeyBridge()
     private let overlay = ActivityOverlayController()
     private let feedbackPanel = FeedbackPanelController()
+    private let practiceWindow = PracticeWindowController()
     private let sounds = DictationSoundController()
     private var subscriptions = Set<AnyCancellable>()
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -35,10 +37,48 @@ final class AppController: ObservableObject {
     private var capturingHotkey = false
 
     init() {
-        session = DictationSession(transcriber: TranscriptionClient(endpoint: TranscriptionClient.configuredEndpoint()),
+        let recorder = AudioRecorder()
+        session = DictationSession(recorder: recorder,
+                                   transcriber: TranscriptionClient(endpoint: TranscriptionClient.configuredEndpoint()),
                                    timingLog: DictationTimingLog.configured())
+        practice = PracticeController(recorder: recorder)
         store = PreferencesStore()
         keychain = Keychain()
+        practice.prepare = { [weak self] microphone in
+            guard let self, !self.closing, self.session.state.context == nil else { throw CancellationError() }
+            let key: String
+            if microphone { key = try await self.recordingPreparation()() }
+            else {
+                guard let value = try await self.keychain.value(source: self.preferences.apiKeySource) else {
+                    throw TranscriptionError.authentication
+                }
+                key = value
+            }
+            return PracticeCredentials(apiKey: key, model: self.model)
+        }
+        practice.isSavedLesson = { [weak self] id in self?.feedback.saved.contains { $0.id == id } ?? false }
+        feedback.onPractice = { [weak self] target in
+            guard let self, self.canOpenPractice else { return }
+            self.practice.open([target])
+        }
+        feedback.onLessonsDeleted = { [weak self] ids in self?.practice.lessonsDeleted(ids) }
+        practice.$isPresented.removeDuplicates().sink { [weak self] visible in
+            guard let self else { return }
+            self.feedback.setPracticeActive(visible)
+            if visible {
+                self.completionPresentation?.cancel(); self.overlay.hide()
+                self.practiceWindow.show(self.practice)
+            } else { self.practiceWindow.hide() }
+            self.objectWillChange.send()
+        }.store(in: &subscriptions)
+        practice.$phase.removeDuplicates().sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.objectWillChange.send()
+                self.present(self.session.state, level: self.session.level)
+            }
+        }.store(in: &subscriptions)
+        practice.history.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         session.onFeedbackTranscript = { [weak self] id, text, key in
             self?.feedback.analyze(id: id, transcript: text, apiKey: key)
         }
@@ -98,14 +138,21 @@ final class AppController: ObservableObject {
             observe(workspace, name) { controller in
                 controller.hotkeys.resetForSystemInterruption()
                 controller.session.cancel()
+                controller.practice.close()
             }
         }
         retrySetup()
     }
 
-    var isBusy: Bool { session.state.isBusy || isSettingUp || isSavingKey }
-    var canEditDictationSettings: Bool { isReady && !isSettingUp && !isSavingKey && !closing }
-    private var canStart: Bool { isReady && !isSettingUp && !isSavingKey && !closing && !capturingHotkey }
+    var isBusy: Bool { session.state.isBusy || practice.isBusy || isSettingUp || isSavingKey }
+    var canEditDictationSettings: Bool { isReady && !practice.isBusy && !isSettingUp && !isSavingKey && !closing }
+    private var canStart: Bool { isReady && !isSettingUp && !isSavingKey && !closing && !capturingHotkey && !practice.isPresented && !practice.isBusy }
+    var canOpenPractice: Bool { canStart && session.state.context == nil }
+    func showPractice() { if practice.isPresented { practiceWindow.show(practice) } }
+    func startShortReview() {
+        guard canOpenPractice, practice.history.ready, !practice.history.isSaving, practice.history.error == nil else { return }
+        practice.open(practice.history.queue(from: feedback.saved, patterns: feedback.progress.patterns), review: true)
+    }
     var toggleHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.toggleHotkey) }
     var holdHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.holdHotkey, fallback: .defaultHold) }
     var model: ModelOption { session.settings.model }
@@ -253,7 +300,7 @@ final class AppController: ObservableObject {
     }
 
     private func present(_ state: DictationState, level: Double) {
-        guard isReady, !closing else { overlay.hide(); return }
+        guard isReady, !closing, !practice.isPresented, !practice.isBusy else { overlay.hide(); return }
         // A paste read already started the checkmark. Finishing clipboard cleanup
         // must neither delay it nor restart its display timer.
         if showingPasteCompletion {
@@ -304,6 +351,8 @@ final class AppController: ObservableObject {
         completionPresentation?.cancel(); setupTask?.cancel(); keyTask?.cancel()
         overlay.hide()
         feedbackPanel.hide()
+        practiceWindow.hide()
+        await practice.shutdown()
         await feedback.shutdown()
         await session.shutdown()
         await setupTask?.value

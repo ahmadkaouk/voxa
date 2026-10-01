@@ -86,8 +86,9 @@ Grammar findings may include a nullable spoken `alternative`, saved as part of
 the same lesson. Optional `pattern` templates and stable `LearningFocus` categories
 support reusable expressions and history; older saved lessons without these fields
 remain compatible. The response also contains `GrammarAssessment` and grounded
-`successfulPatterns` observations. Only category IDs from prior reviews/saved
-lessons accompany the next transcript; prior excerpts never leave local storage.
+`successfulPatterns` observations, plus `ExpressionAssessment`. Only category IDs
+from prior reviews/saved lessons accompany the next dictation transcript. Explicit
+practice requests separately include the selected lesson and the submitted answer.
 
 The grammar rubric has fixed 2/4/6/8/10 bands, not model confidence or a deduction
 per correction. Code suppresses scores under 20 words, for recognition issues, or
@@ -96,6 +97,19 @@ insufficient English or ambiguous transcripts. Optional phrasing cannot lower a
 score. Success observations need exact source evidence and a previously encountered
 category; same-category errors, uncertainty and duplicate observations are excluded.
 These safeguards constrain the response, but do not establish linguistic accuracy.
+
+`ExpressionAssessment` contains exactly one source-grounded observation for accuracy,
+vocabulary, phrasing, range and coherence, with a provisional A1–C2 descriptor per
+dimension and a speaking-purpose category. At least 40 words are required; limited,
+uncertain and non-English speech abstains. A perfect grammar band is not a proficiency
+level. `ExpressionSample` strips source evidence before persistence. Optional new
+fields preserve v1 progress-file compatibility and the parser accepts legacy
+grammar-only responses from older compatible services without inventing a level.
+`ExpressionProfile` selects up to 30 qualifying samples in 90 days, requires six samples,
+300 words and two speaking purposes, takes a median per dimension, then brackets their
+mean with adjacent CEFR descriptors. It compares the latest six with the preceding six
+for a cautious trend. These are documented product heuristics, not a validated test or
+confidence interval. The UI states the calibration and modality limits explicitly.
 
 The Decisions API announced at [DevDay 2026](https://openai.com/index/devday-2026-recap/)
 is in limited preview as of September 30. No public endpoint/schema was verified.
@@ -115,7 +129,8 @@ a late save cannot dismiss a newer generation. Neither path changes inserted tex
 Support/Voxa. A failed load blocks mutations to protect unreadable data. Only
 explicitly accepted lessons reach disk; full transcripts and practice answers do
 not. `LearningProgressStore` separately persists bounded, versioned metadata for up
-to 200 reviews: ID, date, score band, and unique mistake/suggestion/success categories.
+to 200 reviews: ID, date, grammar band, unique mistake/suggestion/success categories,
+and optional expression dimensions, word count and speaking-purpose category.
 It never persists the source evidence. `LearningProgress` queues serial writes,
 deduplicates recording IDs, protects corrupt files, and offers retry and clear.
 Recording progress requires validated analysis plus the delivery callback; it never
@@ -127,6 +142,37 @@ atomic replacement; application-support directories are created with mode 0700.
 Existing v1 preferences default a missing `englishFeedbackEnabled` to false.
 A custom transcription endpoint requires an explicit `VOXA_OPENAI_FEEDBACK_URL`
 (HTTPS, or HTTP loopback for fixtures), avoiding an implicit fallback to OpenAI.
+
+## Small practice and reviews
+
+`PracticeController` owns a separate, explicitly opened interaction: repeat a supplied
+sentence, then produce a new example. Short reviews start directly at the new-example
+step, using up to three due saved patterns. It has no transcript-output dependency.
+`AppController` shares one `AudioRecorder` between dictation and practice, prevents
+opening practice until dictation/clipboard cleanup completes, suspends feedback panels
+and normal dictation shortcuts while practice is open, and restores the idle overlay
+only after microphone cleanup. Window close, sleep and quit cancel practice; generation
+checks discard late permission, transcription and evaluator completions. Capture is
+capped at 40 seconds. Typed practice bypasses microphone permission and transcription.
+
+`PracticeClient` shares the feedback endpoint and ephemeral transport, using a smaller
+strict schema and a 2,048-token output budget. It checks only the chosen pattern, grounds
+success in an answer excerpt, rejects exact copied examples in the new-sentence step,
+and abstains on uncertainty. It cannot judge pronunciation from transcribed text. API
+keys stay scoped to the request workflow. No original dictation, screen context, other
+lessons or practice history accompany the request.
+
+`PracticeHistory` serializes metadata-only writes through `PracticeHistoryStore` with
+the same atomic-file/0600/load-failure protections as other stores. Up to 500 primary
+lesson records contain IDs, attempts, streak and review dates, never answers/audio.
+One scheduling observation is committed per lesson interaction; a retry during that
+interaction prevents a later correction from boosting a success streak. Only new-sentence
+success/retry affects scheduling; repetition, uncertainty, off-topic answers and skips
+do not. Saved paired alternatives do not reschedule their primary correction. Intervals
+are 1/3/7/14/30 days, with one day after retry, and early repeated practice cannot advance
+them. Due selection groups duplicate patterns and respects their latest spacing.
+Practice results never enter `LearningProgress` or the expression profile. Deleting
+lessons queues removal of their review records and cancels an affected active exercise.
 
 ## Settings, credentials, and permissions
 

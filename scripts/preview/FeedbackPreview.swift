@@ -18,6 +18,17 @@ private actor PreviewProgress: LearningProgressStoring {
     func save(_ records: [LearningRecord]) { self.records = records }
 }
 
+private actor PreviewPracticeHistory: PracticeHistoryStoring {
+    func load() -> [PracticeReview] { [] }
+    func save(_ reviews: [PracticeReview]) {}
+}
+
+private struct PreviewPracticeEvaluator: PracticeEvaluating {
+    func evaluate(_ answer: String, target: PracticeTarget, step: PracticeStep, apiKey: String) async throws -> PracticeResult {
+        .init(outcome: .success, explanation: "Visited puts your new example in the past tense.", suggestion: nil, evidence: answer)
+    }
+}
+
 /// Renders shipping views without opening the microphone, using credentials, or touching user history.
 @main
 private enum FeedbackPreview {
@@ -45,13 +56,19 @@ private enum FeedbackPreview {
 
     @MainActor static func run() async throws {
         let now = Date()
+        let sample = "Yesterday I visited the office because we needed to discuss the next release with the team. We considered several options and agreed that a smaller change would be easier to test. Although the deadline is close, I think we can finish on time if we focus on the most important problems and ask for help when we need it."
         let history: [LearningRecord] = (0..<10).map { index in
             let band: GrammarBand = index < 3 ? .accurate : (index < 7 ? .minor : .recurring)
             let observations: [PatternObservation] = index < 3 ? [.init(focus: .pastTense, evidence: "I went home.")] : []
             let analysis = FeedbackAnalysis(feedback: index < 3 ? [] : [correction, phrasing],
-                assessment: .init(status: .assessed, band: band), successfulPatterns: observations)
+                assessment: .init(status: .assessed, band: band), successfulPatterns: observations,
+                expression: .init(status: .assessed, purpose: index % 2 == 0 ? .explanation : .narrative,
+                    dimensions: ExpressionDimension.allCases.map { dimension in
+                        .init(dimension: dimension, level: dimension == .accuracy || dimension == .range ? .b1 : .b2,
+                              evidence: "Yesterday I visited the office")
+                    }))
             let date = now.addingTimeInterval(Double(-index - 1) * 86_400)
-            return LearningRecord(id: UUID(), date: date, analysis: analysis)
+            return LearningRecord(id: UUID(), date: date, analysis: analysis, transcript: sample)
         }
         let result = FeedbackAnalysis(feedback: [correction, phrasing], assessment: .init(status: .assessed, band: .minor))
         let controller = try await review(result, text: correction.original + " " + phrasing.original, history: history)
@@ -67,6 +84,21 @@ private enum FeedbackPreview {
             successfulPatterns: [.init(focus: .pastTense, evidence: "Yesterday I went to the office.")]), text: cleanText, history: history)
         try await render(FeedbackReviewView(controller: clean), name: "review-clean", scheme: .light)
         await clean.shutdown()
+
+        let practice = PracticeController(evaluator: PreviewPracticeEvaluator(), historyStore: PreviewPracticeHistory())
+        practice.prepare = { _ in .init(apiKey: "synthetic-preview", model: .gptTranscribe) }
+        let target = PracticeTarget(lesson: .init(id: UUID(), date: now, feedback: correction), alternative: false)
+        practice.open([target])
+        try await render(PracticeView(controller: practice).frame(width: 540, height: 590), name: "practice-repeat", scheme: .light)
+        practice.newSentence()
+        try await render(PracticeView(controller: practice).frame(width: 540, height: 590), name: "practice-new", scheme: .light)
+        practice.submitTyped("Yesterday I visited a friend.")
+        for _ in 0..<200 where practice.phase != .result { try await Task.sleep(nanoseconds: 5_000_000) }
+        try await render(PracticeView(controller: practice).frame(width: 540, height: 590), name: "practice-result", scheme: .dark)
+        practice.close()
+        practice.open([target, .init(lesson: .init(id: UUID(), date: now, feedback: phrasing), alternative: false)], review: true)
+        try await render(PracticeView(controller: practice).frame(width: 540, height: 590), name: "short-review", scheme: .light)
+        await practice.shutdown()
     }
 
     @MainActor static func review(_ result: FeedbackAnalysis, text: String, history: [LearningRecord]) async throws -> FeedbackController {

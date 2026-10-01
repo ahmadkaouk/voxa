@@ -19,6 +19,7 @@ enum FeedbackPalette {
 
 struct FeedbackLessonView: View {
     let feedback: EnglishFeedback
+    var onPractice: ((Bool) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -26,6 +27,7 @@ struct FeedbackLessonView: View {
                 Text(feedback.original).font(.system(size: 12)).foregroundStyle(.secondary)
                 alternative(feedback.suggestion, explanation: feedback.explanation, pattern: feedback.pattern,
                             showLabel: false)
+                practiceButton(alternative: false)
             } else if feedback.kind == .transcriptionIssue {
                 Text(feedback.original).font(.system(size: 12)).foregroundStyle(.secondary)
                 Text(feedback.suggestion).font(.system(size: 15, weight: .medium))
@@ -33,8 +35,12 @@ struct FeedbackLessonView: View {
             } else {
                 correction
                 explanation(feedback.explanation)
+                practiceButton(alternative: false)
                 if let option = feedback.alternative {
-                    alternative(option.wording, explanation: option.explanation, pattern: option.pattern)
+                    VStack(alignment: .leading, spacing: 7) {
+                        alternative(option.wording, explanation: option.explanation, pattern: option.pattern)
+                        practiceButton(alternative: true)
+                    }
                         .padding(.leading, 12).padding(.vertical, 2)
                         .overlay(alignment: .leading) { Rectangle().fill(.primary.opacity(0.12)).frame(width: 2) }
                         .padding(.top, 6)
@@ -43,6 +49,15 @@ struct FeedbackLessonView: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func practiceButton(alternative: Bool) -> some View {
+        if let onPractice {
+            Button { onPractice(alternative) } label: {
+                Label("Practise this", systemImage: "mic")
+            }.buttonStyle(.link).font(.system(size: 11))
+                .accessibilityLabel(alternative ? "Practise this alternative" : "Practise this lesson")
+        }
     }
 
     @ViewBuilder private var correction: some View {
@@ -132,10 +147,8 @@ struct FeedbackReviewView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Label("No clear grammar errors", systemImage: "checkmark")
                                 .font(.system(size: 14, weight: .medium)).foregroundStyle(FeedbackPalette.added)
-                            if controller.assessment?.status == .tooShort {
-                                Text("A longer sample will give you a grammar estimate.")
-                                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                            }
+                            Text("Keep the patterns that help you express your ideas.")
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
                         }
                     }
                     if !controller.alternatives.isEmpty {
@@ -193,23 +206,15 @@ struct FeedbackReviewView: View {
         return corrections + " · \(alternatives) \(alternatives == 1 ? "alternative" : "alternatives")"
     }
 
-    @ViewBuilder private var score: some View {
-        if let assessment = controller.assessment {
-            if let band = assessment.band {
-                VStack(alignment: .trailing, spacing: 2) {
-                    (Text("\(band.rawValue)").font(.system(size: 23, weight: .medium, design: .rounded))
-                     + Text(" / 10").font(.system(size: 11)).foregroundColor(.secondary))
-                    Text("Grammar estimate").font(.system(size: 9)).foregroundStyle(.secondary)
-                }
-                .help("\(band.label). \(assessment.explanation)")
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Grammar estimate: \(band.rawValue) out of 10. \(band.label). \(assessment.explanation)")
-            } else {
-                Text(assessment.status == .tooShort ? "Short sample" : "Unscored")
-                    .font(.system(size: 10)).foregroundStyle(.secondary).help(assessment.explanation)
-                    .accessibilityLabel(assessment.explanation)
-            }
-        }
+    private var score: some View {
+        let profile = controller.progress.expressionProfile
+        return VStack(alignment: .trailing, spacing: 3) {
+            Text(profile.ready ? "≈ " + profile.label : "Learning your level")
+                .font(.system(size: profile.ready ? 21 : 10, weight: .medium, design: .rounded))
+            Text("Across dictations").font(.system(size: 9)).foregroundStyle(.secondary)
+        }.help((profile.ready ? profile.coverage : profile.guidance) + " " + ExpressionProfile.limitation)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("English expression: \(profile.label). \(profile.coverage). \(ExpressionProfile.limitation)")
     }
 
     private func section(_ title: String, items: [SavedCorrection]) -> some View {
@@ -218,7 +223,8 @@ struct FeedbackReviewView: View {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 if index > 0 { Divider().opacity(0.6) }
                 VStack(alignment: .leading, spacing: 7) {
-                    FeedbackLessonView(feedback: item.feedback)
+                    FeedbackLessonView(feedback: item.feedback,
+                                       onPractice: { controller.practise(item, alternative: $0) })
                     if let focus = item.feedback.focus, focus.isGrammar,
                        item.feedback.kind != .phrasing, controller.previousOccurrences(of: focus) > 0 {
                         let count = controller.previousOccurrences(of: focus)
@@ -274,10 +280,11 @@ final class FeedbackPanelController {
 
 struct SavedCorrectionsView: View {
     @ObservedObject var controller: FeedbackController
+    var onShortReview: (() -> Void)? = nil
 
     var body: some View {
         TabView {
-            SavedLessonsView(controller: controller).tabItem { Text("Saved lessons") }
+            SavedLessonsView(controller: controller, onShortReview: onShortReview).tabItem { Text("Saved lessons") }
             LearningProgressView(progress: controller.progress).tabItem { Text("Progress") }
         }.padding(12)
     }
@@ -285,6 +292,7 @@ struct SavedCorrectionsView: View {
 
 private struct SavedLessonsView: View {
     @ObservedObject var controller: FeedbackController
+    let onShortReview: (() -> Void)?
     @FeedbackViewState private var selection: UUID?
     @FeedbackViewState private var confirmDeleteAll = false
 
@@ -297,6 +305,10 @@ private struct SavedLessonsView: View {
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if let onShortReview {
+                    Button("One-minute review", action: onShortReview)
+                        .disabled(controller.saved.isEmpty)
+                }
                 if !controller.saved.isEmpty {
                     Button("Delete all…") { confirmDeleteAll = true }
                         .disabled(controller.isSaving)
@@ -334,7 +346,9 @@ private struct SavedLessonsView: View {
                     }
                     .listStyle(.sidebar).frame(minWidth: 210, idealWidth: 240, maxWidth: 290)
                     if let item = controller.saved.first(where: { $0.id == selection }) {
-                        CorrectionDetailView(item: item, isSaving: controller.isSaving) { controller.delete(item.id) }
+                        CorrectionDetailView(item: item, isSaving: controller.isSaving,
+                                             onPractice: { controller.practise(item, alternative: $0) },
+                                             onDelete: { controller.delete(item.id) })
                             .id(item.id)
                             .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
                     } else {
@@ -359,49 +373,21 @@ private struct SavedLessonsView: View {
 private struct CorrectionDetailView: View {
     let item: SavedCorrection
     let isSaving: Bool
+    let onPractice: (Bool) -> Void
     let onDelete: () -> Void
-    @FeedbackViewState private var practising = false
-    @FeedbackViewState private var answer = ""
-    @FeedbackViewState private var reveal = false
-    @FocusState private var writing: Bool
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack {
-                    Text(practising ? "MAKE IT YOURS" : "YOUR LESSON")
+                    Text("YOUR LESSON")
                         .font(.system(size: 10, weight: .bold)).tracking(1.4).foregroundStyle(.secondary)
                     Spacer()
                     Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }
                         .buttonStyle(.plain).disabled(isSaving).accessibilityLabel("Delete this lesson")
                 }
-                if practising {
-                    Text(item.feedback.practicePrompt).font(.system(size: 19, weight: .medium))
-                        .fixedSize(horizontal: false, vertical: true)
-                    TextEditor(text: $answer)
-                        .font(.system(size: 15)).padding(8)
-                        .frame(height: 130)
-                        .background(.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.12)))
-                        .focused($writing)
-                        .accessibilityLabel("Write your new sentence")
-                    Text("For your own practice. Your answer isn’t sent or saved.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        Button(reveal ? "Hide lesson" : "Show lesson") { reveal.toggle() }
-                        Spacer()
-                        Button("Done") { practising = false; answer = ""; reveal = false }
-                    }
-                    if reveal { FeedbackLessonView(feedback: item.feedback) }
-                } else {
-                    FeedbackLessonView(feedback: item.feedback)
-                    Button { practising = true; writing = true } label: {
-                        Label("Practise a new sentence", systemImage: "pencil.line")
-                    }
-                    .buttonStyle(.borderedProminent).tint(FeedbackPalette.accent)
-                }
+                FeedbackLessonView(feedback: item.feedback, onPractice: onPractice)
             }.padding(26)
         }
-        .onDisappear { answer = "" }
     }
 }

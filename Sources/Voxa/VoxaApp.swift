@@ -24,7 +24,8 @@ struct VoxaApp: App {
         .windowResizability(.contentSize)
 
         Window("English Learning", id: "english-lessons") {
-            SavedCorrectionsView(controller: appDelegate.controller.feedback)
+            SavedCorrectionsView(controller: appDelegate.controller.feedback,
+                                 onShortReview: { appDelegate.controller.startShortReview() })
         }
     }
 }
@@ -122,7 +123,13 @@ struct VoxaMenuView: View {
             if controller.feedback.isAnalyzing { Text("Reviewing your English…") }
             if let status = controller.feedback.status { Text(status) }
             Button("Show Latest Feedback") { controller.feedback.showLatest() }
-                .disabled(!controller.feedback.hasReview || session.state.context != nil)
+                .disabled(!controller.feedback.hasReview || session.state.context != nil || controller.practice.isPresented)
+            Button("One-minute Review…") { controller.startShortReview() }
+                .disabled(!controller.canOpenPractice || !controller.practice.history.ready || controller.practice.history.isSaving || controller.practice.history.error != nil)
+            if let error = controller.practice.history.error {
+                Text(error)
+                Button("Retry Review History") { controller.practice.history.retry() }.disabled(controller.practice.history.isSaving)
+            }
             Button("Lessons & Progress…") {
                 openWindow(id: "english-lessons")
                 NSApplication.shared.activate(ignoringOtherApps: true)
@@ -165,6 +172,7 @@ struct VoxaMenuView: View {
     private var statusMenuTitle: String {
         if controller.isSettingUp { return "Voxa is starting" }
         if !controller.isReady { return "Voxa needs attention" }
+        if controller.practice.isPresented || controller.practice.isBusy { return "Voxa is practising English" }
         switch session.state {
         case .idle, .restoringClipboard: return controller.isAPIKeySet ? "Voxa is ready" : "Set up Voxa"
         case .starting: return "Preparing microphone"
@@ -176,10 +184,12 @@ struct VoxaMenuView: View {
         }
     }
 
-    private enum PrimaryAction { case addAPIKey, setup, start, stop, retry, working }
+    private enum PrimaryAction { case addAPIKey, setup, start, stop, retry, working, practice }
     private var primaryActionKind: PrimaryAction {
         if controller.isSettingUp || controller.isSavingKey { return .working }
         if !controller.isReady { return .setup }
+        if controller.practice.isPresented { return .practice }
+        if controller.practice.isBusy { return .working }
         switch session.state {
         case .starting(_, nil), .recording: return .stop
         case .starting, .finishing, .transcribing, .delivering: return .working
@@ -195,6 +205,7 @@ struct VoxaMenuView: View {
         case .stop: return "Stop Recording"
         case .retry: return "Try Again"
         case .working: return "Working…"
+        case .practice: return "Return to Practice…"
         }
     }
     private var primaryActionSymbol: String {
@@ -204,6 +215,7 @@ struct VoxaMenuView: View {
         case .start: return "mic.fill"
         case .stop: return "stop.fill"
         case .working: return "hourglass"
+        case .practice: return "text.bubble"
         }
     }
     private var primaryActionDisabled: Bool { primaryActionKind == .working }
@@ -214,6 +226,7 @@ struct VoxaMenuView: View {
         case .start, .retry: return "Starts a new dictation"
         case .stop: return "Stops recording and begins transcription"
         case .working: return "Voxa is processing the current operation"
+        case .practice: return "Opens your practice window; close it to resume dictation"
         }
     }
 
@@ -224,6 +237,7 @@ struct VoxaMenuView: View {
         case .stop: session.stop()
         case .start, .retry: controller.startRecording()
         case .working: break
+        case .practice: controller.showPractice()
         }
     }
 
@@ -275,7 +289,7 @@ struct VoxaSettingsView: View {
                         .disabled(!controller.canEditDictationSettings)
                     Text("Get English corrections and clearer, more natural ways to express your ideas without changing your inserted text. Enabling applies to your next recording; disabling stops pending feedback.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("Sends transcript text to OpenAI using your API key, with additional API usage. Saved lessons keep their excerpts. Progress automatically keeps score bands and pattern counts for up to 200 reviews, without dictated text. Manage both in Lessons & Progress. Practice answers stay in memory.")
+                    Text("Sends transcript text to your feedback service using your API key, with additional API usage. Progress keeps assessment bands and pattern counts, without dictated text. Saved lessons keep their excerpts. Record answer sends audio for transcription, then the answer and lesson for a practice check; Type instead sends text only. Answers and audio aren’t saved on this Mac. Review timing is stored locally. Manage lessons and progress in Lessons & Progress.")
                         .font(.caption).foregroundStyle(.secondary)
                     Link("OpenAI data retention details", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
                         .font(.caption)

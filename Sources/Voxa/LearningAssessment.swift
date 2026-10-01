@@ -89,10 +89,12 @@ struct FeedbackAnalysis: Codable, Equatable, Sendable {
     let feedback: [EnglishFeedback]
     let assessment: GrammarAssessment
     let successfulPatterns: [PatternObservation]
+    let expression: ExpressionAssessment?
 
     init(feedback: [EnglishFeedback], assessment: GrammarAssessment = .tooShort,
-         successfulPatterns: [PatternObservation] = []) {
+         successfulPatterns: [PatternObservation] = [], expression: ExpressionAssessment? = nil) {
         self.feedback = feedback; self.assessment = assessment; self.successfulPatterns = successfulPatterns
+        self.expression = expression
     }
 
     func validated(for transcript: String, knownPatterns: Set<LearningFocus> = []) throws -> Self {
@@ -115,7 +117,8 @@ struct FeedbackAnalysis: Codable, Equatable, Sendable {
                   }), !successes.contains(where: { $0.focus == observation.focus }) else { continue }
             successes.append(observation)
         }
-        return Self(feedback: findings, assessment: score, successfulPatterns: successes)
+        let expression = try expression?.validated(for: transcript, grammar: score, findings: findings)
+        return Self(feedback: findings, assessment: score, successfulPatterns: successes, expression: expression)
     }
 }
 
@@ -126,9 +129,11 @@ struct LearningRecord: Codable, Identifiable, Equatable, Sendable {
     let mistakes: [LearningFocus]
     let suggestions: [LearningFocus]
     let successes: [LearningFocus]
+    let expression: ExpressionSample?
 
-    init(id: UUID, date: Date, analysis: FeedbackAnalysis) {
+    init(id: UUID, date: Date, analysis: FeedbackAnalysis, transcript: String = "") {
         self.id = id; self.date = date; score = analysis.assessment.band
+        expression = analysis.expression?.sample(transcript: transcript)
         mistakes = LearningFocus.allCases.filter { focus in
             analysis.feedback.contains { ($0.kind == .grammar || $0.kind == .construction) && $0.focus == focus }
         }
@@ -138,9 +143,9 @@ struct LearningRecord: Codable, Identifiable, Equatable, Sendable {
         successes = LearningFocus.allCases.filter { focus in analysis.successfulPatterns.contains { $0.focus == focus } }
     }
 
-    var hasLearningSignal: Bool { score != nil || !mistakes.isEmpty || !suggestions.isEmpty || !successes.isEmpty }
+    var hasLearningSignal: Bool { expression != nil || score != nil || !mistakes.isEmpty || !suggestions.isEmpty || !successes.isEmpty }
     var isValid: Bool {
-        hasLearningSignal && mistakes.allSatisfy(\.isGrammar)
+        hasLearningSignal && (expression?.isValid ?? true) && mistakes.allSatisfy(\.isGrammar)
             && Set(mistakes).isDisjoint(with: successes)
             && [mistakes, suggestions, successes].allSatisfy { Set($0).count == $0.count }
     }

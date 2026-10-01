@@ -15,7 +15,7 @@ words into text. Transcription uses OpenAI with your own API key.
 - **Clipboard restoration:** autopaste restores your previous clipboard when
   safe, preserving anything you copy while delivery is in progress.
 - **Optional English feedback:** review all useful corrections after dictation, with highlighted
-  differences, explicit saving, and a short sentence-writing exercise.
+  differences, a developing English-expression profile, short spoken practice, and saved-lesson reviews.
 
 ## Get started
 
@@ -116,11 +116,18 @@ the dictation, including correct sentences; they are never collapsed or forced
 onto every sentence. The coach preserves meaning, tone, uncertainty and technical
 terms, and ignores fillers and clear self-corrections.
 
-A **grammar estimate** uses fixed 2, 4, 6, 8 and 10 bands on the original intended
-English. Optional phrasing never lowers it. Samples shorter than 20 assessable
-English words, uncertain recognition and non-English samples receive no score.
-This is a coaching estimate, not a proficiency test or a pronunciation/fluency
-assessment. A clean, scored dictation can still show a short positive review.
+An **English-expression estimate** develops across dictations, covering accuracy,
+vocabulary, natural phrasing, sentence range and clarity. The header shows a
+provisional CEFR-style band once there are at least six qualifying samples,
+300 words and two kinds of speech (such as requests and explanations). Individual
+samples need at least 40 assessable English words and evidence for all five dimensions.
+Short, narrow, non-English or uncertain samples do not lower the estimate. The profile
+uses the latest 30 qualifying samples within 90 days; the coverage thresholds and
+aggregation are product heuristics, not calibrated confidence. This experimental
+estimate has not been validated against a language exam and cannot assess listening,
+pronunciation or conversational fluency. A clean dictation can still show a brief
+positive review. Old grammar-only observations stay saved but cannot be converted
+into a broader level without their original text.
 
 The panel appears after delivery without taking focus or disappearing on a timer.
 A new recording hides it; **English Learning → Show Latest Feedback** reopens the
@@ -131,13 +138,27 @@ latest review until another transcript replaces it.
 - **Close / D:** close without saving lessons. Local progress remains available.
 - **English Learning → Lessons & Progress…:** review, practise, or delete saved
   lessons, and view or clear progress separately.
+- **Practise this:** beneath a correction or alternative, say the improved version,
+  then try the pattern in a new sentence. Use **Record answer → Stop & check**, or
+  **Type instead**. Recording stops automatically at 40 seconds. Each answer gets
+  one short response about the target pattern. Practice never pastes or changes
+  the last dictation. Close the practice window to resume normal dictation shortcuts.
+- **English Learning → One-minute Review…:** revisit up to three due patterns
+  from saved lessons, with recurring grammar errors first. Examples stay hidden until
+  requested. Skip freely; no reminders or daily requirements. New examples must use
+  the pattern, not simply repeat the supplied wording.
+
+Successful reviews return after 1, 3, 7, 14 and then 30 days. A retry brings the pattern
+back the next day; immediate repeats do not advance the interval. Recognition
+uncertainty and skipped exercises do not count as mistakes. Practice is kept separate
+from the English-level estimate and correct uses observed during ordinary dictation.
 
 Progress tracks up to 200 recent reviews automatically while feedback is enabled.
 Repeated mistakes are counted by rule, and correct use of previously encountered
 patterns is recognised in later dictations, including those with no corrections.
 Absence of an error does not count as a success; an actual source example is
 required. Counts are per review, not a mastery percentage. The Progress tab shows
-recent grammar estimates and patterns to practise.
+the broader expression profile, its coverage, and patterns to practise.
 
 A failed save keeps the review open. While feedback is visible, S and D act on it
 instead of typing in the focused app; modified shortcuts such as Command+S still
@@ -149,10 +170,18 @@ OpenAI request using the same API key, with additional usage cost. It uses
 not guarantee zero provider retention; see [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data).
 Only accepted excerpts, suggestions, explanations, dates, and practice prompts
 are stored in `~/Library/Application Support/Voxa/corrections.json`. Automatic
-progress stores only review IDs, dates, score bands and pattern categories in
+progress stores only review IDs, dates, assessment bands, word counts, speaking-task
+and pattern categories in
 `~/Library/Application Support/Voxa/learning-progress.json`; source evidence is
 validated in memory and discarded. Only category IDs, not saved lesson excerpts,
-are included as context for later feedback. Practice answers stay in memory. Disabling feedback cancels pending requests and clears
+are included as context for later dictation feedback. Explicit practice sends the
+selected lesson and answer to the feedback service; speaking also sends audio to the
+configured transcription service. Both incur additional API usage. Audio and answers
+stay in memory and are cleared when practice closes; they are not written to history.
+`~/Library/Application Support/Voxa/practice-history.json` stores up to 500 lesson IDs,
+attempt IDs, counts and review dates. Deleting a saved lesson also removes its review
+timing. Unsaved lessons and paired-alternative practice do not reschedule the saved
+primary correction. Disabling feedback cancels pending requests and clears
 unsaved findings; saved lessons and existing progress remain until deleted.
 
 ### Dictation data

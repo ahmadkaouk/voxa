@@ -75,10 +75,12 @@ PLIST
         Sources/Voxa/EnglishFeedback.swift Sources/Voxa/FeedbackClient.swift
         Sources/Voxa/FeedbackController.swift Sources/Voxa/CorrectionStore.swift
         Sources/Voxa/LearningAssessment.swift Sources/Voxa/LearningProgress.swift
+        Sources/Voxa/ExpressionAssessment.swift Sources/Voxa/Practice.swift
+        Sources/Voxa/PracticeHistory.swift Sources/Voxa/PracticeController.swift
         Tests/VoxaTests/NativeSetupTests.swift Tests/VoxaTests/UnitChecksSupport.swift
         Tests/VoxaTests/NativePipelineChecksSupport.swift Tests/VoxaTests/DictationSessionTests.swift
         Tests/VoxaTests/TranscriptionClientTests.swift Tests/VoxaTests/AsyncTranscriptOutputTests.swift
-        Tests/VoxaTests/FeedbackTests.swift)
+        Tests/VoxaTests/FeedbackTests.swift Tests/VoxaTests/LearningFeaturesTests.swift)
       ;;
   esac
   echo "Running $suite checks..."
@@ -91,7 +93,7 @@ if [ "$SUITE" = all ]; then
   for test_file in Tests/VoxaTests/*Tests.swift; do
     case "${test_file##*/}" in
       HotkeyOptionTests.swift|TranscriptOutputTests.swift|DictationSoundTests.swift|AudioRecorderTests.swift) ;;
-      DictationSessionTests.swift|TranscriptionClientTests.swift|AsyncTranscriptOutputTests.swift|NativeSetupTests.swift|FeedbackTests.swift) ;;
+      DictationSessionTests.swift|TranscriptionClientTests.swift|AsyncTranscriptOutputTests.swift|NativeSetupTests.swift|FeedbackTests.swift|LearningFeaturesTests.swift) ;;
       *) echo "No standalone harness registered for $test_file; use XCTest or add coverage." >&2; exit 1 ;;
     esac
   done
