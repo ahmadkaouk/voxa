@@ -1,6 +1,6 @@
 # English feedback validation
 
-Usage and privacy are documented in the [README](../README.md#english-learning);
+Usage and privacy are documented in the [user guide](usage.md#english-learning);
 request handling and persistence are covered in [architecture](architecture.md#english-feedback).
 Run `./scripts/check.sh` for deterministic regression checks. They use fixtures,
 not a microphone or external API, and do not measure linguistic accuracy.

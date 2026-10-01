@@ -1,6 +1,6 @@
 # Voxa development
 
-See the [README](../README.md) for installation, permissions, and everyday use,
+See the [user guide](usage.md) for installation, permissions, and everyday use,
 and the [architecture guide](architecture.md) for component ownership and recovery
 behavior. All commands below run from the repository root.
 
