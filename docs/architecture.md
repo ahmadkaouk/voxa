@@ -146,11 +146,6 @@ mean with adjacent CEFR descriptors. It compares the latest six with the precedi
 for a cautious trend. These are documented product heuristics, not a validated test or
 confidence interval. The UI states the calibration and modality limits explicitly.
 
-The Decisions API announced at [DevDay 2026](https://openai.com/index/devday-2026-recap/)
-is in limited preview as of September 30. No public endpoint/schema was verified.
-This version uses the existing structured text API; no speculative Decisions calls
-or model identifiers have been added. Assessment is kept separate from wording in
-the response so a documented decision evaluator can be integrated later.
 See [feedback validation](english-feedback.md) for coaching quality checks.
 
 `FeedbackController` owns the findings array, request generation, presentation,
@@ -159,6 +154,13 @@ New transcripts cancel earlier analysis; disabling and shutdown invalidate it.
 S saves all lessons in one atomic write, excluding recognition issues; D clears
 the review without saving lesson excerpts. Automatic progress is independent of S/D. Failed writes retain the review, and
 a late save cannot dismiss a newer generation. Neither path changes inserted text.
+
+`FeedbackLessonView` shares the same inline comparison, explanation and optional
+pattern layout between live reviews and saved lessons. `FeedbackComparison`
+isolates a replacement phrase with shared surrounding words; the native text field
+wraps and highlights it. Actual fixes strike through the old wording, while optional
+alternatives leave it unstruck. Paired alternatives compare against the corrected
+sentence. Recognition issues use the same layout with a transcription-check label.
 
 `CorrectionStore` is an actor that stores a versioned JSON file in Application
 Support/Voxa. A failed load blocks mutations to protect unreadable data. Only

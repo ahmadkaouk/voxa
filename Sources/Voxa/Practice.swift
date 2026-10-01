@@ -28,15 +28,10 @@ struct PracticeResult: Codable, Equatable, Sendable {
               suggestion.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 }) ?? true,
               evidence.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 && answer.contains($0) }) ?? true,
               outcome != .success || (evidence != nil && suggestion == nil) else { throw FeedbackError.invalidResponse }
-        if step == .newSentence && Self.words(answer) == Self.words(target.wording) {
+        if step == .newSentence && EnglishText.spokenWords(answer) == EnglishText.spokenWords(target.wording) {
             return .init(outcome: .retry, explanation: "That repeats the example. Try the same pattern with a new idea.", suggestion: nil, evidence: nil)
         }
         return self
-    }
-
-    static func words(_ value: String) -> [String] {
-        value.lowercased().replacingOccurrences(of: "’", with: "'")
-            .split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map(String.init)
     }
 }
 

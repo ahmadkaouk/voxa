@@ -55,7 +55,7 @@ private struct FeedbackComparisonText: NSViewRepresentable {
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
-        let difference = FeedbackDifference(original: original, suggestion: suggestion).comparison
+        let difference = FeedbackComparison(original: original, suggestion: suggestion)
         let isFix = kind == .grammar || kind == .construction
         let base: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 18), .foregroundColor: NSColor.labelColor

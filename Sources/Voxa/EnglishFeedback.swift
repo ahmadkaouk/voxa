@@ -79,7 +79,7 @@ struct EnglishFeedback: Codable, Equatable, Sendable {
         for finding in findings {
             let valid = try finding.validated(for: transcript)
             // Spoken coaching should not become a punctuation/capitalisation review.
-            guard spokenWords(valid.original) != spokenWords(valid.suggestion) else { continue }
+            guard EnglishText.spokenWords(valid.original) != EnglishText.spokenWords(valid.suggestion) else { continue }
             if let index = unique.firstIndex(where: { $0.original == valid.original && $0.suggestion == valid.suggestion }) {
                 // Resolve duplicate labels conservatively: uncertainty wins; an actual correction
                 // otherwise takes precedence over a duplicate optional rewrite.
@@ -103,11 +103,6 @@ struct EnglishFeedback: Codable, Equatable, Sendable {
             return left == right ? lhs.offset < rhs.offset : left < right
         }.map(\.element)
     }
-
-    private static func spokenWords(_ text: String) -> [String] {
-        text.lowercased().replacingOccurrences(of: "’", with: "'")
-            .split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map(String.init)
-    }
 }
 
 struct SavedCorrection: Codable, Identifiable, Equatable, Sendable {
@@ -116,81 +111,53 @@ struct SavedCorrection: Codable, Identifiable, Equatable, Sendable {
     let feedback: EnglishFeedback
 }
 
-/// Word-level changes preserve the exact source text, including punctuation and whitespace.
-struct FeedbackDifference {
-    enum Change { case unchanged, removed, added }
-    struct InlineToken { let text: String; let change: Change }
-    struct Token: Equatable {
-        let text: String
-        let changed: Bool
-    }
-    let original: [Token]
-    let suggestion: [Token]
-    let inline: [InlineToken]
-
-    /// One replacement phrase keeps an inline review readable, even when a
-    /// rewrite changes several words separated by unchanged whitespace.
-    struct Comparison {
-        let prefix: String
-        let removed: String
-        let added: String
-        let originalSuffix: String
-        let suffix: String
+/// Shared speech normalization for cosmetic-change filtering, practice and assessment.
+enum EnglishText {
+    static func spokenWords(_ text: String) -> [String] {
+        text.lowercased().replacingOccurrences(of: "’", with: "'")
+            .split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map(String.init)
     }
 
-    var comparison: Comparison {
-        let before = original.map(\.text), after = suggestion.map(\.text)
+    static func wordCount(_ text: String) -> Int {
+        text.split { !$0.isLetter && $0 != "'" && $0 != "’" }.count
+    }
+}
+
+/// One replacement phrase keeps an inline review readable when a rewrite changes
+/// several words. Token boundaries preserve source whitespace and punctuation.
+struct FeedbackComparison {
+    let prefix: String
+    let removed: String
+    let added: String
+    let suffix: String
+    private static let endings: Set<String> = [".", "!", "?", "…"]
+    private static let tokenPattern = try! NSRegularExpression(pattern: #"\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]"#)
+
+    init(original: String, suggestion: String) {
+        let before = Self.tokens(original), after = Self.tokens(suggestion)
         var start = 0
         while start < min(before.count, after.count), before[start] == after[start] { start += 1 }
         var beforeEnd = before.count, afterEnd = after.count
-        let endings: Set<String> = [".", "!", "?", "…"]
         // A question mark in an optional rewrite shouldn't hide its shared
-        // words. Retain both exact endings, but display the suggested ending.
+        // words. Display the suggested ending after the comparison.
         if before.last != after.last, let lastBefore = before.last, let lastAfter = after.last,
-           endings.contains(lastBefore), endings.contains(lastAfter) {
-            while beforeEnd > start, endings.contains(before[beforeEnd - 1]) { beforeEnd -= 1 }
-            while afterEnd > start, endings.contains(after[afterEnd - 1]) { afterEnd -= 1 }
+           Self.endings.contains(lastBefore), Self.endings.contains(lastAfter) {
+            while beforeEnd > start, Self.endings.contains(before[beforeEnd - 1]) { beforeEnd -= 1 }
+            while afterEnd > start, Self.endings.contains(after[afterEnd - 1]) { afterEnd -= 1 }
         }
         var end = 0
         while end < min(beforeEnd, afterEnd) - start,
               before[beforeEnd - end - 1] == after[afterEnd - end - 1] { end += 1 }
-        return Comparison(prefix: before.prefix(start).joined(),
-                          removed: before[start..<(beforeEnd - end)].joined(),
-                          added: after[start..<(afterEnd - end)].joined(),
-                          originalSuffix: before[(beforeEnd - end)...].joined(),
-                          suffix: after[(afterEnd - end)...].joined())
+        prefix = before.prefix(start).joined()
+        removed = before[start..<(beforeEnd - end)].joined()
+        added = after[start..<(afterEnd - end)].joined()
+        suffix = after[(afterEnd - end)...].joined()
     }
 
-    init(original: String, suggestion: String) {
-        func tokens(_ text: String) -> [String] {
-            let expression = try! NSRegularExpression(pattern: #"\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]"#)
-            return expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
-                Range($0.range, in: text).map { String(text[$0]) }
-            }
+    private static func tokens(_ text: String) -> [String] {
+        tokenPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
+            Range($0.range, in: text).map { String(text[$0]) }
         }
-        let before = tokens(original), after = tokens(suggestion)
-        let difference = after.difference(from: before)
-        var removed = Set<Int>(), added = Set<Int>()
-        for change in difference {
-            switch change {
-            case .remove(let offset, _, _): removed.insert(offset)
-            case .insert(let offset, _, _): added.insert(offset)
-            }
-        }
-        self.original = before.enumerated().map { Token(text: $0.element, changed: removed.contains($0.offset)) }
-        self.suggestion = after.enumerated().map { Token(text: $0.element, changed: added.contains($0.offset)) }
-        var merged: [InlineToken] = []
-        var left = 0, right = 0
-        while left < before.count || right < after.count {
-            if left < before.count, removed.contains(left) {
-                merged.append(InlineToken(text: before[left], change: .removed)); left += 1
-            } else if right < after.count, added.contains(right) {
-                merged.append(InlineToken(text: after[right], change: .added)); right += 1
-            } else if left < before.count, right < after.count {
-                merged.append(InlineToken(text: after[right], change: .unchanged)); left += 1; right += 1
-            } else { break }
-        }
-        self.inline = merged
     }
 }
 

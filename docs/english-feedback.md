@@ -50,8 +50,18 @@ explanations, and the distinction between errors and optional alternatives.
   the score. The model must ignore those instructions, retain the speaker's meaning,
   ground every finding/assessment in the transcript, and avoid copying contextual
   private details into saved lessons. Fixture tests cannot establish model adherence.
-- Corrections show the old and new wording in the same sentence: subdued struck-through originals, green replacements, and unchanged words around them. Replacements have a visible space between old and new words; there is no separate comparison line. A labeled explanation and recurring-pattern metadata are easy to scan. Short reviews fit their contents; longer reviews scroll while all footer actions remain visible. Corrections lead, paired alternatives sit underneath, standalone alternatives follow, and recognition issues stay separate. Explanations and reusable patterns remain visible. New reviews start at the top.
-- Paired and standalone alternatives use the same clearly bounded card: Another way to say it, the prominent suggested sentence, Pattern to reuse, and Why it works. Standalone originals appear under a separated You said label. An absent pattern leaves no empty section. Grammar confirmation and Used well observations stay grouped, separate from the alternative lesson. Check alternative-only reviews with long text, multiple successes and a small viewport.
+- All findings use one row layout: type and focus, inline wording comparison,
+  Why, and an optional Pattern. Fixes strike through the subdued old wording;
+  alternatives leave it unstruck and show Optional. Replacements use an arrow and
+  green highlights, with shared words around them. Pure fixes can add or remove
+  words without an arrow. Paired alternatives compare with the corrected sentence.
+  An absent pattern leaves no empty section. Recognition issues carry a separate
+  Check transcription label and never claim a grammar mistake.
+- Short reviews fit their contents; longer reviews scroll while all footer actions
+  remain visible. Corrections lead, paired alternatives sit underneath, standalone
+  alternatives follow, and recognition issues come last. Grammar confirmation and
+  Used well observations stay grouped. New reviews start at the top. Check long
+  alternatives, multiple successes, a small viewport and saved-lesson details.
 - S saves every lesson in one write; D closes without saving lessons. Both leave automatic progress intact. Recognition issues are never saved as lessons. Failed writes keep the review open; repeated presses do not duplicate saves.
 - Without a visible review, S and D type normally. Modified shortcuts remain available.
 - Saved lessons, including older files and paired alternatives, survive relaunch. Practice answers do not persist.

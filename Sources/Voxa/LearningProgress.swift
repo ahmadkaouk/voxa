@@ -75,7 +75,6 @@ final class LearningProgress: ObservableObject {
         }
     }
 
-    var recentScores: [Int] { records.compactMap { $0.score?.rawValue } }
     var expressionProfile: ExpressionProfile { ExpressionProfile(records: records) }
 
     func record(_ record: LearningRecord) {

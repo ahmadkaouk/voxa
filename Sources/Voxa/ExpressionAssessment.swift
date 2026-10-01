@@ -52,10 +52,6 @@ struct ExpressionAssessment: Codable, Equatable, Sendable {
     static let tooShort = Self(status: .tooShort, purpose: nil, dimensions: [])
     static let uncertain = Self(status: .uncertain, purpose: nil, dimensions: [])
 
-    static func wordCount(_ text: String) -> Int {
-        text.split { !$0.isLetter && $0 != "'" && $0 != "’" }.count
-    }
-
     func validated(for transcript: String, grammar: GrammarAssessment,
                    findings: [EnglishFeedback]) throws -> Self {
         guard status == .assessed else {
@@ -70,13 +66,13 @@ struct ExpressionAssessment: Codable, Equatable, Sendable {
               }) else { throw FeedbackError.invalidResponse }
         guard grammar.status != .uncertain, grammar.status != .nonEnglish,
               !findings.contains(where: { $0.kind == .transcriptionIssue }) else { return .uncertain }
-        guard Self.wordCount(transcript) >= Self.minimumWords else { return .tooShort }
+        guard EnglishText.wordCount(transcript) >= Self.minimumWords else { return .tooShort }
         return self
     }
 
     func sample(transcript: String) -> ExpressionSample? {
         guard status == .assessed, let purpose else { return nil }
-        let sample = ExpressionSample(purpose: purpose, words: Self.wordCount(transcript),
+        let sample = ExpressionSample(purpose: purpose, words: EnglishText.wordCount(transcript),
             dimensions: dimensions.map { .init(dimension: $0.dimension, level: $0.level) })
         return sample.isValid ? sample : nil
     }

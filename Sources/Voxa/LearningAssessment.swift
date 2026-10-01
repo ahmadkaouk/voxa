@@ -35,16 +35,6 @@ enum LearningFocus: String, Codable, CaseIterable, Sendable {
 /// Deliberately coarse bands, not a percentage or a measure of speaking ability.
 enum GrammarBand: Int, Codable, CaseIterable, Sendable {
     case difficult = 2, frequent = 4, recurring = 6, minor = 8, accurate = 10
-
-    var label: String {
-        switch self {
-        case .difficult: return "Meaning often obscured"
-        case .frequent: return "Frequent grammar errors"
-        case .recurring: return "Several grammar errors"
-        case .minor: return "Mostly accurate"
-        case .accurate: return "No clear grammar errors"
-        }
-    }
 }
 
 struct GrammarAssessment: Codable, Equatable, Sendable {
@@ -57,20 +47,11 @@ struct GrammarAssessment: Codable, Equatable, Sendable {
     static let tooShort = Self(status: .tooShort, band: nil)
     static let uncertain = Self(status: .uncertain, band: nil)
 
-    var explanation: String {
-        switch status {
-        case .assessed: return "An estimate of grammar in this dictation, using fixed 2, 4, 6, 8 and 10 bands. Optional phrasing doesn’t lower it."
-        case .tooShort: return "A grammar estimate needs at least 20 words of assessable English."
-        case .uncertain: return "No score: the transcript or assessment is too uncertain."
-        case .nonEnglish: return "No score: there isn’t enough assessable English."
-        }
-    }
-
     func validated(for transcript: String, findings: [EnglishFeedback]) throws -> Self {
         guard (status == .assessed) == (band != nil) else { throw FeedbackError.invalidResponse }
         guard !findings.contains(where: { $0.kind == .transcriptionIssue }) else { return .uncertain }
         guard status == .assessed else { return self }
-        let words = transcript.split { !$0.isLetter && $0 != "'" && $0 != "’" }.count
+        let words = EnglishText.wordCount(transcript)
         guard words >= 20 else { return .tooShort }
         let hasErrors = findings.contains { $0.kind == .grammar || $0.kind == .construction }
         // An inconsistent score must not hide otherwise useful corrections.

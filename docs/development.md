@@ -15,6 +15,8 @@ behavior. All commands below run from the repository root.
 | `install.sh` | Stage and verify an app, preserve a backup, and restore the previous app if replacement fails. |
 | `test-install.sh` | Exercise installation and recovery in temporary directories using two supplied signed apps. |
 | `preview-overlay.sh` | Build an optional visual preview without recording or transcription. |
+| `preview-feedback.sh` | Render native feedback and learning views with isolated sample data. |
+| `check-text-context.sh` | Inspect focused editor context without recording or an API request. |
 
 ## Build and check
 
@@ -125,6 +127,12 @@ defaults delete com.voxa.menubar VoxaTimingLogPath
 Build the overlay preview with `./scripts/preview-overlay.sh`, then open
 `dist/apps.noindex/Voxa Overlay Preview.app`. It uses the production overlay and
 sounds with simulated recording states and levels, without microphone access.
+
+`./scripts/preview-feedback.sh` renders feedback, saved-lesson, progress, settings,
+and practice views under `.build/feedback-previews/`. It uses synthetic findings
+and in-memory storage, without microphone capture, credentials or user history.
+Check short and long comparisons, insertions/deletions, optional phrasing,
+recognition issues, light/dark appearance and a constrained panel height.
 
 `./scripts/test.sh output --live` opens a temporary text window to
 check the actual paste shortcut, selection replacement, Unicode, and clipboard
