@@ -140,6 +140,33 @@ private enum FeedbackPreview {
         try await render(FeedbackReviewView(controller: noPattern), name: "review-alternative-no-pattern", scheme: .light)
         await noPattern.shutdown()
 
+        let wordChoice = EnglishFeedback(kind: .phrasing,
+            original: "It isn’t installed in some place yet.", suggestion: "It isn’t installed anywhere yet.",
+            explanation: "Use anywhere with a negative when you mean no location.",
+            practicePrompt: "Say that something is unavailable in any location.", pattern: "not + verb + anywhere")
+        let wordReview = try await review(.init(feedback: [wordChoice], assessment: .tooShort),
+                                         text: wordChoice.original, history: [])
+        try await render(FeedbackReviewView(controller: wordReview), name: "review-word-choice", scheme: .light)
+        try await render(FeedbackReviewView(controller: wordReview), name: "review-word-choice-dark", scheme: .dark)
+        await wordReview.shutdown()
+
+        let deletion = EnglishFeedback(kind: .grammar, original: "We discussed about the plan.",
+            suggestion: "We discussed the plan.", explanation: "Use discuss without about.",
+            practicePrompt: "Say what you discussed.", focus: .prepositions)
+        let insertion = EnglishFeedback(kind: .grammar, original: "She ready.", suggestion: "She is ready.",
+            explanation: "Use is before an adjective to describe her state.",
+            practicePrompt: "Describe someone’s state.", focus: .verbForm)
+        let recognition = EnglishFeedback(kind: .transcriptionIssue, original: "Cash the API response.",
+            suggestion: "Cache the API response.", explanation: "You may have said cache. Check the transcription.",
+            practicePrompt: "")
+        let edgeCases = try await review(.init(feedback: [deletion, insertion, recognition], assessment: .uncertain),
+            text: [deletion, insertion, recognition].map(\.original).joined(separator: " "), history: [])
+        try await render(FeedbackReviewView(controller: edgeCases), name: "review-insert-delete-recognition", scheme: .light)
+        await edgeCases.shutdown()
+
+        try await render(FeedbackLessonView(feedback: correction, onPractice: { _ in }).padding(26).frame(width: 440),
+                         name: "saved-lesson-inline", scheme: .light)
+
         let paired = try await review(.init(feedback: [correction], assessment: .tooShort),
                                       text: correction.original, history: [])
         try await render(FeedbackReviewView(controller: paired), name: "review-paired", scheme: .light)

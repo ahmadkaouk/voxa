@@ -589,7 +589,26 @@ enum FeedbackChecks {
             let diff = FeedbackDifference(original: pair.0, suggestion: pair.1)
             try unitEqual(diff.inline.filter { $0.change != .added }.map(\.text).joined(), pair.0)
             try unitEqual(diff.inline.filter { $0.change != .removed }.map(\.text).joined(), pair.1)
+            let comparison = diff.comparison
+            try unitEqual(comparison.prefix + comparison.removed + comparison.originalSuffix, pair.0)
+            try unitEqual(comparison.prefix + comparison.added + comparison.suffix, pair.1)
         }
+        for (before, after, removed, added) in [
+            ("What do you mean by keep versions?", "What do you mean by keeping versions?", "keep", "keeping"),
+            ("It isn’t installed in some place yet.", "It isn’t installed anywhere yet.", "in some place", "anywhere"),
+            ("I wanted that the team can understand.", "I wanted the team to understand.", "that the team can", "the team to")
+        ] {
+            let comparison = FeedbackDifference(original: before, suggestion: after).comparison
+            try unitEqual(comparison.removed, removed)
+            try unitEqual(comparison.added, added)
+        }
+        let politeRequest = FeedbackDifference(
+            original: "I want to ask you if it is possible for us to move the meeting to tomorrow.",
+            suggestion: "Could we move the meeting to tomorrow?").comparison
+        try unitEqual(politeRequest.removed, "I want to ask you if it is possible for us to")
+        try unitEqual(politeRequest.added, "Could we")
+        try unitEqual(politeRequest.originalSuffix, " move the meeting to tomorrow.")
+        try unitEqual(politeRequest.suffix, " move the meeting to tomorrow?")
         let fixture = FeedbackFixture()
         let option = EnglishFeedback(kind: .phrasing, original: "Please let me know if we can review it.",
             suggestion: "Could we review it?", explanation: "A more direct request.", practicePrompt: "Make another request.",

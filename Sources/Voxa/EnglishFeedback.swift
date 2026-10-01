@@ -128,6 +128,39 @@ struct FeedbackDifference {
     let suggestion: [Token]
     let inline: [InlineToken]
 
+    /// One replacement phrase keeps an inline review readable, even when a
+    /// rewrite changes several words separated by unchanged whitespace.
+    struct Comparison {
+        let prefix: String
+        let removed: String
+        let added: String
+        let originalSuffix: String
+        let suffix: String
+    }
+
+    var comparison: Comparison {
+        let before = original.map(\.text), after = suggestion.map(\.text)
+        var start = 0
+        while start < min(before.count, after.count), before[start] == after[start] { start += 1 }
+        var beforeEnd = before.count, afterEnd = after.count
+        let endings: Set<String> = [".", "!", "?", "…"]
+        // A question mark in an optional rewrite shouldn't hide its shared
+        // words. Retain both exact endings, but display the suggested ending.
+        if before.last != after.last, let lastBefore = before.last, let lastAfter = after.last,
+           endings.contains(lastBefore), endings.contains(lastAfter) {
+            while beforeEnd > start, endings.contains(before[beforeEnd - 1]) { beforeEnd -= 1 }
+            while afterEnd > start, endings.contains(after[afterEnd - 1]) { afterEnd -= 1 }
+        }
+        var end = 0
+        while end < min(beforeEnd, afterEnd) - start,
+              before[beforeEnd - end - 1] == after[afterEnd - end - 1] { end += 1 }
+        return Comparison(prefix: before.prefix(start).joined(),
+                          removed: before[start..<(beforeEnd - end)].joined(),
+                          added: after[start..<(afterEnd - end)].joined(),
+                          originalSuffix: before[(beforeEnd - end)...].joined(),
+                          suffix: after[(afterEnd - end)...].joined())
+    }
+
     init(original: String, suggestion: String) {
         func tokens(_ text: String) -> [String] {
             let expression = try! NSRegularExpression(pattern: #"\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]"#)
