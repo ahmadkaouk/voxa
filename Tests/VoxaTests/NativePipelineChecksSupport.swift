@@ -31,7 +31,7 @@ private enum NativePipelineChecksRunner {
         // A real main run loop is needed for the isolated pasteboard's lazy data provider.
         Task { @MainActor in
             do {
-                let checks = DictationSessionChecks.all + TranscriptionClientChecks.all + AsyncTranscriptOutputChecks.all + NativeSetupChecks.all + FeedbackChecks.all + LearningFeaturesChecks.all
+                let checks = DictationSessionChecks.all + TranscriptionClientChecks.all + AsyncTranscriptOutputChecks.all + NativeSetupChecks.all + FeedbackChecks.all + LearningFeaturesChecks.all + TextContextChecks.all
                 for (name, check) in checks { try await check(); print("PASS: \(name)") }
                 print("All \(checks.count) native pipeline checks passed (fixtures; no microphone or external API)")
                 exit(0)

@@ -50,10 +50,10 @@ and quit Voxa first. The installer preserves a signed backup of the previous app
    | Permission | Used for |
    | --- | --- |
    | Microphone | Recording your voice |
-   | Accessibility | Pasting the transcript into another app |
+   | Accessibility | Pasting into another app; reading nearby text when automatic context is enabled |
    | Input Monitoring | Recognizing global shortcuts |
 
-3. Focus a text field, hold **Option + G**, and speak. Release the shortcut to
+3. Focus a text field, press **Option + F**, and speak. Press it again to
    transcribe and paste your words.
 
 If a permission is missing, use the **Enable…** actions in Voxa's menu to open
@@ -65,10 +65,9 @@ the relevant System Settings page. Return to Voxa after granting access.
 
 | Action | Default control |
 | --- | --- |
-| Hold to record | Hold **Option + G**; release to finish |
-| Toggle recording | Press **Option + F** to start; press again to finish |
+| Start / Stop | Press **Option + F** to start; press again to finish and paste |
 | Record with the mouse | Click the floating handle to start, then the checkmark to finish |
-| Finish and submit | Press **Enter** while recording in Autopaste mode |
+| Finish & Send | Press **Option + G** while recording in Autopaste mode |
 | Discard a recording | Click **×** on the dictation bar while recording |
 
 Change shortcuts in **Voxa Settings…**.
@@ -79,10 +78,13 @@ recording finishes. Discarding a recording skips transcription and output.
 Model, output, and recording-limit menus remain available during dictation.
 Changes made while recording or processing are saved for the next recording.
 
-Enter finishes recording, pastes, and sends Return to the same app. This submits
+**Finish & Send** finishes recording, pastes, and sends Return to the same app. This submits
 in chat apps and inserts a newline in editors. It requires Accessibility access
-and is skipped if you switch apps. Modified Enter shortcuts and other finish
-controls keep their usual behavior.
+and is skipped if you switch apps. Plain Enter is left to the app you’re using;
+it never acts as a built-in VOXA recording control. Other finish controls paste
+without pressing Return. Finish & Send needs one key plus a modifier and cannot
+overlap Start / Stop. A compatible former Hold to Record binding is migrated;
+otherwise VOXA chooses a non-overlapping default. Hold to Record is removed.
 
 ### Choose where text goes
 
@@ -106,11 +108,17 @@ Enable **Voxa Settings → English Learning → Feedback after dictation** for
 background English coaching. Dictation is inserted normally and never rewritten;
 feedback failures do not interrupt it.
 
-The Quick scan review puts actual grammar and construction errors first. Small
-changes appear inline: a subdued struck-through word followed by its correction.
-Larger changes show readable before/after text. A short teaching reason stays
-visible. Useful alternatives appear directly below the related correction, then
-standalone alternatives follow. Each can teach a reusable expression, such as
+The review puts actual grammar and construction errors first. Old and new words appear
+together in the same sentence: originals are subdued and struck through, and replacements
+are highlighted in green. There is no separate comparison line. A clearly
+labeled explanation stays visible, and recurring patterns appear beside the lesson
+category. Short reviews fit their content; longer reviews scroll above the action bar.
+Useful alternatives appear directly below the related correction, then
+standalone alternatives follow. Each has a distinct **Another way to say it** card:
+the suggested sentence leads, with labeled **Pattern to reuse** and **Why it works**
+sections. Standalone alternatives also keep **You said** in a separate reference area.
+The grammar confirmation and successful patterns are grouped in one quiet summary.
+Each alternative can teach a reusable expression, such as
 **Could we + action?** Alternatives may cover any useful phrase or sentence across
 the dictation, including correct sentences; they are never collapsed or forced
 onto every sentence. The coach preserves meaning, tone, uncertainty and technical
@@ -138,11 +146,13 @@ latest review until another transcript replaces it.
 - **Close / D:** close without saving lessons. Local progress remains available.
 - **English Learning → Lessons & Progress…:** review, practise, or delete saved
   lessons, and view or clear progress separately.
-- **Practise this:** beneath a correction or alternative, say the improved version,
+- **Practice this:** next to Save lessons, say the improved version,
   then try the pattern in a new sentence. Use **Record answer → Stop & check**, or
   **Type instead**. Recording stops automatically at 40 seconds. Each answer gets
   one short response about the target pattern. Practice never pastes or changes
-  the last dictation. Close the practice window to resume normal dictation shortcuts.
+  the last dictation. If there is more than one lesson, the button offers a menu of
+  corrections and alternatives. Close practice to return to the review and save it
+  if useful. Saved-lesson details also have individual practice links.
 - **English Learning → One-minute Review…:** revisit up to three due patterns
   from saved lessons, with recurring grammar errors first. Examples stay hidden until
   requested. Skip freely; no reminders or daily requirements. New examples must use
@@ -174,7 +184,7 @@ progress stores only review IDs, dates, assessment bands, word counts, speaking-
 and pattern categories in
 `~/Library/Application Support/Voxa/learning-progress.json`; source evidence is
 validated in memory and discarded. Only category IDs, not saved lesson excerpts,
-are included as context for later dictation feedback. Explicit practice sends the
+are reused from learning history for later dictation feedback. Explicit practice sends the
 selected lesson and answer to the feedback service; speaking also sends audio to the
 configured transcription service. Both incur additional API usage. Audio and answers
 stay in memory and are cleared when practice closes; they are not written to history.
@@ -183,6 +193,40 @@ attempt IDs, counts and review dates. Deleting a saved lesson also removes its r
 timing. Unsaved lessons and paired-alternative practice do not reschedule the saved
 primary correction. Disabling feedback cancels pending requests and clears
 unsaved findings; saved lessons and existing progress remain until deleted.
+
+### Automatic text context
+
+Enable **Voxa Settings → English Learning → Use nearby text automatically** once
+to give English feedback more background while you work. It is off by default,
+including after upgrading. English feedback must also be enabled. A menu toggle
+is available under **English Learning**.
+
+At recording start, VOXA reads text around the cursor through macOS Accessibility.
+For an empty or short multiline editor, it also looks for visible text immediately
+above it in the same pane. It prioritises the nearest text, skips controls and
+sidebars, and keeps at most 2,400 UTF-16 units. A **Context from…** label identifies
+the source app in feedback. Editor and conversation support depends on the app;
+the implementation uses bounded Accessibility reads rather than an app-specific
+chat integration. It does not scroll or select text.
+
+Capture runs alongside recording with a 450 ms budget and short per-read timeouts.
+Dictation never waits for it. Missing Accessibility access, unsupported apps, a
+changed app/window/focus, or a slow read simply means feedback proceeds without
+context. Protected password/search fields are skipped. **Manage exclusions… → Add App…** lets
+you disable capture for any app, including an entire browser.
+
+Only text is sent, in the existing feedback request: no screenshots, OCR, extra
+model call, or change to the audio transcription/pasted output. The excerpt is
+untrusted background for interpreting references and phrasing; all assessment
+evidence is checked against your original dictation. Raw context is kept only for
+the current capture/request and is not written to history or logs. Provider data
+retention still applies. Turning context off or changing exclusions clears an
+in-progress capture and cancels pending feedback that used context; a request
+already sent cannot be recalled. Practice never captures context.
+
+Settings group feedback and its optional context together. Short descriptions sit
+beside the controls; **Data & privacy** contains the detailed sending, storage and
+practice information. **Lessons & Progress…** opens saved lessons and your profile.
 
 ### Dictation data
 

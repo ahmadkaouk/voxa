@@ -14,6 +14,7 @@ final class FeedbackController: ObservableObject {
     @Published private(set) var isSaving = false
     @Published private(set) var assessment: GrammarAssessment?
     @Published private(set) var successfulPatterns: [LearningFocus] = []
+    @Published private(set) var contextAppName: String?
     let progress: LearningProgress
     var onPractice: ((PracticeTarget) -> Void)?
     var onLessonsDeleted: ((Set<UUID>) -> Void)?
@@ -50,6 +51,7 @@ final class FeedbackController: ObservableObject {
             request?.cancel(); request = nil
             findings = []; currentRequest = nil; delivered = nil
             assessment = nil; successfulPatterns = []; learningRecord = nil
+            contextAppName = nil
             panelVisible = false; isAnalyzing = false; status = nil
         }
     }
@@ -62,7 +64,7 @@ final class FeedbackController: ObservableObject {
         else { presentIfReady() }
     }
 
-    func analyze(id: UUID, transcript: String, apiKey: String) {
+    func analyze(id: UUID, transcript: String, apiKey: String, context: FeedbackTextContext? = nil) {
         guard enabled, !closed else { return }
         request?.cancel()
         let token = UUID()
@@ -70,15 +72,17 @@ final class FeedbackController: ObservableObject {
         currentRequest = id; delivered = nil
         findings = []; panelVisible = false; status = nil; isAnalyzing = true
         assessment = nil; successfulPatterns = []; learningRecord = nil
+        contextAppName = context?.appName
         let client = client
         let knownPatterns = progress.knownPatterns.union(saved.flatMap { item in
             [item.feedback.focus, item.feedback.alternative?.focus].compactMap { $0 }
         })
         request = Task { [weak self] in
             do {
-                let result = try await client.analyze(transcript, apiKey: apiKey, knownPatterns: knownPatterns)
+                let result = try await client.analyze(transcript, apiKey: apiKey, knownPatterns: knownPatterns, context: context)
                 guard let self, !self.closed, self.enabled, self.generation == token, !Task.isCancelled else { return }
                 self.isAnalyzing = false
+                self.request = nil
                 let valid = try result.validated(for: transcript, knownPatterns: knownPatterns)
                 let date = Date()
                 self.findings = valid.feedback.enumerated().map { index, feedback in
@@ -92,6 +96,7 @@ final class FeedbackController: ObservableObject {
             } catch {
                 guard let self, !self.closed, self.generation == token, !Task.isCancelled else { return }
                 self.isAnalyzing = false
+                self.request = nil; self.contextAppName = nil
                 // Shown only when opening the menu; no error sound, alert, or dictation failure.
                 self.status = (error as? FeedbackError)?.localizedDescription ?? FeedbackError.network.localizedDescription
             }
@@ -132,16 +137,34 @@ final class FeedbackController: ObservableObject {
         panelVisible = true
     }
 
-    func dismiss() { findings = []; assessment = nil; successfulPatterns = []; panelVisible = false }
+    func dismiss() { findings = []; assessment = nil; successfulPatterns = []; panelVisible = false; contextAppName = nil }
+
+    /// Revoking context or excluding an app clears any context-bearing pending review.
+    func contextPreferencesChanged() {
+        guard contextAppName != nil else { return }
+        generation = UUID(); request?.cancel(); request = nil
+        isAnalyzing = false; learningRecord = nil; currentRequest = nil; delivered = nil
+        dismiss()
+    }
 
     func setPracticeActive(_ active: Bool) {
         practiceActive = active
         if active { panelVisible = false }
+        else { presentIfReady() }
     }
 
     func practise(_ item: SavedCorrection, alternative: Bool = false) {
-        guard !closed, !busy, !practiceActive, item.feedback.kind != .transcriptionIssue else { return }
+        guard !closed, !busy, !practiceActive, !isSaving,
+              item.feedback.kind != .transcriptionIssue else { return }
         onPractice?(PracticeTarget(lesson: item, alternative: alternative))
+    }
+
+    /// Footer choices put actual corrections first and retain every optional
+    /// alternative, including alternatives paired with a correction.
+    var reviewPracticeTargets: [PracticeTarget] {
+        corrections.map { PracticeTarget(lesson: $0, alternative: false) }
+            + corrections.filter { $0.feedback.alternative != nil }.map { PracticeTarget(lesson: $0, alternative: true) }
+            + alternatives.map { PracticeTarget(lesson: $0, alternative: false) }
     }
 
     var hasLessons: Bool { findings.contains { $0.feedback.kind != .transcriptionIssue } }
@@ -213,6 +236,7 @@ final class FeedbackController: ObservableObject {
         request?.cancel(); request = nil
         findings = []; panelVisible = false; status = nil; isAnalyzing = false
         assessment = nil; successfulPatterns = []; learningRecord = nil
+        contextAppName = nil
         // Explicit saves finish, but a stalled feedback API cannot delay Quit.
         await persistence?.value
         await progress.finishPendingWrites()

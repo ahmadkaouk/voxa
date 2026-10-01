@@ -6,7 +6,7 @@ import XCTest
 #endif
 
 @MainActor
-private final class FeedbackFixture: FeedbackAnalyzing {
+final class FeedbackFixture: FeedbackAnalyzing {
     var findings: [EnglishFeedback] = [FeedbackChecks.lesson]
     var assessment: GrammarAssessment = .tooShort
     var successes: [PatternObservation] = []
@@ -14,8 +14,10 @@ private final class FeedbackFixture: FeedbackAnalyzing {
     var gate: PipelineGate?
     var error: Error?
     var calls = 0
-    func analyze(_ transcript: String, apiKey: String, knownPatterns: Set<LearningFocus>) async throws -> FeedbackAnalysis {
+    var contexts: [FeedbackTextContext?] = []
+    func analyze(_ transcript: String, apiKey: String, knownPatterns: Set<LearningFocus>, context: FeedbackTextContext?) async throws -> FeedbackAnalysis {
         calls += 1
+        contexts.append(context)
         self.knownPatterns.append(knownPatterns)
         let captured = FeedbackAnalysis(feedback: findings, assessment: assessment, successfulPatterns: successes)
         await gate?.wait()
@@ -25,7 +27,7 @@ private final class FeedbackFixture: FeedbackAnalyzing {
 }
 
 @MainActor
-private final class MemoryCorrections: CorrectionStoring {
+final class MemoryCorrections: CorrectionStoring {
     var items: [SavedCorrection] = []
     var fail = false
     var saveGate: PipelineGate?
@@ -38,7 +40,7 @@ private final class MemoryCorrections: CorrectionStoring {
 }
 
 @MainActor
-private final class MemoryLearningProgress: LearningProgressStoring {
+final class MemoryLearningProgress: LearningProgressStoring {
     var records: [LearningRecord] = []
     var failLoad = false
     var failSave = false
@@ -588,8 +590,6 @@ enum FeedbackChecks {
             try unitEqual(diff.inline.filter { $0.change != .added }.map(\.text).joined(), pair.0)
             try unitEqual(diff.inline.filter { $0.change != .removed }.map(\.text).joined(), pair.1)
         }
-        try unitExpect(FeedbackDifference(original: lesson.original, suggestion: lesson.suggestion).isCompact)
-        try unitExpect(!FeedbackDifference(original: "This wording is completely different.", suggestion: "We prefer another version.").isCompact)
         let fixture = FeedbackFixture()
         let option = EnglishFeedback(kind: .phrasing, original: "Please let me know if we can review it.",
             suggestion: "Could we review it?", explanation: "A more direct request.", practicePrompt: "Make another request.",
@@ -604,6 +604,50 @@ enum FeedbackChecks {
         try unitEqual(controller.corrections.map(\.feedback), [focusedLesson])
         try unitEqual(controller.alternatives.map(\.feedback), [option])
         try unitEqual(controller.transcriptionIssues.map(\.feedback), [issue])
+        await controller.shutdown()
+    }
+
+    static func reviewPracticeChoicesAndReturn() async throws {
+        let paired = EnglishFeedback(kind: .grammar, original: lesson.original, suggestion: lesson.suggestion,
+            explanation: lesson.explanation, practicePrompt: lesson.practicePrompt,
+            alternative: .init(wording: "I was at the office yesterday.", explanation: "Focus on the location.",
+                               pattern: "I was at + place + time", focus: .pastTense), focus: .pastTense)
+        let optional = EnglishFeedback(kind: .phrasing, original: "Please tell me if we can review it.",
+            suggestion: "Could we review it?", explanation: "A concise request.", practicePrompt: "Make another request.")
+        let issue = EnglishFeedback(kind: .transcriptionIssue, original: "Cash the API.", suggestion: "Cache the API.",
+            explanation: "Check recognition.", practicePrompt: "")
+        let fixture = FeedbackFixture(), store = MemoryCorrections()
+        fixture.findings = [optional, issue, paired]
+        let controller = FeedbackController(client: fixture, store: store, progressStore: MemoryLearningProgress())
+        controller.setEnabled(true)
+        let id = UUID()
+        controller.updateDictation(.starting(.init(id: id, origin: .manual, settings: .init()), requested: nil))
+        controller.analyze(id: id, transcript: fixture.findings.map(\.original).joined(separator: " "), apiKey: "fixture")
+        finish(controller, id: id)
+        try await eventually { controller.panelVisible && controller.storageReady }
+        let targets = controller.reviewPracticeTargets
+        try unitEqual(targets.map(\.wording), [paired.suggestion, paired.alternative!.wording, optional.suggestion])
+        try unitEqual(targets.map(\.alternative), [false, true, false])
+        var selected: [PracticeTarget] = []
+        controller.onPractice = { selected.append($0); controller.setPracticeActive(true) }
+        for target in targets {
+            controller.practise(target.lesson, alternative: target.alternative)
+            try unitEqual(selected.last, target)
+            try unitExpect(!controller.panelVisible && store.items.isEmpty)
+            controller.setPracticeActive(false)
+            try unitExpect(controller.panelVisible && controller.reviewPracticeTargets == targets)
+        }
+        let saveGate = PipelineGate()
+        store.saveGate = saveGate
+        try unitExpect(controller.saveAndClose())
+        try await eventually { saveGate.entered }
+        controller.practise(targets[0].lesson)
+        try unitEqual(selected.count, 3) // An accepted Save cannot race a practice launch.
+        saveGate.open()
+        try await eventually { !controller.isSaving }
+        controller.setPracticeActive(false)
+        try unitExpect(!controller.panelVisible && controller.reviewPracticeTargets.isEmpty)
+        try unitEqual(store.items.count, 2) // Recognition issues remain excluded.
         await controller.shutdown()
     }
 
@@ -633,6 +677,7 @@ enum FeedbackChecks {
         ("feedback: progress write ordering, duplication, failure and recovery", progressQueueAndRecovery),
         ("feedback: progress privacy, file permissions and corruption protection", progressPersistenceAndPrivacy),
         ("feedback: compact word differences and corrections-first grouping", compactDifferencesAndGrouping),
+        ("feedback: footer practice choices and returning to an unsaved review", reviewPracticeChoicesAndReturn),
         ("feedback: paired alternatives, validation and legacy lesson compatibility", pairedAlternativeCompatibility),
         ("feedback: whole-review acceptance, discard, optional coaching and failed saves", multipleCorrectionsAndDiscard),
         ("feedback: full correction arrays and multiple fixes per sentence", multipleResponseContract),
@@ -655,6 +700,7 @@ final class FeedbackTests: XCTestCase {
     func testProgressRecovery() async throws { try await FeedbackChecks.progressQueueAndRecovery() }
     func testProgressPersistence() async throws { try await FeedbackChecks.progressPersistenceAndPrivacy() }
     func testCompactDifferences() async throws { try await FeedbackChecks.compactDifferencesAndGrouping() }
+    func testReviewPracticeChoices() async throws { try await FeedbackChecks.reviewPracticeChoicesAndReturn() }
     func testPairedAlternatives() async throws { try await FeedbackChecks.pairedAlternativeCompatibility() }
     func testMultipleCorrections() async throws { try await FeedbackChecks.multipleCorrectionsAndDiscard() }
     func testMultipleResponseContract() async throws { try await FeedbackChecks.multipleResponseContract() }

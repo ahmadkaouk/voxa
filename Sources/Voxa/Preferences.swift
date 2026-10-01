@@ -2,36 +2,52 @@ import Foundation
 
 struct Preferences: Codable, Equatable {
     var toggleHotkey = HotkeyOption.defaultToggle.persistedValue
-    var holdHotkey = HotkeyOption.defaultHold.persistedValue
+    var finishAndSubmitHotkey = HotkeyOption.defaultFinishAndSubmit.persistedValue
     var model = ModelOption.gptTranscribe.rawValue
     var outputMode = OutputModeOption.clipboardAutopaste.rawValue
     var maxRecordingSeconds: UInt64 = 300
     var apiKeySource = "keychain"
     var englishFeedbackEnabled = false
+    var automaticContextEnabled = false
+    var contextExcludedApps: [ContextExcludedApp] = []
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case toggleHotkey, holdHotkey, model, outputMode, maxRecordingSeconds, apiKeySource, englishFeedbackEnabled
+        case toggleHotkey, finishAndSubmitHotkey, model, outputMode, maxRecordingSeconds, apiKeySource, englishFeedbackEnabled
+        case automaticContextEnabled, contextExcludedApps
     }
+    private enum LegacyKeys: String, CodingKey { case holdHotkey }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         toggleHotkey = try values.decode(String.self, forKey: .toggleHotkey)
-        holdHotkey = try values.decode(String.self, forKey: .holdHotkey)
+        if let saved = try values.decodeIfPresent(String.self, forKey: .finishAndSubmitHotkey) {
+            finishAndSubmitHotkey = saved
+        } else {
+            let legacy = try decoder.container(keyedBy: LegacyKeys.self).decodeIfPresent(String.self, forKey: .holdHotkey)
+            finishAndSubmitHotkey = HotkeyOption.migratedSubmit(legacy: legacy.flatMap(HotkeyOption.fromRaw),
+                toggle: HotkeyOption.fromRawOrDefault(toggleHotkey)).persistedValue
+        }
         model = try values.decode(String.self, forKey: .model)
         outputMode = try values.decode(String.self, forKey: .outputMode)
         maxRecordingSeconds = try values.decode(UInt64.self, forKey: .maxRecordingSeconds)
         apiKeySource = try values.decode(String.self, forKey: .apiKeySource)
         // Older v1 preferences remain valid and never opt users in implicitly.
         englishFeedbackEnabled = try values.decodeIfPresent(Bool.self, forKey: .englishFeedbackEnabled) ?? false
+        automaticContextEnabled = try values.decodeIfPresent(Bool.self, forKey: .automaticContextEnabled) ?? false
+        contextExcludedApps = try values.decodeIfPresent([ContextExcludedApp].self, forKey: .contextExcludedApps) ?? []
     }
 
     func validated() throws -> Preferences {
         guard let toggle = HotkeyOption.fromRaw(toggleHotkey),
-              let hold = HotkeyOption.fromRaw(holdHotkey), toggle != hold,
+              let submit = HotkeyOption.fromRaw(finishAndSubmitHotkey), submit.isValidForSubmit, !toggle.overlaps(submit),
               ModelOption(rawValue: model) != nil, OutputModeOption(rawValue: outputMode) != nil,
-              (1...3600).contains(maxRecordingSeconds), ["env", "keychain"].contains(apiKeySource)
+              (1...3600).contains(maxRecordingSeconds), ["env", "keychain"].contains(apiKeySource),
+              contextExcludedApps.count <= 100,
+              Set(contextExcludedApps.map(\.bundleID)).count == contextExcludedApps.count,
+              contextExcludedApps.allSatisfy({ !$0.bundleID.isEmpty && $0.bundleID.utf8.count <= 255 &&
+                  !$0.name.isEmpty && $0.name.utf8.count <= 255 })
         else { throw PreferencesError.invalidConfiguration }
         return self
     }
@@ -40,7 +56,9 @@ struct Preferences: Codable, Equatable {
         DictationSettings(model: ModelOption.fromRawOrDefault(model),
                           outputMode: OutputModeOption.fromRawOrDefault(outputMode),
                           maxRecordingSeconds: TimeInterval(maxRecordingSeconds),
-                          englishFeedbackEnabled: englishFeedbackEnabled)
+                          englishFeedbackEnabled: englishFeedbackEnabled,
+                          automaticContextEnabled: automaticContextEnabled,
+                          contextExcludedBundleIDs: Set(contextExcludedApps.map(\.bundleID)))
     }
 }
 

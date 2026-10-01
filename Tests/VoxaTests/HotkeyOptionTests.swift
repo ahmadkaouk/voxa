@@ -94,25 +94,36 @@ enum HotkeyOptionChecks {
     }
 
     static func testFinishAndSubmitShortcut() throws {
-        for key: UInt16 in [KeyCode.returnKey, 76] {
-            var shortcut = FinishAndSubmitShortcut()
+        for binding in [HotkeyOption.defaultFinishAndSubmit,
+                        HotkeyOption(keyCodes: [KeyCode.returnKey], modifiers: [.control, .command])] {
+            var shortcut = FinishAndSubmitShortcut(hotkey: binding)
             var activations = 0
-            func press(_ down: Bool, flags: HotkeyModifiers = [], repeated: Bool = false, accepted: Bool = true) -> Bool {
-                shortcut.consume(keyCode: key, isDown: down, flags: flags, isRepeat: repeated) {
+            func press(_ down: Bool, key: UInt16? = nil, flags: HotkeyModifiers? = nil,
+                       repeated: Bool = false, accepted: Bool = true) -> Bool {
+                shortcut.consume(keyCode: key ?? binding.keyCodes[0], isDown: down,
+                                 flags: flags ?? binding.modifiers, isRepeat: repeated) {
                     activations += 1
                     return accepted
                 }
             }
+            for key: UInt16 in [KeyCode.returnKey, 76, KeyCode.g] {
+                try unitExpect(!press(true, key: key, flags: [])) // Plain typing never submits.
+                try unitExpect(!press(false, key: key, flags: []))
+            }
             try unitExpect(!press(true, flags: .shift))
             try unitExpect(!press(true, repeated: true))
             try unitEqual(activations, 0)
-            try unitExpect(!press(true, accepted: false)) // Idle/disabled recording passes Enter through.
+            try unitExpect(!press(true, accepted: false)) // Idle, disabled or non-Autopaste: pass through.
             try unitExpect(!press(false))
             try unitExpect(press(true))
             try unitExpect(press(true, repeated: true))
-            try unitExpect(press(false, flags: .shift))
+            try unitExpect(press(false, flags: [])) // Releasing the modifier first never leaks the key-up.
             try unitEqual(activations, 2) // One accepted action, regardless of repeats.
             try unitExpect(!press(false))
+        }
+        for invalid in [HotkeyOption(keyCodes: [KeyCode.returnKey], modifiers: []), .rightOption,
+                        HotkeyOption(keyCodes: [KeyCode.g, KeyCode.h], modifiers: .option)] {
+            try unitExpect(!invalid.isValidForSubmit)
         }
     }
 

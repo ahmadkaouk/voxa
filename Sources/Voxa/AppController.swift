@@ -79,8 +79,8 @@ final class AppController: ObservableObject {
             }
         }.store(in: &subscriptions)
         practice.history.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
-        session.onFeedbackTranscript = { [weak self] id, text, key in
-            self?.feedback.analyze(id: id, transcript: text, apiKey: key)
+        session.onFeedbackTranscript = { [weak self] id, text, key, context in
+            self?.feedback.analyze(id: id, transcript: text, apiKey: key, context: context)
         }
         session.onDeliveryFinished = { [weak self] id in self?.feedback.deliveryFinished(id: id) }
         feedback.$panelVisible.removeDuplicates().sink { [weak self] visible in
@@ -106,11 +106,6 @@ final class AppController: ObservableObject {
             guard let self, self.canStart else { return }
             self.session.toggle(prepare: self.recordingPreparation())
         }
-        hotkeys.onHoldActivated = { [weak self] in
-            guard let self, self.canStart else { return }
-            self.session.start(origin: .hotkeyHold, prepare: self.recordingPreparation())
-        }
-        hotkeys.onHoldDeactivated = { [weak self] in self?.session.holdReleased() }
         session.$state.removeDuplicates().scan((DictationState.idle, DictationState.idle)) { ($0.1, $1) }
             .sink { [weak self] previous, next in
                 guard let self else { return }
@@ -154,7 +149,7 @@ final class AppController: ObservableObject {
         practice.open(practice.history.queue(from: feedback.saved, patterns: feedback.progress.patterns), review: true)
     }
     var toggleHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.toggleHotkey) }
-    var holdHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.holdHotkey, fallback: .defaultHold) }
+    var finishAndSubmitHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.finishAndSubmitHotkey, fallback: .defaultFinishAndSubmit) }
     var model: ModelOption { session.settings.model }
     var outputMode: OutputModeOption { session.settings.outputMode }
     var maxRecordingSeconds: UInt64 { preferences.maxRecordingSeconds }
@@ -190,7 +185,7 @@ final class AppController: ObservableObject {
                 guard !closing else { return }
                 isAPIKeySet = key != nil
                 isReady = true
-                hotkeys.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
+                hotkeys.updateBindings(toggle: toggleHotkey, finishAndSubmit: finishAndSubmitHotkey)
                 refreshPermissions()
                 present(session.state, level: session.level)
             } catch {
@@ -235,24 +230,48 @@ final class AppController: ObservableObject {
         do {
             try store.save(next)
             _ = session.updateSettings(next.dictation)
-            let hotkeysChanged = next.toggleHotkey != preferences.toggleHotkey || next.holdHotkey != preferences.holdHotkey
+            let hotkeysChanged = next.toggleHotkey != preferences.toggleHotkey || next.finishAndSubmitHotkey != preferences.finishAndSubmitHotkey
+            if !next.automaticContextEnabled || next.contextExcludedApps != preferences.contextExcludedApps {
+                feedback.contextPreferencesChanged()
+            }
             preferences = next
             feedback.setEnabled(next.englishFeedbackEnabled)
             settingsError = nil
-            // Rebinding resets held-key tracking. Model/output/limit edits must not
-            // interrupt the release of a hold-to-record shortcut.
+            // Non-shortcut edits leave physical key tracking alone.
             if hotkeysChanged {
-                hotkeys.updateBindings(toggle: toggleHotkey, hold: holdHotkey)
+                hotkeys.updateBindings(toggle: toggleHotkey, finishAndSubmit: finishAndSubmitHotkey)
                 present(session.state, level: session.level)
             }
         } catch { settingsError = error.localizedDescription }
     }
-    func setToggleHotkey(_ value: HotkeyOption) { update { $0.toggleHotkey = value.persistedValue } }
-    func setHoldHotkey(_ value: HotkeyOption) { update { $0.holdHotkey = value.persistedValue } }
+    func setToggleHotkey(_ value: HotkeyOption) {
+        guard !value.overlaps(finishAndSubmitHotkey) else {
+            settingsError = "Choose a shortcut that doesn’t overlap Finish & Send."; return
+        }
+        update { $0.toggleHotkey = value.persistedValue }
+    }
+    func setFinishAndSubmitHotkey(_ value: HotkeyOption) {
+        guard value.isValidForSubmit else {
+            settingsError = "Finish & Send needs one key plus a modifier, such as Option + G."; return
+        }
+        guard !value.overlaps(toggleHotkey) else {
+            settingsError = "Choose a shortcut that doesn’t overlap Start / Stop."; return
+        }
+        update { $0.finishAndSubmitHotkey = value.persistedValue }
+    }
     func setModel(_ value: ModelOption) { update(duringDictation: true) { $0.model = value.rawValue } }
     func setOutputMode(_ value: OutputModeOption) { update(duringDictation: true) { $0.outputMode = value.rawValue } }
     func setMaxRecordingSeconds(_ value: UInt64) { update(duringDictation: true) { $0.maxRecordingSeconds = value } }
     func setEnglishFeedbackEnabled(_ value: Bool) { update(duringDictation: true) { $0.englishFeedbackEnabled = value } }
+    func setAutomaticContextEnabled(_ value: Bool) { update(duringDictation: true) { $0.automaticContextEnabled = value } }
+    func excludeContextApp(_ app: ContextExcludedApp) {
+        update(duringDictation: true) {
+            if !$0.contextExcludedApps.contains(where: { $0.bundleID == app.bundleID }) { $0.contextExcludedApps.append(app) }
+        }
+    }
+    func allowContextApp(_ bundleID: String) {
+        update(duringDictation: true) { $0.contextExcludedApps.removeAll { $0.bundleID == bundleID } }
+    }
 
     func saveAPIKey() {
         guard !isBusy, !closing else { return }

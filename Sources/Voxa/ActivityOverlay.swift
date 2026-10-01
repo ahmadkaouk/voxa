@@ -126,7 +126,7 @@ struct ActivityOverlayView: View {
                 .accessibilityHidden(true)
 
                 circleControl(symbol: "checkmark", bright: true, action: model.onStop)
-                    .help("Finish dictation · Enter to finish and submit")
+                    .help("Finish dictation and paste")
                     .accessibilityLabel("Finish dictation")
                     .accessibilityHint("Stops recording and transcribes your speech")
             }

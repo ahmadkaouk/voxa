@@ -82,7 +82,7 @@ struct HotkeyOption: Identifiable, Equatable {
         keyDisplays: ["G"]
     )
     static let defaultToggle = optionF
-    static let defaultHold = optionG
+    static let defaultFinishAndSubmit = optionG
     static let functionSpace = HotkeyOption(
         keyCodes: [KeyCode.space],
         modifiers: [.function],
@@ -170,6 +170,22 @@ struct HotkeyOption: Identifiable, Equatable {
     func isStrictSubset(of other: HotkeyOption) -> Bool {
         self != other && modifiers.isSubset(of: other.modifiers)
             && Set(keyCodes).isSubset(of: Set(other.keyCodes))
+    }
+
+    /// Submit must be a deliberate chord, never a bare typing key or modifier.
+    var isValidForSubmit: Bool {
+        keyCodes.count == 1 && !modifiers.isEmpty && !Self.isModifierKeyCode(keyCodes[0])
+    }
+
+    func overlaps(_ other: HotkeyOption) -> Bool {
+        self == other || isStrictSubset(of: other) || other.isStrictSubset(of: self)
+    }
+
+    static func migratedSubmit(legacy: HotkeyOption?, toggle: HotkeyOption) -> HotkeyOption {
+        let candidates = [legacy, .defaultFinishAndSubmit,
+            HotkeyOption(keyCodes: [KeyCode.g], modifiers: [.control, .command]),
+            HotkeyOption(keyCodes: [KeyCode.returnKey], modifiers: [.control, .shift])].compactMap { $0 }
+        return candidates.first { $0.isValidForSubmit && !$0.overlaps(toggle) } ?? .defaultFinishAndSubmit
     }
 
     static func fromRawOrDefault(
@@ -439,18 +455,19 @@ private let namedKeyDisplays: [UInt16: String] = [
     KeyCode.capsLock: "Caps Lock",
 ]
 
-/// Consume the whole physical Enter press only when finishing was accepted.
+/// Consume the complete configured chord only when this recording accepts submission.
 struct FinishAndSubmitShortcut {
+    var hotkey = HotkeyOption.defaultFinishAndSubmit
     private var consumedKeys: Set<UInt16> = []
 
     mutating func consume(keyCode: UInt16, isDown: Bool, flags: HotkeyModifiers,
                           isRepeat: Bool, activate: () -> Bool) -> Bool {
-        guard keyCode == KeyCode.returnKey || keyCode == 76 else { return false }
         if consumedKeys.contains(keyCode) {
             if !isDown { consumedKeys.remove(keyCode) }
             return true
         }
-        guard isDown, !isRepeat, flags.isEmpty, activate() else { return false }
+        guard hotkey.isValidForSubmit, hotkey.keyCodes == [keyCode], isDown, !isRepeat,
+              flags == hotkey.modifiers, activate() else { return false }
         consumedKeys.insert(keyCode)
         return true
     }

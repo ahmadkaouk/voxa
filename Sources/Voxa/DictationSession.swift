@@ -30,6 +30,8 @@ struct DictationSettings: Equatable {
     var outputMode: OutputModeOption = .clipboardAutopaste
     var maxRecordingSeconds: TimeInterval = 300
     var englishFeedbackEnabled = false
+    var automaticContextEnabled = false
+    var contextExcludedBundleIDs: Set<String> = []
 
     var isValid: Bool { maxRecordingSeconds.isFinite && (1...3600).contains(maxRecordingSeconds) }
 }
@@ -89,7 +91,7 @@ final class DictationSession: ObservableObject {
     @Published private(set) var lastOutcome: TranscriptOutputOutcome?
 
     // Observers enqueue independent work; neither callback is awaited by dictation.
-    var onFeedbackTranscript: ((UUID, String, String) -> Void)?
+    var onFeedbackTranscript: ((UUID, String, String, FeedbackTextContext?) -> Void)?
     var onDeliveryFinished: ((UUID) -> Void)?
 
     private let recorder: any DictationRecording
@@ -97,6 +99,8 @@ final class DictationSession: ObservableObject {
     private let output: any DictationOutputting
     private let clock: DictationClock
     private let timingLog: DictationTimingLog?
+    private let textContext: any TextContextCapturing
+    private var contextCapture: (id: UUID, capture: TextContextCapture)?
     private var currentTiming: DictationTiming?
     private var workflow: Task<Void, Never>?
     private var recordingMonitor: Task<Void, Error>?
@@ -108,13 +112,15 @@ final class DictationSession: ObservableObject {
          transcriber: any DictationTranscribing = TranscriptionClient(),
          output: any DictationOutputting = TranscriptOutput(),
          clock: DictationClock? = nil,
-         timingLog: DictationTimingLog? = nil) {
+         timingLog: DictationTimingLog? = nil,
+         textContext: (any TextContextCapturing)? = nil) {
         self.settings = settings
         self.recorder = recorder
         self.transcriber = transcriber
         self.output = output
         self.clock = clock ?? DictationClock()
         self.timingLog = timingLog
+        self.textContext = textContext ?? AccessibilityTextContext()
     }
 
     @discardableResult
@@ -122,11 +128,15 @@ final class DictationSession: ObservableObject {
         // Each active workflow already owns an immutable settings snapshot.
         // Updating the defaults here only affects the next recording.
         guard !shuttingDown, settings.isValid else { return false }
+        if !settings.automaticContextEnabled || !settings.englishFeedbackEnabled ||
+            settings.contextExcludedBundleIDs != self.settings.contextExcludedBundleIDs {
+            clearTextContext()
+        }
         self.settings = settings
         return true
     }
 
-    /// Enter starting before permission/credential work, so hotkey release cannot be lost.
+    /// Enter starting before permission/credential work, so stop requests cannot be lost.
     @discardableResult
     func start(origin: RecordingOrigin = .manual,
                prepare: @escaping @MainActor () async throws -> String) -> UUID? {
@@ -139,6 +149,11 @@ final class DictationSession: ObservableObject {
             return nil
         }
         let context = DictationContext(id: id, origin: origin, settings: settings)
+        clearTextContext()
+        if settings.englishFeedbackEnabled && settings.automaticContextEnabled,
+           let capture = textContext.start(excluding: settings.contextExcludedBundleIDs) {
+            contextCapture = (id, capture)
+        }
         let timing = timingLog.map { _ in DictationTiming(id: id, now: clock.now) }
         currentTiming = timing
         level = 0
@@ -155,11 +170,6 @@ final class DictationSession: ObservableObject {
         }
     }
 
-    func holdReleased() {
-        guard state.context?.origin == .hotkeyHold else { return }
-        stop()
-    }
-
     func stop() {
         guard !shuttingDown else { return }
         switch state {
@@ -174,7 +184,7 @@ final class DictationSession: ObservableObject {
         }
     }
 
-    /// Explicit Enter action is available only while recording with automatic paste enabled.
+    /// Finish & Send is available only while recording with automatic paste enabled.
     @discardableResult
     func stopAndSubmit(to targetPID: pid_t) -> Bool {
         guard !shuttingDown, targetPID != getpid(), case .recording(let context) = state,
@@ -187,6 +197,7 @@ final class DictationSession: ObservableObject {
     /// Recording-only cancellation, including capture still starting or releasing its device.
     func cancel() {
         guard !shuttingDown else { return }
+        clearTextContext()
         switch state {
         case .starting(let context, _): state = .starting(context, requested: .cancel)
         case .recording(let context), .finishing(let context, _):
@@ -206,6 +217,7 @@ final class DictationSession: ObservableObject {
     /// Invalidate completions immediately, then await capture release and any clipboard cleanup.
     func shutdown() async {
         shuttingDown = true
+        clearTextContext()
         state = .idle
         workflow?.cancel()
         recordingMonitor?.cancel()
@@ -220,6 +232,11 @@ final class DictationSession: ObservableObject {
     private func ensureCurrent(_ context: DictationContext) throws {
         try Task.checkCancellation()
         guard !shuttingDown, state.context?.id == context.id else { throw CancellationError() }
+    }
+
+    private func clearTextContext() {
+        contextCapture?.capture.cancel()
+        contextCapture = nil
     }
 
     private func waitForRecordingToFinish(_ context: DictationContext) async throws {
@@ -259,6 +276,7 @@ final class DictationSession: ObservableObject {
         var captureReleased = false
         var timingOutcome = DictationTiming.Outcome.cancelled
         defer {
+            if contextCapture?.id == context.id { clearTextContext() }
             if let report = timing?.report(outcome: timingOutcome) { timingLog?.append(report) }
         }
         do {
@@ -267,7 +285,7 @@ final class DictationSession: ObservableObject {
             let apiKey = try await prepare()
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
-            // A release during a permission prompt must not capture speech after the prompt closes.
+            // Stopping during a permission prompt must not capture speech after the prompt closes.
             if case .starting(_, .stop) = state { throw CancellationError() }
             guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw TranscriptionError.authentication
@@ -312,7 +330,9 @@ final class DictationSession: ObservableObject {
             lastTranscript = text
             state = .delivering(context)
             if context.settings.englishFeedbackEnabled {
-                onFeedbackTranscript?(context.id, text, apiKey)
+                let captured = contextCapture?.id == context.id ? contextCapture?.capture.take() : nil
+                clearTextContext()
+                onFeedbackTranscript?(context.id, text, apiKey, captured)
             }
             timing?.mark(.deliveryStarted)
             let submitTo = submitTarget

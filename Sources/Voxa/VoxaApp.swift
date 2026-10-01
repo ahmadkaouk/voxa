@@ -120,6 +120,11 @@ struct VoxaMenuView: View {
                 get: { controller.preferences.englishFeedbackEnabled },
                 set: { controller.setEnglishFeedbackEnabled($0) }))
                 .disabled(!controller.canEditDictationSettings)
+            Toggle("Use Nearby Text Automatically", isOn: Binding(
+                get: { controller.preferences.automaticContextEnabled },
+                set: { controller.setAutomaticContextEnabled($0) }))
+                .disabled(!controller.canEditDictationSettings || !controller.preferences.englishFeedbackEnabled)
+                .help("Sends a short text excerpt from the active app to your feedback service. No screenshots; excerpts aren’t saved locally. Manage excluded apps in Voxa Settings.")
             if controller.feedback.isAnalyzing { Text("Reviewing your English…") }
             if let status = controller.feedback.status { Text(status) }
             Button("Show Latest Feedback") { controller.feedback.showLatest() }
@@ -264,13 +269,20 @@ struct VoxaSettingsView: View {
     @ObservedObject var controller: AppController
     @StateObject private var hotkeyRecorder = HotkeyRecorder()
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
             Form {
                 Section("Hotkeys") {
-                    hotkeyRow("Toggle Recording", current: controller.toggleHotkey, target: .toggle)
-                    hotkeyRow("Hold to Record", current: controller.holdHotkey, target: .hold)
+                    hotkeyRow("Start / Stop", detail: "Press again to finish and paste.",
+                              current: controller.toggleHotkey, target: .toggle)
+                    hotkeyRow("Finish & Send", detail: "While recording, paste and press Return.",
+                              current: controller.finishAndSubmitHotkey, target: .finishAndSubmit)
+                    if controller.outputMode != .clipboardAutopaste {
+                        Label("Finish & Send requires Autopaste.", systemImage: "info.circle")
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
                     if hotkeyRecorder.target != nil {
                         Text("Hold the full combination, then release it to save. Press Esc to cancel.")
                             .font(.caption)
@@ -280,19 +292,17 @@ struct VoxaSettingsView: View {
                 .disabled(controller.isBusy || !controller.isReady)
 
                 Section("English Learning") {
-                    LabeledContent("Save lessons", value: FeedbackShortcut.saveLabel)
-                        .help("Press S to save all lessons and close the review. Press D to close without saving lessons. Progress is tracked automatically. S and D act on visible feedback instead of typing in the focused app. Requires Accessibility access for global use.")
-                    LabeledContent("Close review", value: FeedbackShortcut.discardLabel)
-                    Toggle("Feedback after dictation", isOn: Binding(
+                    EnglishLearningSettingsView(feedbackEnabled: Binding(
                         get: { controller.preferences.englishFeedbackEnabled },
-                        set: { controller.setEnglishFeedbackEnabled($0) }))
-                        .disabled(!controller.canEditDictationSettings)
-                    Text("Get English corrections and clearer, more natural ways to express your ideas without changing your inserted text. Enabling applies to your next recording; disabling stops pending feedback.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text("Sends transcript text to your feedback service using your API key, with additional API usage. Progress keeps assessment bands and pattern counts, without dictated text. Saved lessons keep their excerpts. Record answer sends audio for transcription, then the answer and lesson for a practice check; Type instead sends text only. Answers and audio aren’t saved on this Mac. Review timing is stored locally. Manage lessons and progress in Lessons & Progress.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Link("OpenAI data retention details", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
-                        .font(.caption)
+                        set: { controller.setEnglishFeedbackEnabled($0) }), contextEnabled: Binding(
+                        get: { controller.preferences.automaticContextEnabled },
+                        set: { controller.setAutomaticContextEnabled($0) }),
+                        excludedApps: controller.preferences.contextExcludedApps,
+                        hasAccessibility: controller.permissions.accessibility,
+                        canEdit: controller.canEditDictationSettings,
+                        onExclude: controller.excludeContextApp,
+                        onAllow: controller.allowContextApp,
+                        onOpenLessons: { openWindow(id: "english-lessons") })
                 }
 
                 Section("OpenAI API Key") {
@@ -339,8 +349,7 @@ struct VoxaSettingsView: View {
             }
             .padding([.horizontal, .bottom])
         }
-        .frame(width: 440)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 480, height: 700)
         .onExitCommand {
             if hotkeyRecorder.target != nil {
                 hotkeyRecorder.stop()
@@ -358,28 +367,19 @@ struct VoxaSettingsView: View {
         }
     }
 
-    private func hotkeyRow(_ title: String, current: HotkeyOption, target: HotkeyRecordingTarget) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(hotkeyRecorder.target == target ? (hotkeyRecorder.preview?.label ?? "Press a shortcut") : current.label)
-                .foregroundStyle(.secondary)
-            if hotkeyRecorder.target == target {
-                Button("Cancel") { hotkeyRecorder.stop() }
-                    .accessibilityLabel("Cancel recording \(title.lowercased()) shortcut")
-            } else {
-                Button("Record…") { hotkeyRecorder.start(target: target, current: current) }
-                    .accessibilityLabel("Record \(title.lowercased()) shortcut")
-            }
-        }
-        .accessibilityElement(children: .contain)
+    private func hotkeyRow(_ title: String, detail: String, current: HotkeyOption, target: HotkeyRecordingTarget) -> some View {
+        SettingsShortcutRow(title: title, detail: detail,
+            shortcut: hotkeyRecorder.target == target ? (hotkeyRecorder.preview?.label ?? "Press keys") : current.label,
+            recording: hotkeyRecorder.target == target,
+            onRecord: { hotkeyRecorder.start(target: target, current: current) },
+            onCancel: { hotkeyRecorder.stop() })
     }
 
     private func configureHotkeyRecorder() {
         hotkeyRecorder.onCommit = { target, hotkey in
             switch target {
             case .toggle: controller.setToggleHotkey(hotkey)
-            case .hold: controller.setHoldHotkey(hotkey)
+            case .finishAndSubmit: controller.setFinishAndSubmitHotkey(hotkey)
             }
         }
         hotkeyRecorder.onCaptureStateChanged = { controller.setHotkeyCaptureEnabled($0) }
@@ -388,7 +388,7 @@ struct VoxaSettingsView: View {
 
 private enum HotkeyRecordingTarget: Equatable {
     case toggle
-    case hold
+    case finishAndSubmit
 }
 
 private final class HotkeyRecorder: ObservableObject {

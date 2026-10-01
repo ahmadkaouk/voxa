@@ -3,7 +3,7 @@ import SwiftUI
 
 private struct PreviewFeedback: FeedbackAnalyzing {
     let result: FeedbackAnalysis
-    func analyze(_ transcript: String, apiKey: String, knownPatterns: Set<LearningFocus>) async throws -> FeedbackAnalysis { result }
+    func analyze(_ transcript: String, apiKey: String, knownPatterns: Set<LearningFocus>, context: FeedbackTextContext?) async throws -> FeedbackAnalysis { result }
 }
 
 private actor PreviewLessons: CorrectionStoring {
@@ -71,7 +71,8 @@ private enum FeedbackPreview {
             return LearningRecord(id: UUID(), date: date, analysis: analysis, transcript: sample)
         }
         let result = FeedbackAnalysis(feedback: [correction, phrasing], assessment: .init(status: .assessed, band: .minor))
-        let controller = try await review(result, text: correction.original + " " + phrasing.original, history: history)
+        let controller = try await review(result, text: correction.original + " " + phrasing.original, history: history,
+            context: FeedbackTextContext(appName: "Mail", source: .nearbyText, text: "Could we discuss tomorrow's meeting?"))
         try await render(FeedbackReviewView(controller: controller), name: "review-light", scheme: .light)
         try await render(FeedbackReviewView(controller: controller), name: "review-dark", scheme: .dark)
         try await render(FeedbackReviewView(controller: controller, maximumHeight: 450), name: "review-small", scheme: .light)
@@ -79,11 +80,101 @@ private enum FeedbackPreview {
         try await render(LearningProgressView(progress: controller.progress).frame(width: 780, height: 650), name: "progress-dark", scheme: .dark)
         await controller.shutdown()
 
+        let singleCorrection = EnglishFeedback(kind: .grammar,
+            original: "What do you mean by keep submitted material versions in Drive?",
+            suggestion: "What do you mean by keeping submitted material versions in Drive?",
+            explanation: "After the preposition “by,” use a gerund (the -ing form).",
+            practicePrompt: "Ask a new question using What do you mean by + -ing?", focus: .verbForm)
+        let singleAnalysis = FeedbackAnalysis(feedback: [singleCorrection], assessment: .tooShort)
+        let singleHistory = (1...4).map { offset in
+            LearningRecord(id: UUID(), date: now.addingTimeInterval(Double(-offset) * 86_400),
+                           analysis: singleAnalysis, transcript: singleCorrection.original)
+        }
+        let single = try await review(singleAnalysis, text: singleCorrection.original, history: singleHistory,
+            context: FeedbackTextContext(appName: "ChatGPT", source: .nearbyText, text: "Where should we keep the file versions?"))
+        let compactSize = try await render(FeedbackReviewView(controller: single), name: "review-single-light", scheme: .light)
+        guard compactSize.height < 360 else { throw FeedbackError.invalidResponse }
+        try await render(FeedbackReviewView(controller: single), name: "review-single-dark", scheme: .dark)
+        await single.shutdown()
+
+        // Match the alternative-only review that exposed the hierarchy problem:
+        // a long suggestion, reusable template, explanation, original and successes.
+        let followUp = EnglishFeedback(kind: .phrasing,
+            original: "Another question is about the optional phrase or another way to say it.",
+            suggestion: "I have another question about the optional phrase or another way to say it.",
+            explanation: "“I have another question about…” is a natural way to introduce a follow-up question.",
+            practicePrompt: "Introduce a follow-up question about a different topic.",
+            pattern: "I have another question about + topic", focus: .connectingIdeas)
+        let earlierLessons: [EnglishFeedback] = [
+            .init(kind: .grammar, original: "Can you tell me what is the plan?",
+                  suggestion: "Can you tell me what the plan is?", explanation: "Use statement word order.",
+                  practicePrompt: "Ask an indirect question.", focus: .questionOrder),
+            .init(kind: .grammar, original: "I need answer.", suggestion: "I need an answer.",
+                  explanation: "Use an article with a singular countable noun.",
+                  practicePrompt: "Ask for something using an article.", focus: .articles),
+            .init(kind: .grammar, original: "We discussed about the plan.", suggestion: "We discussed the plan.",
+                  explanation: "Use discuss without about.", practicePrompt: "Say what you discussed.", focus: .prepositions)
+        ]
+        let earlierPatterns = earlierLessons.enumerated().map { index, lesson in
+            LearningRecord(id: UUID(), date: now.addingTimeInterval(Double(-index - 1) * 86_400),
+                           analysis: .init(feedback: [lesson], assessment: .tooShort), transcript: lesson.original)
+        }
+        let followUpText = followUp.original + " What prompt are we using to generate this?"
+        let alternativeOnly = try await review(.init(feedback: [followUp],
+            assessment: .init(status: .assessed, band: .accurate), successfulPatterns: [
+                .init(focus: .questionOrder, evidence: "What prompt are we using to generate this?"),
+                .init(focus: .articles, evidence: "the optional phrase"),
+                .init(focus: .prepositions, evidence: "about the optional phrase")
+            ]), text: followUpText, history: earlierPatterns,
+            context: FeedbackTextContext(appName: "ChatGPT", source: .nearbyText, text: "How can I ask a follow-up question?"))
+        try await render(FeedbackReviewView(controller: alternativeOnly), name: "review-alternative-light", scheme: .light)
+        try await render(FeedbackReviewView(controller: alternativeOnly), name: "review-alternative-dark", scheme: .dark)
+        try await render(FeedbackReviewView(controller: alternativeOnly, maximumHeight: 450),
+                         name: "review-alternative-small", scheme: .light)
+        await alternativeOnly.shutdown()
+
+        let withoutPattern = EnglishFeedback(kind: .phrasing, original: phrasing.original,
+            suggestion: phrasing.suggestion, explanation: phrasing.explanation, practicePrompt: phrasing.practicePrompt)
+        let noPattern = try await review(.init(feedback: [withoutPattern], assessment: .tooShort),
+                                         text: withoutPattern.original, history: [])
+        try await render(FeedbackReviewView(controller: noPattern), name: "review-alternative-no-pattern", scheme: .light)
+        await noPattern.shutdown()
+
+        let paired = try await review(.init(feedback: [correction], assessment: .tooShort),
+                                      text: correction.original, history: [])
+        try await render(FeedbackReviewView(controller: paired), name: "review-paired", scheme: .light)
+        await paired.shutdown()
+
+        let rewrite = EnglishFeedback(kind: .construction,
+            original: "The project, what I wanted it is for that people can know about why the changes and what the next step would be.",
+            suggestion: "I wanted the project to help people understand the changes and the next step.",
+            explanation: "Use “I wanted the project to help” to connect your intention to its purpose.",
+            practicePrompt: "Explain what you wanted a project to help people do.", focus: .sentenceStructure)
+        let rewritten = try await review(.init(feedback: [rewrite], assessment: .tooShort), text: rewrite.original, history: [])
+        try await render(FeedbackReviewView(controller: rewritten), name: "review-rewrite", scheme: .light)
+        await rewritten.shutdown()
+
         let cleanText = "Yesterday I went to the office. We reviewed the API changes together and agreed to test the new version again before shipping it tomorrow."
         let clean = try await review(.init(feedback: [], assessment: .init(status: .assessed, band: .accurate),
             successfulPatterns: [.init(focus: .pastTense, evidence: "Yesterday I went to the office.")]), text: cleanText, history: history)
         try await render(FeedbackReviewView(controller: clean), name: "review-clean", scheme: .light)
         await clean.shutdown()
+
+        let contextSettings = Form {
+            Section("Hotkeys") {
+                SettingsShortcutRow(title: "Start / Stop", detail: "Press again to finish and paste.",
+                    shortcut: "Opt+F", onRecord: {}, onCancel: {})
+                SettingsShortcutRow(title: "Finish & Send", detail: "While recording, paste and press Return.",
+                    shortcut: "Opt+G", onRecord: {}, onCancel: {})
+            }
+            Section("English Learning") {
+                EnglishLearningSettingsView(feedbackEnabled: .constant(true), contextEnabled: .constant(true),
+                    excludedApps: [.init(bundleID: "example.private", name: "Private workspace")],
+                    hasAccessibility: true, onExclude: { _ in }, onAllow: { _ in }, onOpenLessons: {})
+            }
+        }.formStyle(.grouped).frame(width: 480, height: 590)
+        try await render(contextSettings, name: "context-settings-light", scheme: .light)
+        try await render(contextSettings, name: "context-settings-dark", scheme: .dark)
 
         let practice = PracticeController(evaluator: PreviewPracticeEvaluator(), historyStore: PreviewPracticeHistory())
         practice.prepare = { _ in .init(apiKey: "synthetic-preview", model: .gptTranscribe) }
@@ -101,7 +192,8 @@ private enum FeedbackPreview {
         await practice.shutdown()
     }
 
-    @MainActor static func review(_ result: FeedbackAnalysis, text: String, history: [LearningRecord]) async throws -> FeedbackController {
+    @MainActor static func review(_ result: FeedbackAnalysis, text: String, history: [LearningRecord],
+                                 context: FeedbackTextContext? = nil) async throws -> FeedbackController {
         let controller = FeedbackController(client: PreviewFeedback(result: result), store: PreviewLessons(),
                                             progressStore: PreviewProgress(history))
         for _ in 0..<200 where !controller.progress.ready || !controller.storageReady {
@@ -110,7 +202,7 @@ private enum FeedbackPreview {
         controller.setEnabled(true)
         let id = UUID()
         controller.updateDictation(.starting(.init(id: id, origin: .manual, settings: .init()), requested: nil))
-        controller.analyze(id: id, transcript: text, apiKey: "synthetic-preview")
+        controller.analyze(id: id, transcript: text, apiKey: "synthetic-preview", context: context)
         controller.deliveryFinished(id: id); controller.updateDictation(.idle)
         for _ in 0..<200 where controller.isAnalyzing || controller.progress.isSaving {
             try await Task.sleep(nanoseconds: 5_000_000)
@@ -119,7 +211,7 @@ private enum FeedbackPreview {
         return controller
     }
 
-    @MainActor static func render<V: View>(_ content: V, name: String, scheme: ColorScheme) async throws {
+    @discardableResult @MainActor static func render<V: View>(_ content: V, name: String, scheme: ColorScheme) async throws -> CGSize {
         NSApp.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         let view = content.environment(\.colorScheme, scheme)
             .padding(16).background(Color(nsColor: .windowBackgroundColor))
@@ -143,6 +235,7 @@ private enum FeedbackPreview {
         let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         let url = directory.appendingPathComponent(name + ".png")
         try png.write(to: url)
-        print(url.path)
+        print("\(url.path) · \(Int(size.width))×\(Int(size.height)) pt")
+        return size
     }
 }

@@ -28,13 +28,13 @@ Each recording has an ID and settings snapshot. The session checks both its ID
 and expected state after suspension so a late callback cannot complete a newer
 recording. States are `idle`, `starting`, `recording`, `finishing`, `transcribing`,
 `delivering`, `restoringClipboard`, and `failed`. Stop or cancel during preparation
-is remembered; releasing a hold shortcut during a permission prompt cannot start capture later.
+is remembered; stopping during a permission prompt cannot start capture later.
 Cancellation is limited to recording. Normal Quit invalidates pending work and
 awaits capture teardown and clipboard cleanup before the process exits.
 
 Model, output, and recording-limit preferences can change during a workflow.
 The active recording keeps its snapshot; the next recording uses the new defaults.
-These edits do not rebind hotkeys, so a held recording shortcut still releases normally.
+These edits do not rebind hotkeys or reset physical key tracking.
 
 After a paste request is sent and its clipboard text is read, `restoringClipboard`
 permits another recording while the output worker finishes its 500 ms settling
@@ -43,7 +43,15 @@ Later pastes and copies remain queued behind cleanup, and its final result only
 updates the session if no newer recording has started. The paste checkmark appears
 on the read signal; restoration does not delay it or restart its display timer.
 
-Enter during recording requests paste-and-submit in Autopaste mode. This pins the
+The configurable Finish & Send chord (Option+G by default) requests paste-and-submit
+while recording in Autopaste mode. Plain Enter is never a built-in recording action.
+The chord is swallowed only when the session accepts submission; repeats and the
+key-up remain swallowed even if its modifier is released first. The non-consuming
+global-monitor fallback never dispatches submission. Submit bindings require one
+key plus a modifier and cannot overlap the toggle binding. Legacy `holdHotkey`
+preferences migrate to `finishAndSubmitHotkey` when compatible, with a valid
+non-overlapping fallback otherwise. Hold handlers and recording origin are removed.
+This pins the
 destination to the app active at the keypress and keeps the session busy until
 Return is sent or skipped. Return follows the settling interval and is skipped
 if delivery is unconfirmed, the clipboard changes, or a different app is active.
@@ -87,8 +95,35 @@ the same lesson. Optional `pattern` templates and stable `LearningFocus` categor
 support reusable expressions and history; older saved lessons without these fields
 remain compatible. The response also contains `GrammarAssessment` and grounded
 `successfulPatterns` observations, plus `ExpressionAssessment`. Only category IDs
-from prior reviews/saved lessons accompany the next dictation transcript. Explicit
+from prior reviews/saved lessons accompany the next dictation transcript, together
+with ephemeral text context when separately enabled. Explicit
 practice requests separately include the selected lesson and the submitted answer.
+
+### Automatic text context
+
+`AccessibilityTextContext` implements the injected `TextContextCapturing` boundary.
+It checks opt-in exclusions, Accessibility trust, secure input and protected apps,
+then freezes the foreground PID before overlay changes. AX IPC runs on a detached
+utility task, with a 450 ms total budget, 35 ms per-call timeout, and bounded tree
+depth/node/read counts. `ContextTextExtractor` reads a UTF-16 range around the caret,
+constrained by the visible range when available. For short multiline editors it
+walks a nearby containing pane and collects visible static text above the editor,
+pruning controls, protected fields, off-column sidebars and other editable controls.
+No screen images, OCR, pasteboard, scrolling or external retrieval is involved.
+Foreground app, focused window and field must still match after the read.
+
+`DictationSession` owns a cancellable `TextContextCapture` for one recording ID.
+It only takes an already-completed snapshot when queuing feedback, never awaiting
+capture. Discard, failed preparation, shutdown, disabling feedback/context and
+changed exclusions clear it. A newer recording cannot consume an older result.
+`FeedbackTextContext` is intentionally not Codable; its text is capped at 2,400
+UTF-16 units and only serialized into the feedback request's untrusted `context`
+field. The prompt limits it to interpretation/phrasing and all response evidence
+remains validated against the original transcript. The feedback controller retains
+only the source app name for its indicator after the request completes. No context
+is attached to a lesson, progress record, practice check, transcription or timing log.
+Changing context preferences cancels pending context-bearing feedback as well as
+capture; already-transmitted input cannot be recalled.
 
 The grammar rubric has fixed 2/4/6/8/10 bands, not model confidence or a deduction
 per correction. Code suppresses scores under 20 words, for recognition issues, or

@@ -27,13 +27,35 @@ explanations, and the distinction between errors and optional alternatives.
 
 ## Manual release checks
 
-- Dictation and Enter-to-submit finish before feedback appears; the destination keeps focus.
+- Dictation and Finish & Send complete before feedback appears; the destination keeps focus.
+- Settings present one English Learning group, short per-control descriptions and
+  expandable Data & privacy details. Nearby text is visually subordinate to feedback;
+  exclusions remain manageable and Lessons & Progress opens the learning window.
+- The former Hold to Record control is replaced by an editable Finish & Send chord.
+  Plain Return/keypad Enter must pass through during recording. Finish & Send only
+  acts during Autopaste recording, swallows repeated keydowns and the eventual keyup,
+  and submits to the same app after confirmed paste. Verify idle, disabled and
+  non-Autopaste states pass the chord through. Existing settings/features survive migration.
 - Network failure, disabling feedback, and a newer recording never disrupt insertion or show stale feedback.
-- Quick scan shows small edits inline with subdued deletions and emphasised corrections. Larger edits retain readable before/after text. Corrections lead, paired alternatives sit underneath, standalone alternatives follow, and recognition issues stay separate. Explanations and reusable patterns remain visible. New reviews start at the top.
+- Automatic context is off after migration. Enable it once, then use the ordinary
+  dictation shortcut in an editor and a chat composer. Check the source-app label;
+  app-specific Accessibility support is best effort, with no selection/copy workflow.
+- Verify focused password/search fields and excluded apps are skipped, switching
+  apps/windows/fields during capture drops the result, and slow reads never delay
+  recording or delivery. Turning context off clears pending context-bearing work.
+- Inspect a synthetic feedback request: context is bounded plain text in the user
+  payload, separate from the transcript. No images, tools, additional model request,
+  or context in transcription/practice. Captured text never appears in history/logs.
+- Evaluate synthetic context containing unrelated messages or instructions to change
+  the score. The model must ignore those instructions, retain the speaker's meaning,
+  ground every finding/assessment in the transcript, and avoid copying contextual
+  private details into saved lessons. Fixture tests cannot establish model adherence.
+- Corrections show the old and new wording in the same sentence: subdued struck-through originals, green replacements, and unchanged words around them. Replacements have a visible space between old and new words; there is no separate comparison line. A labeled explanation and recurring-pattern metadata are easy to scan. Short reviews fit their contents; longer reviews scroll while all footer actions remain visible. Corrections lead, paired alternatives sit underneath, standalone alternatives follow, and recognition issues stay separate. Explanations and reusable patterns remain visible. New reviews start at the top.
+- Paired and standalone alternatives use the same clearly bounded card: Another way to say it, the prominent suggested sentence, Pattern to reuse, and Why it works. Standalone originals appear under a separated You said label. An absent pattern leaves no empty section. Grammar confirmation and Used well observations stay grouped, separate from the alternative lesson. Check alternative-only reviews with long text, multiple successes and a small viewport.
 - S saves every lesson in one write; D closes without saving lessons. Both leave automatic progress intact. Recognition issues are never saved as lessons. Failed writes keep the review open; repeated presses do not duplicate saves.
 - Without a visible review, S and D type normally. Modified shortcuts remain available.
 - Saved lessons, including older files and paired alternatives, survive relaunch. Practice answers do not persist.
-- Practise this opens an explicit window, keeps corrections/alternatives distinct, and suspends normal dictation. Close restores normal recording. The app never pastes a practice answer.
+- Practice this sits next to Save lessons. A single lesson opens directly; multiple choices use a menu with corrections first, then paired/standalone alternatives. Recognition issues never appear as practice choices. Opening practice preserves the unsaved review; closing returns to it. A pending Save cannot race a practice launch. Practice suspends normal dictation and never pastes an answer.
 - Record answer / Stop & check uses the existing transcription model and checks only the selected pattern. Type instead works without requesting microphone permission. Close during permission, capture, transcription or checking must not leave capture active or revive a stale result.
 - One-minute Review offers up to three due saved patterns, prioritising recurring mistakes, with examples hidden until requested. Skip and uncertain recognition never count as failures. The same pattern should not reappear immediately through a duplicate saved lesson.
 - Check long excerpts, small screens, light/dark appearance, and VoiceOver labels.
@@ -86,8 +108,17 @@ explanations, and the distinction between errors and optional alternatives.
   words from a lesson/answer, no audio and no credentials.
 
 `./scripts/preview-feedback.sh` renders the shipping SwiftUI views with synthetic
-fixtures in light/dark appearances, a small review panel, a clean review and the
-Progress tab, plus repetition, new-example, result and short-review screens. It uses
+fixtures in light/dark appearances, a compact single correction, paired alternatives,
+alternative-only feedback with/without a template and on a small display,
+a full rewrite, a small review panel, a clean review and the
+Progress tab, plus repetition, new-example, result, short-review and automatic-context settings screens. It uses
 memory-only stores and no microphone, Keychain or API calls.
 Generated PNGs are in `.build/feedback-previews/`. This verifies layout separately
 from linguistic quality; the deterministic suite does not measure model accuracy.
+
+`bash scripts/check-text-context.sh` opens a temporary native editor and message
+using synthetic text, runs the production AX extraction against that process only,
+then restores the previous app. It checks real editor/message extraction and elapsed
+time, without reading foreign-app content, recording audio, or calling an API.
+It exits with status 2 if the test process lacks Accessibility access. This smoke
+check does not establish compatibility with every third-party app.

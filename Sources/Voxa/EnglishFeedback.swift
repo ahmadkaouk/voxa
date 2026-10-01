@@ -127,7 +127,6 @@ struct FeedbackDifference {
     let original: [Token]
     let suggestion: [Token]
     let inline: [InlineToken]
-    let isCompact: Bool
 
     init(original: String, suggestion: String) {
         func tokens(_ text: String) -> [String] {
@@ -159,9 +158,6 @@ struct FeedbackDifference {
             } else { break }
         }
         self.inline = merged
-        let changedWords = merged.filter { $0.change != .unchanged && $0.text.contains(where: \.isLetter) }.count
-        let words = max(1, after.filter { $0.contains(where: \.isLetter) }.count)
-        self.isCompact = changedWords <= 8 && Double(changedWords) / Double(words) <= 0.8
     }
 }
 

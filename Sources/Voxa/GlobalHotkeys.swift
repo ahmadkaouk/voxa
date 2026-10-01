@@ -4,28 +4,21 @@ import Foundation
 
 final class GlobalHotkeyBridge {
     var onFinishAndSubmit: (() -> Bool)?
-    private var returnShortcut = FinishAndSubmitShortcut()
+    private var submitShortcut = FinishAndSubmitShortcut()
     var onSaveFeedback: (() -> Bool)?
     private var saveShortcut = FeedbackShortcut()
     var onDiscardFeedback: (() -> Bool)?
     private var discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
 
     var onToggleActivated: (() -> Void)?
-    var onHoldActivated: (() -> Void)?
-    var onHoldDeactivated: (() -> Void)?
 
     private let queue = DispatchQueue(label: "com.voxa.hotkeys")
-    private let overlapDelay: DispatchTimeInterval = .milliseconds(160)
 
     private var isEnabled = true
     private var toggleHotkey = HotkeyOption.defaultToggle
-    private var holdHotkey = HotkeyOption.defaultHold
     private var toggleMatcher = HotkeyMatcher(hotkey: .defaultToggle)
-    private var holdMatcher = HotkeyMatcher(hotkey: .defaultHold)
     private var activeModifiers: HotkeyModifiers = []
     private var pressedKeys: Set<UInt16> = []
-    private var pendingActivation: PendingActivation?
-    private var holdDispatchActive = false
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -72,7 +65,7 @@ final class GlobalHotkeyBridge {
             CFMachPortInvalidate(eventTap)
             self.eventTap = nil
         }
-        returnShortcut = FinishAndSubmitShortcut()
+        submitShortcut = FinishAndSubmitShortcut(hotkey: submitShortcut.hotkey)
         saveShortcut = FeedbackShortcut()
         discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
         queue.sync {
@@ -86,7 +79,7 @@ final class GlobalHotkeyBridge {
     }
 
     func resetForSystemInterruption() {
-        returnShortcut = FinishAndSubmitShortcut()
+        submitShortcut = FinishAndSubmitShortcut(hotkey: submitShortcut.hotkey)
         saveShortcut = FeedbackShortcut()
         discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
         queue.async { [weak self] in
@@ -94,13 +87,12 @@ final class GlobalHotkeyBridge {
         }
     }
 
-    func updateBindings(toggle: HotkeyOption, hold: HotkeyOption) {
+    func updateBindings(toggle: HotkeyOption, finishAndSubmit: HotkeyOption) {
+        submitShortcut = FinishAndSubmitShortcut(hotkey: finishAndSubmit)
         queue.async { [weak self] in
             guard let self else { return }
             self.toggleHotkey = toggle
-            self.holdHotkey = hold
             self.toggleMatcher = HotkeyMatcher(hotkey: toggle)
-            self.holdMatcher = HotkeyMatcher(hotkey: hold)
             self.resetState()
         }
     }
@@ -159,7 +151,8 @@ final class GlobalHotkeyBridge {
         return true
     }
 
-    private func handleTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    // Also exercised with synthetic events in tests; those events are never posted to macOS.
+    func handleTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
@@ -202,7 +195,7 @@ final class GlobalHotkeyBridge {
         if saveShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat, activate: {
             queue.sync(execute: { isEnabled }) && onSaveFeedback?() == true
         }) { return true }
-        return returnShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat) {
+        return submitShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat) {
             queue.sync(execute: { isEnabled }) && onFinishAndSubmit?() == true
         }
     }
@@ -216,168 +209,8 @@ final class GlobalHotkeyBridge {
         apply(event)
 
         let state = HotkeyState(modifiers: activeModifiers, pressedKeys: pressedKeys)
-        let toggleSignal = toggleMatcher.onState(state)
-        let holdSignal = holdMatcher.onState(state)
-
-        processActivations(toggleSignal: toggleSignal, holdSignal: holdSignal)
-        processDeactivations(
-            toggleSignal: toggleSignal,
-            holdSignal: holdSignal,
-            eventKind: event.kind
-        )
-    }
-
-    private func processActivations(toggleSignal: HotkeySignal?, holdSignal: HotkeySignal?) {
-        var activations: [(HotkeyAction, HotkeyOption)] = []
-
-        if toggleSignal == .activated {
-            activations.append((.toggle, toggleHotkey))
-        }
-        if holdSignal == .activated {
-            activations.append((.hold, holdHotkey))
-        }
-
-        activations.sort { lhs, rhs in
-            if lhs.1.isStrictSubset(of: rhs.1) {
-                return false
-            }
-            if rhs.1.isStrictSubset(of: lhs.1) {
-                return true
-            }
-            return lhs.0.sortOrder < rhs.0.sortOrder
-        }
-
-        for (action, hotkey) in activations {
-            handleActivation(for: action, hotkey: hotkey)
-        }
-    }
-
-    private func processDeactivations(
-        toggleSignal: HotkeySignal?,
-        holdSignal: HotkeySignal?,
-        eventKind: HotkeyEventKind
-    ) {
-        if toggleSignal == .deactivated {
-            handleDeactivation(for: .toggle, hotkey: toggleHotkey, eventKind: eventKind)
-        }
-        if holdSignal == .deactivated {
-            handleDeactivation(for: .hold, hotkey: holdHotkey, eventKind: eventKind)
-        }
-    }
-
-    private func handleActivation(for action: HotkeyAction, hotkey: HotkeyOption) {
-        if let pendingActivation,
-           pendingActivation.hotkey.isStrictSubset(of: hotkey)
-        {
-            cancelPendingActivation()
-            dispatch(action)
-            return
-        }
-
-        if shouldDelayActivation(for: action, hotkey: hotkey) {
-            schedulePendingActivation(for: action, hotkey: hotkey)
-            return
-        }
-
-        cancelPendingActivation()
-        dispatch(action)
-    }
-
-    private func handleDeactivation(
-        for action: HotkeyAction,
-        hotkey: HotkeyOption,
-        eventKind: HotkeyEventKind
-    ) {
-        if let pendingActivation,
-           pendingActivation.action == action,
-           pendingActivation.hotkey == hotkey
-        {
-            cancelPendingActivation()
-            if eventKind == .release {
-                dispatchShortTap(for: action)
-            }
-            return
-        }
-
-        if action == .hold {
-            dispatchHoldDeactivated()
-        }
-    }
-
-    private func shouldDelayActivation(for action: HotkeyAction, hotkey: HotkeyOption) -> Bool {
-        let otherHotkey = otherBinding(for: action)
-        return hotkey.isStrictSubset(of: otherHotkey)
-    }
-
-    private func schedulePendingActivation(for action: HotkeyAction, hotkey: HotkeyOption) {
-        cancelPendingActivation()
-
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            guard let pendingActivation = self.pendingActivation,
-                  pendingActivation.action == action,
-                  pendingActivation.hotkey == hotkey
-            else {
-                return
-            }
-
-            self.pendingActivation = nil
-            self.dispatch(action)
-        }
-
-        pendingActivation = PendingActivation(action: action, hotkey: hotkey, workItem: workItem)
-        queue.asyncAfter(deadline: .now() + overlapDelay, execute: workItem)
-    }
-
-    private func cancelPendingActivation() {
-        pendingActivation?.workItem.cancel()
-        pendingActivation = nil
-    }
-
-    private func dispatch(_ action: HotkeyAction) {
-        switch action {
-        case .toggle:
-            dispatchToggleActivated()
-        case .hold:
-            dispatchHoldActivated()
-        }
-    }
-
-    private func dispatchShortTap(for action: HotkeyAction) {
-        switch action {
-        case .toggle:
-            dispatchToggleActivated()
-        case .hold:
-            dispatchHoldActivated()
-            dispatchHoldDeactivated()
-        }
-    }
-
-    private func dispatchToggleActivated() {
-        DispatchQueue.main.async { [weak self] in
-            self?.onToggleActivated?()
-        }
-    }
-
-    private func dispatchHoldActivated() {
-        guard !holdDispatchActive else {
-            return
-        }
-
-        holdDispatchActive = true
-        DispatchQueue.main.async { [weak self] in
-            self?.onHoldActivated?()
-        }
-    }
-
-    private func dispatchHoldDeactivated() {
-        guard holdDispatchActive else {
-            return
-        }
-
-        holdDispatchActive = false
-        DispatchQueue.main.async { [weak self] in
-            self?.onHoldDeactivated?()
+        if toggleMatcher.onState(state) == .activated {
+            DispatchQueue.main.async { [weak self] in self?.onToggleActivated?() }
         }
     }
 
@@ -395,11 +228,6 @@ final class GlobalHotkeyBridge {
             modifiers: prospectiveState.modifiers,
             pressedKeys: prospectiveState.pressedKeys
         )
-            || holdHotkey.shouldConsume(
-                keyCode: keyCode,
-                modifiers: prospectiveState.modifiers,
-                pressedKeys: prospectiveState.pressedKeys
-            )
     }
 
     private func apply(_ event: HotkeyInputEvent) {
@@ -408,22 +236,10 @@ final class GlobalHotkeyBridge {
         pressedKeys = nextState.pressedKeys
     }
 
-    private func otherBinding(for action: HotkeyAction) -> HotkeyOption {
-        switch action {
-        case .toggle:
-            return holdHotkey
-        case .hold:
-            return toggleHotkey
-        }
-    }
-
     private func resetState() {
         activeModifiers = []
         pressedKeys.removeAll()
-        cancelPendingActivation()
         toggleMatcher.reset()
-        holdMatcher.reset()
-        holdDispatchActive = false
     }
 
     private func state(after event: HotkeyInputEvent) -> HotkeyState {
@@ -439,20 +255,6 @@ final class GlobalHotkeyBridge {
         }
 
         return HotkeyState(modifiers: event.modifiers, pressedKeys: nextPressedKeys)
-    }
-}
-
-private enum HotkeyAction: Equatable {
-    case toggle
-    case hold
-
-    var sortOrder: Int {
-        switch self {
-        case .toggle:
-            return 0
-        case .hold:
-            return 1
-        }
     }
 }
 
@@ -567,10 +369,4 @@ private struct HotkeyMatcher {
     mutating func reset() {
         isActive = false
     }
-}
-
-private struct PendingActivation {
-    let action: HotkeyAction
-    let hotkey: HotkeyOption
-    let workItem: DispatchWorkItem
 }

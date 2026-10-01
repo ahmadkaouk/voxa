@@ -3,7 +3,6 @@ import Foundation
 enum RecordingOrigin {
     case manual
     case hotkeyToggle
-    case hotkeyHold
 }
 
 enum ModelOption: String, CaseIterable, Identifiable {

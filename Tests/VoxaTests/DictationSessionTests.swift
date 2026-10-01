@@ -6,7 +6,7 @@ import XCTest
 #endif
 
 @MainActor
-private final class SessionRecorderFixture: DictationRecording {
+final class SessionRecorderFixture: DictationRecording {
     var starts: [UUID] = []
     var stops: [UUID] = []
     var cancels: [UUID] = []
@@ -42,7 +42,7 @@ private final class SessionRecorderFixture: DictationRecording {
 }
 
 @MainActor
-private final class SessionTranscriberFixture: DictationTranscribing {
+final class SessionTranscriberFixture: DictationTranscribing {
     var calls: [(Data, ModelOption, String)] = []
     var response = "  hello world \n"
     var error: TranscriptionError?
@@ -59,7 +59,7 @@ private final class SessionTranscriberFixture: DictationTranscribing {
 }
 
 @MainActor
-private final class SessionOutputFixture: DictationOutputting {
+final class SessionOutputFixture: DictationOutputting {
     var calls: [(String, OutputModeOption)] = []
     var submitTargets: [pid_t?] = []
     var copies: [String] = []
@@ -106,11 +106,12 @@ private extension DictationState {
 }
 
 @MainActor
-private final class SessionFixture {
+final class SessionFixture {
     let recorder = SessionRecorderFixture()
     let transcriber = SessionTranscriberFixture()
     let output = SessionOutputFixture()
     var timingLog: DictationTimingLog?
+    var textContext: (any TextContextCapturing)?
     var time = 0.0
     var pause: (TimeInterval) async throws -> Void = { _ in
         try await Task.sleep(nanoseconds: 1_000_000)
@@ -119,7 +120,7 @@ private final class SessionFixture {
                                        recorder: recorder, transcriber: transcriber, output: output,
                                        clock: DictationClock(now: { [unowned self] in self.time }, pause: { [unowned self] seconds in
         try await self.pause(seconds)
-    }), timingLog: timingLog)
+    }), timingLog: timingLog, textContext: textContext)
     func wait(_ phase: String) async throws { try await eventually { self.session.state.tag == phase } }
     func record() async throws { session.start(prepare: { "fixture-key" }); try await wait("recording") }
 }
@@ -133,7 +134,7 @@ enum DictationSessionChecks {
         var analysisCompleted = false
         var delivered: UUID?
         var feedbackTask: Task<Void, Never>?
-        f.session.onFeedbackTranscript = { _, text, key in
+        f.session.onFeedbackTranscript = { _, text, key, _ in
             analyzed = text
             feedbackTask = Task { await network.wait(); analysisCompleted = true }
         }
@@ -258,7 +259,7 @@ enum DictationSessionChecks {
     }
 
     static func restartDuringClipboardRestoration() async throws {
-        for origin in [RecordingOrigin.manual, .hotkeyToggle, .hotkeyHold] {
+        for origin in [RecordingOrigin.manual, .hotkeyToggle] {
             let f = SessionFixture()
             try unitExpect(f.session.updateSettings(.init(outputMode: .clipboardAutopaste, maxRecordingSeconds: 10)))
             let cleanup = PipelineGate()
@@ -289,7 +290,7 @@ enum DictationSessionChecks {
             f.output.gate = nil
             f.output.result = .copied
             f.transcriber.response = "Second dictation"
-            if origin == .hotkeyHold { f.session.holdReleased() } else { f.session.stop() }
+            f.session.stop()
             try await f.wait("idle")
             try unitEqual(f.session.lastTranscript, "Second dictation")
             try unitEqual(f.session.lastOutcome, .copied)
@@ -343,7 +344,7 @@ enum DictationSessionChecks {
     }
 
     static func commandsInterruptMeterWait() async throws {
-        for command in ["stop", "toggle", "release", "cancel", "shutdown"] {
+        for command in ["stop", "toggle", "cancel", "shutdown"] {
             let f = SessionFixture()
             var waiting = false
             var interrupted = false
@@ -352,14 +353,13 @@ enum DictationSessionChecks {
                 do { try await Task.sleep(nanoseconds: 30_000_000_000) }
                 catch is CancellationError { interrupted = true; throw CancellationError() }
             }
-            let id = f.session.start(origin: command == "release" ? .hotkeyHold : .manual,
+            let id = f.session.start(origin: .manual,
                                      prepare: { "fixture-key" })!
             try await eventually { waiting }
             var shutdown: Task<Void, Never>?
             switch command {
             case "stop": f.session.stop(); f.session.stop()
             case "toggle": f.session.toggle(prepare: { "ignored" })
-            case "release": f.session.holdReleased()
             case "cancel": f.session.cancel(); f.session.stop()
             default: shutdown = Task { await f.session.shutdown() }
             }
@@ -417,9 +417,9 @@ enum DictationSessionChecks {
             let f = SessionFixture()
             let starting = PipelineGate()
             f.recorder.startGate = starting
-            let id = f.session.start(origin: .hotkeyHold, prepare: { "fixture-key" })!
+            let id = f.session.start(origin: .hotkeyToggle, prepare: { "fixture-key" })!
             try await eventually { starting.entered }
-            f.session.holdReleased()
+            f.session.stop()
             if cancel { f.session.cancel() }
             f.session.stop() // cannot undo cancellation
             try unitEqual(f.session.state.tag, "starting")
@@ -442,7 +442,7 @@ enum DictationSessionChecks {
             else { f.session.start(origin: origin, prepare: { "fixture-key" }) }
             try await f.wait("recording")
             try unitEqual(f.session.state.context?.origin, origin)
-            f.session.holdReleased(); f.session.start(origin: .hotkeyHold, prepare: { "other-key" })
+            f.session.start(origin: .hotkeyToggle, prepare: { "other-key" })
             try unitEqual(f.session.state.tag, "recording")
             try unitEqual(f.recorder.starts.count, 1)
             f.session.toggle(prepare: { "ignored" })
@@ -590,12 +590,12 @@ enum DictationSessionChecks {
         for command in ["stop", "cancel", "shutdown"] {
             let f = SessionFixture()
             let gate = PipelineGate()
-            f.session.start(origin: .hotkeyHold, prepare: { await gate.wait(); return "fixture-key" })
+            f.session.start(origin: .hotkeyToggle, prepare: { await gate.wait(); return "fixture-key" })
             try unitEqual(f.session.state.tag, "starting")
             try await eventually { gate.entered }
             var shutdown: Task<Void, Never>?
             switch command {
-            case "stop": f.session.holdReleased()
+            case "stop": f.session.stop()
             case "cancel": f.session.cancel()
             default:
                 shutdown = Task { await f.session.shutdown() }
@@ -651,16 +651,16 @@ enum DictationSessionChecks {
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
         ("session: feedback is independent, opt-in and preserves delivered text", feedbackNeverBlocksDelivery),
-        ("session: Enter submits only its own recording", finishAndSubmit),
+        ("session: Finish & Send submits only its own recording", finishAndSubmit),
         ("session: timing breakdown, clipboard cleanup and overlapping recordings", timingBreakdownAndOverlappingCleanup),
         ("session: opt-in timing, cancellation, API errors and log failures", timingFailuresAndConfiguration),
         ("session: restart while clipboard restores and ignore stale completion", restartDuringClipboardRestoration),
         ("session: clipboard restoration outcomes and shutdown barrier", clipboardRestorationCompletionAndShutdown),
-        ("session: stop, toggle, hold release, cancel and shutdown interrupt the meter wait", commandsInterruptMeterWait),
-        ("session: preparation release, cancellation, shutdown and recovery", preparationCommandsAndRecovery),
+        ("session: stop, toggle, cancel and shutdown interrupt the meter wait", commandsInterruptMeterWait),
+        ("session: preparation stop, cancellation, shutdown and recovery", preparationCommandsAndRecovery),
         ("session: one ordered workflow and output completion", workflowAndOutputCompletion),
-        ("session: hold release and cancellation during startup", startupStopAndCancel),
-        ("session: hold/toggle origins and busy commands", originsAndBusyCommands),
+        ("session: stop and cancellation during startup", startupStopAndCancel),
+        ("session: manual/toggle origins and busy commands", originsAndBusyCommands),
         ("session: stop/cancel race and cleanup before restart", cancelDuringStopAndCleanup),
         ("session: exact clock limit and settings snapshots", clockLimitAndSettings),
         ("session: capture, transcription and output error recovery", errorsAndRecovery),
