@@ -12,9 +12,9 @@ struct LearningProgressView: View {
             VStack(alignment: .leading, spacing: 26) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("Your English, over time.").font(.system(size: 23, weight: .semibold))
-                        Text("A picture of how you express your ideas while you work.")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                        Text("Progress").font(.title2.weight(.semibold))
+                        Text("Patterns and expression from your everyday dictation.")
+                            .font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button("Clear progress…") { confirmClear = true }
@@ -26,33 +26,33 @@ struct LearningProgressView: View {
                         Button("Retry") { progress.retry() }.disabled(progress.isSaving)
                     }
                 }
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("English expression · Estimated from dictation")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                    Text(profile.label).font(.system(size: profile.ready ? 36 : 24, weight: .medium, design: .rounded))
-                    Text(profile.ready ? profile.trend : profile.guidance).font(.system(size: 12)).foregroundStyle(.secondary)
-                    Text(profile.coverage).font(.system(size: 11)).foregroundStyle(.secondary)
-                    if profile.ready {
-                        Divider().padding(.vertical, 2)
-                        ForEach(ExpressionDimension.allCases, id: \.self) { dimension in
-                            HStack {
-                                Text(dimension.label).font(.system(size: 13))
-                                Spacer()
-                                Text(ExpressionProfile.label(profile.median(dimension)))
-                                    .font(.system(size: 13, weight: .medium)).foregroundStyle(FeedbackPalette.accent)
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("English expression · Estimated from dictation")
+                            .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                        Text(profile.label).font(.system(size: profile.ready ? 34 : 24, weight: .medium))
+                        Text(profile.ready ? profile.trend : profile.guidance).font(.system(size: 12)).foregroundStyle(.secondary)
+                        Text(profile.coverage).font(.system(size: 11)).foregroundStyle(.secondary)
+                        if profile.ready {
+                            Divider().padding(.vertical, 2)
+                            ForEach(ExpressionDimension.allCases, id: \.self) { dimension in
+                                HStack {
+                                    Text(dimension.label).font(.system(size: 13))
+                                    Spacer()
+                                    Text(ExpressionProfile.label(profile.median(dimension)))
+                                        .font(.system(size: 13, weight: .medium)).foregroundStyle(FeedbackPalette.accent)
+                                }
                             }
+                            if let focus = profile.nextFocus {
+                                Text("Try next · " + focus.practiceAdvice)
+                                    .font(.system(size: 12, weight: .medium)).padding(.top, 6)
+                            }
+                        } else {
+                            Text("Short or uncertain samples won’t pull your level down. Grammar-only history stays saved; the broader estimate starts with new dictations.")
+                                .font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(3)
                         }
-                        if let focus = profile.nextFocus {
-                            Text("Try next · " + focus.practiceAdvice)
-                                .font(.system(size: 12, weight: .medium)).padding(.top, 6)
-                        }
-                    } else {
-                        Text("Short or uncertain samples won’t pull your level down. Grammar-only history stays saved; the broader estimate starts with new dictations.")
-                            .font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(3)
-                    }
+                    }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(22).frame(maxWidth: .infinity, alignment: .leading)
-                .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
                 Text(ExpressionProfile.limitation).font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(3)
 
                 if !progress.patterns.isEmpty {
@@ -78,9 +78,9 @@ struct LearningProgressView: View {
                 }
                 Text("Stored on this Mac: assessment bands, word counts, speaking-task categories and pattern counts from up to 200 dictations. The level estimate uses up to 30 qualifying samples from the last 90 days. No dictated text is kept in progress.")
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(3)
-            }.padding(28)
+            }.frame(maxWidth: 680, alignment: .leading).padding(28).frame(maxWidth: .infinity)
         }
-        .frame(minWidth: 720, idealWidth: 780, minHeight: 520, idealHeight: 600)
+        .frame(minWidth: 500, idealWidth: 760, minHeight: 520, idealHeight: 600)
         .alert("Clear your learning progress?", isPresented: $confirmClear) {
             Button("Clear progress", role: .destructive) { progress.clear() }
             Button("Cancel", role: .cancel) {}

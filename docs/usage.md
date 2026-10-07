@@ -28,7 +28,7 @@ and quit Voxa first. The installer preserves a signed backup of the previous app
 
 ### Set up Voxa
 
-1. Open Voxa from the menu bar and choose **Voxa Settings…**. Save your OpenAI API
+1. Open Voxa from the menu bar and choose **Voxa Settings… → API Key**. Save your OpenAI API
    key; Voxa stores it in macOS Keychain.
 2. Allow the permissions needed for the features you use:
 
@@ -55,7 +55,8 @@ the relevant System Settings page. Return to Voxa after granting access.
 | Finish & Send | Press **Option + G** while recording in Autopaste mode |
 | Discard a recording | Press **Esc** while recording (also cancels microphone startup) |
 
-Change shortcuts in **Voxa Settings…**.
+Change shortcuts in **Voxa Settings… → Shortcuts**. **General** contains the
+transcription model, output mode, recording limit and permission status.
 Press **Esc** while capturing a shortcut to cancel without closing Settings.
 **Max Recording** sets the recording limit; the default is five minutes. Transcription begins after
 recording finishes. Discarding a recording skips transcription and output.
@@ -156,8 +157,16 @@ Progress tracks up to 200 recent reviews automatically while feedback is enabled
 Repeated mistakes are counted by rule, and correct use of previously encountered
 patterns is recognised in later dictations, including those with no corrections.
 Absence of an error does not count as a success; an actual source example is
-required. Counts are per review, not a mastery percentage. The Progress tab shows
+required. Counts are per review, not a mastery percentage. **Progress** in the sidebar shows
 the broader expression profile, its coverage, and patterns to practise.
+
+The English Learning window uses a Notes-style sidebar, lesson list and reading
+pane. **All Lessons**, **Corrections**, and **Natural Phrasing** filter the library;
+lessons with an optional alternative also appear under Natural Phrasing. Search
+matches the wording, explanation and pattern. The reading pane keeps the full
+original and corrected sentences available. **Practice** shows the next short
+review, and **Progress** shows your expression profile. Resize the window or drag
+the divider beside the lesson list to give the text more room.
 
 A failed save keeps the review open. While feedback is visible, ⌘S saves it and
 Esc closes it. During recording, Esc discards the recording before transcription
@@ -216,7 +225,8 @@ already sent cannot be recalled. Practice never captures context.
 
 Settings group feedback and its optional context together. Short descriptions sit
 beside the controls; **Data & privacy** contains the detailed sending, storage and
-practice information. **Lessons & Progress…** opens saved lessons and your profile.
+practice information without a disclosure control. **Open English Learning** opens
+the library, practice and progress sidebar.
 
 ### Dictation data
 

@@ -214,6 +214,12 @@ lessons queues removal of their review records and cancels an affected active ex
 
 ## Settings, credentials, and permissions
 
+`SettingsViews` presents grouped controls inside a native navigation sidebar.
+`EnglishLearningView` presents library filters, a searchable lesson list and a
+reading pane, alongside practice and progress destinations. These views use the
+existing controllers and stores; category filters and search never alter history.
+Shortcut capture stops when leaving its settings pane or deactivating the app.
+
 `PreferencesStore` validates and saves one versioned UserDefaults value under
 `nativePreferences.v1`. Existing settings keep the same format and storage key.
 A first launch saves the defaults; invalid saved settings produce a recoverable

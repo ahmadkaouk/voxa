@@ -7,8 +7,10 @@ private struct PreviewFeedback: FeedbackAnalyzing {
 }
 
 private actor PreviewLessons: CorrectionStoring {
-    func load() -> [SavedCorrection] { [] }
-    func save(_ corrections: [SavedCorrection]) {}
+    var lessons: [SavedCorrection]
+    init(_ lessons: [SavedCorrection] = []) { self.lessons = lessons }
+    func load() -> [SavedCorrection] { lessons }
+    func save(_ corrections: [SavedCorrection]) { lessons = corrections }
 }
 
 private actor PreviewProgress: LearningProgressStoring {
@@ -210,21 +212,48 @@ private enum FeedbackPreview {
         try await render(FeedbackReviewView(controller: clean), name: "review-clean", scheme: .light)
         await clean.shutdown()
 
-        let contextSettings = Form {
-            Section("Hotkeys") {
-                SettingsShortcutRow(title: "Start / Stop", detail: "Press again to finish and paste.",
-                    shortcut: "Opt+F", onRecord: {}, onCancel: {})
-                SettingsShortcutRow(title: "Finish & Send", detail: "While recording, paste and press Return.",
-                    shortcut: "Opt+G", onRecord: {}, onCancel: {})
-            }
-            Section("English Learning") {
+        let contextSettings = SettingsSidebarLayout(selection: .constant(.learning)) {
+            SettingsPage(title: "English Learning", subtitle: "Turn everyday dictation into a little practice.") {
                 EnglishLearningSettingsView(feedbackEnabled: .constant(true), contextEnabled: .constant(true),
                     excludedApps: [.init(bundleID: "example.private", name: "Private workspace")],
                     hasAccessibility: true, onExclude: { _ in }, onAllow: { _ in }, onOpenLessons: {})
             }
-        }.formStyle(.grouped).frame(width: 480, height: 590)
+        }.frame(width: 820, height: 620)
         try await render(contextSettings, name: "context-settings-light", scheme: .light)
         try await render(contextSettings, name: "context-settings-dark", scheme: .dark)
+        let generalSettings = SettingsSidebarLayout(selection: .constant(.general)) {
+            GeneralSettingsView(model: .constant(.gptTranscribe), output: .constant(.clipboardAutopaste),
+                duration: .constant(300), permissions: .init(microphone: .authorized, accessibility: true, inputMonitoring: true))
+        }.frame(width: 820, height: 620)
+        try await render(generalSettings, name: "settings-general-light", scheme: .light)
+        try await render(generalSettings, name: "settings-general-dark", scheme: .dark)
+        try await render(SettingsSidebarLayout(selection: .constant(.apiKey)) {
+            APIKeySettingsView(configured: true, source: "keychain", input: .constant(""), onSave: {})
+        }.frame(width: 760, height: 560), name: "settings-key-small", scheme: .light)
+
+        let lessons = [correction, phrasing] + earlierLessons
+        let library = FeedbackController(store: PreviewLessons(lessons.enumerated().map { index, lesson in
+            SavedCorrection(id: UUID(), date: now.addingTimeInterval(Double(-index) * 86_400), feedback: lesson)
+        }), progressStore: PreviewProgress(history))
+        let practiceHistory = PracticeHistory(store: PreviewPracticeHistory())
+        for _ in 0..<200 where !library.storageReady || !library.progress.ready || !practiceHistory.ready {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, onShortReview: {})
+            .frame(width: 1060, height: 680), name: "learning-library-light", scheme: .light)
+        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, onShortReview: {})
+            .frame(width: 1060, height: 680), name: "learning-library-dark", scheme: .dark)
+        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, initialSection: .phrasing)
+            .frame(width: 940, height: 560), name: "learning-library-small", scheme: .light)
+        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, initialSearch: "indirect")
+            .frame(width: 1060, height: 680), name: "learning-search", scheme: .light)
+        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, initialSearch: "no matching lesson")
+            .frame(width: 940, height: 560), name: "learning-search-empty", scheme: .light)
+        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, onShortReview: {}, initialSection: .practice)
+            .frame(width: 1060, height: 680), name: "learning-practice", scheme: .light)
+        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, initialSection: .progress)
+            .frame(width: 1060, height: 680), name: "learning-progress", scheme: .light)
+        await library.shutdown()
 
         let practice = PracticeController(evaluator: PreviewPracticeEvaluator(), historyStore: PreviewPracticeHistory())
         practice.prepare = { _ in .init(apiKey: "synthetic-preview", model: .gptTranscribe) }

@@ -28,9 +28,13 @@ explanations, and the distinction between errors and optional alternatives.
 ## Manual release checks
 
 - Dictation and Finish & Send complete before feedback appears; the destination keeps focus.
-- Settings present one English Learning group, short per-control descriptions and
-  expandable Data & privacy details. Nearby text is visually subordinate to feedback;
-  exclusions remain manageable and Lessons & Progress opens the learning window.
+- Settings use a native sidebar with General, Shortcuts, English Learning and API Key.
+  English Learning keeps feedback, context, exclusions and privacy in grouped rows.
+  Privacy details remain expanded; Open English Learning opens the learning window.
+- The learning sidebar switches between the complete library, corrections, natural
+  phrasing, practice and progress. Search updates the list and selected lesson;
+  optional alternatives also appear in Natural Phrasing. Verify empty results,
+  selection after deleting a lesson, resizing, and light/dark appearance.
 - The former Hold to Record control is replaced by an editable Finish & Send chord.
   Plain Return/keypad Enter must pass through during recording. Finish & Send only
   acts during Autopaste recording, swallows repeated keydowns and the eventual keyup,
@@ -130,10 +134,14 @@ explanations, and the distinction between errors and optional alternatives.
 fixtures in light/dark appearances, a compact single correction, paired alternatives,
 alternative-only feedback with/without a template and on a small display,
 a full rewrite, a small review panel, a clean review and the
-Progress tab, plus repetition, new-example, result, short-review and automatic-context settings screens. It uses
+Progress view, plus repetition, new-example, result, short-review and automatic-context settings screens. It uses
 memory-only stores and no microphone, Keychain or API calls.
 Generated PNGs are in `.build/feedback-previews/`. This verifies layout separately
 from linguistic quality; the deterministic suite does not measure model accuracy.
+For native sidebars and toolbar materials, build `./scripts/preview-workspace.sh`
+and open `.build/workspace-preview/Voxa Workspace Preview.app`. Static bitmap
+renders can omit vibrancy and selection layers; use the live window for those
+checks. The Preview menu changes only the fixture app's appearance.
 
 `bash scripts/check-text-context.sh` opens a temporary native editor and message
 using synthetic text, runs the production AX extraction against that process only,

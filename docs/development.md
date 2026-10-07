@@ -16,6 +16,7 @@ behavior. All commands below run from the repository root.
 | `test-install.sh` | Exercise installation and recovery in temporary directories using two supplied signed apps. |
 | `preview-overlay.sh` | Build an optional visual preview without recording or transcription. |
 | `preview-feedback.sh` | Render native feedback and learning views with isolated sample data. |
+| `preview-workspace.sh` | Build an interactive Settings and English Learning preview with in-memory fixtures. |
 | `check-text-context.sh` | Inspect focused editor context without recording or an API request. |
 
 ## Build and check
@@ -133,6 +134,12 @@ and practice views under `.build/feedback-previews/`. It uses synthetic findings
 and in-memory storage, without microphone capture, credentials or user history.
 Check short and long comparisons, insertions/deletions, optional phrasing,
 recognition issues, light/dark appearance and a constrained panel height.
+
+Use `./scripts/preview-workspace.sh` and open
+`.build/workspace-preview/Voxa Workspace Preview.app` to verify native sidebars,
+toolbar materials, search and window resizing. Press Command-comma for Settings;
+the Preview menu switches light/dark appearance for the fixture app only. It uses
+in-memory lessons and preferences, with no credentials or microphone access.
 
 `./scripts/test.sh output --live` opens a temporary text window to
 check the actual paste shortcut, selection replacement, Unicode, and clipboard

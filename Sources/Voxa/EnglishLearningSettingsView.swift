@@ -50,71 +50,64 @@ struct EnglishLearningSettingsView: View {
     var onAllow: (String) -> Void
     var onOpenLessons: () -> Void
     @SettingsViewState private var showExcludedApps = false
-    @SettingsViewState private var showPrivacy = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Toggle(isOn: $feedbackEnabled) {
-                SettingsControlLabel(title: "Feedback after dictation",
-                    detail: "Corrections, natural phrasing and short practice.")
-            }.disabled(!canEdit)
+        Form {
+            Section {
+                Toggle(isOn: $feedbackEnabled) {
+                    SettingsControlLabel(title: "Feedback after dictation",
+                        detail: "Corrections, natural phrasing and short practice.")
+                }.disabled(!canEdit)
+                    .accessibilityLabel("Feedback after dictation")
+                    .accessibilityHint("Corrections, natural phrasing and short practice.")
+            } header: { Text("Feedback") } footer: {
+                Text("Feedback appears for five seconds. Hover to keep reading, or pin it to keep it open.")
+            }
 
-            VStack(alignment: .leading, spacing: 10) {
+            Section {
                 Toggle(isOn: $contextEnabled) {
                     SettingsControlLabel(title: "Use nearby text automatically",
-                        detail: "Helps feedback fit what you’re working on. Text only.")
+                        detail: "Help feedback fit what you’re working on.")
                 }.disabled(!canEdit || !feedbackEnabled)
+                    .accessibilityLabel("Use nearby text automatically")
+                    .accessibilityHint("Help feedback fit what you’re working on.")
                 HStack {
-                    Text(excludedApps.isEmpty ? "Available apps" : "\(excludedApps.count) excluded \(excludedApps.count == 1 ? "app" : "apps")")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Manage exclusions…") { showExcludedApps = true }
-                        .buttonStyle(.link).font(.system(size: 12)).disabled(!canEdit)
+                    LabeledContent("Excluded apps", value: excludedApps.isEmpty ? "None" : "\(excludedApps.count)")
+                    Button("Manage…") { showExcludedApps = true }.disabled(!canEdit)
+                        .accessibilityLabel("Manage excluded apps")
                 }
                 if feedbackEnabled && contextEnabled && !hasAccessibility {
-                    HStack(alignment: .top) {
-                        Label("Needs Accessibility access", systemImage: "info.circle").font(.system(size: 12))
+                    HStack {
+                        Label("Needs Accessibility access", systemImage: "info.circle")
                         Spacer()
                         Button("Open Settings…") { Permissions.openSettings("Accessibility") }
-                    }
+                    }.font(.callout)
                 }
+            } header: { Text("Context") } footer: {
+                Text("Only a short text excerpt is sent. Password fields and excluded apps are skipped. Dictation continues when context is unavailable.")
             }
-            .padding(.leading, 16)
-            .overlay(alignment: .leading) { Rectangle().fill(.primary.opacity(0.1)).frame(width: 2) }
 
-            Text("Feedback and optional context are sent to your feedback service, with additional API usage.")
-                .font(.system(size: 12)).foregroundStyle(.secondary).lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-            Divider()
-            HStack {
-                Button("Lessons & Progress…", action: onOpenLessons).buttonStyle(.link)
-                Spacer()
-                HStack(spacing: 6) {
-                    keycap(FeedbackShortcut.saveLabel); Text("Save")
-                    keycap(FeedbackShortcut.discardLabel); Text("Close")
-                }.font(.system(size: 11)).foregroundStyle(.secondary)
-                    .help("These keys act only while feedback is visible. Save keeps every lesson; Close dismisses the review. Progress is recorded automatically.")
+            Section("Your learning") {
+                HStack {
+                    SettingsControlLabel(title: "Lessons, practice and progress",
+                        detail: "Revisit the patterns you’ve saved.")
+                    Spacer()
+                    Button("Open English Learning", action: onOpenLessons)
+                }
+                LabeledContent("Save feedback", value: "⌘S")
+                LabeledContent("Close feedback", value: "Esc")
             }
-            DisclosureGroup("Data & privacy", isExpanded: $showPrivacy) {
-                VStack(alignment: .leading, spacing: 12) {
-                    detail("Sent", "Your dictation, plus a short excerpt from the active app when context is on. No screenshots.")
-                    detail("Kept on this Mac", "Saved lessons, level estimates, pattern counts and review dates. Full dictations and captured context aren’t saved.")
-                    detail("Practice", "Spoken answers use transcription; typed answers send text only. Answers and audio aren’t saved on this Mac.")
-                    detail("Your level", "Assessed from your own dictation, never from nearby text or practice answers.")
-                    detail("Context controls", "Password fields and excluded apps are skipped. App support varies; dictation continues without context when needed. Turning context off cancels pending feedback that used it.")
-                    Link("OpenAI data retention details", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
-                        .font(.system(size: 12))
-                }.padding(.top, 8)
-            }.font(.system(size: 12))
+
+            Section("Data & privacy") {
+                detail("Sent to your feedback service", "Your dictation and optional nearby text. No screenshots. Feedback uses additional API requests.")
+                detail("Stored on this Mac", "Saved lessons, level estimates, pattern counts and review dates. Full dictations, captured context, practice answers and audio aren’t saved.")
+                detail("Your level", "Estimated from your own dictation. Nearby text and practice answers don’t affect it.")
+                Link("OpenAI data retention details", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
+            }
         }
-        .padding(.vertical, 5)
+        .formStyle(.grouped)
+        .toggleStyle(.switch)
         .sheet(isPresented: $showExcludedApps) { exclusions }
-    }
-
-    private func keycap(_ key: String) -> some View {
-        Text(key).font(.system(size: 10, weight: .medium, design: .monospaced))
-            .frame(width: 20, height: 20)
-            .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
     }
 
     private func detail(_ title: String, _ text: String) -> some View {
