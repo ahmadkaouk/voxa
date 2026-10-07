@@ -171,11 +171,16 @@ the broader expression profile, its coverage, and patterns to practise.
 
 The English Learning window uses a Notes-style sidebar, lesson list and reading
 pane. **All Lessons**, **Corrections**, and **Natural Phrasing** filter the library;
-lessons with an optional alternative also appear under Natural Phrasing. Search
-matches the wording, explanation and pattern. The reading pane keeps the full
+lessons with an optional alternative also appear under Natural Phrasing. The native
+search field at the top of the sidebar matches the wording, explanation and pattern
+within the selected category. Searching from Practice or Progress opens All Lessons.
+The reading pane keeps the full
 original and corrected sentences available. **Practice** shows the next short
 review, and **Progress** shows your expression profile. Resize the window or drag
 the divider beside the lesson list to give the text more room.
+
+Settings also has a sidebar search. Search for a page or a control, such as
+“microphone”, “shortcuts” or “Keychain”, then choose the matching page.
 
 A failed save keeps the review open. While feedback is visible, ⌘S saves it and
 Esc closes it. During recording, Esc discards the recording before transcription

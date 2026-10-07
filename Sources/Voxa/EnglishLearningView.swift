@@ -81,18 +81,19 @@ struct SavedCorrectionsView: View {
             List(selection: $section) {
                 Section("Library") {
                     ForEach([LearningSection.allLessons, .corrections, .phrasing]) { item in
-                        Label(item.title, systemImage: item.symbol)
+                        VoxaSidebarLabel(title: item.title, symbol: item.symbol)
                             .badge(item.lessons(in: controller.saved).count)
-                            .padding(.vertical, 4).tag(item)
+                            .tag(item)
                     }
                 }
                 Section("Learning") {
                     ForEach([LearningSection.practice, .progress]) { item in
-                        Label(item.title, systemImage: item.symbol).padding(.vertical, 4).tag(item)
+                        VoxaSidebarLabel(title: item.title, symbol: item.symbol).tag(item)
                     }
                 }
             }
             .listStyle(.sidebar)
+            .environment(\.sidebarRowSize, .small)
             .safeAreaInset(edge: .bottom) {
                 Label("On this Mac", systemImage: "internaldrive")
                     .font(.caption).foregroundStyle(.secondary)
@@ -110,11 +111,14 @@ struct SavedCorrectionsView: View {
                 }
             }
             .navigationTitle(currentSection.title)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .textBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 940, idealWidth: 1060, minHeight: 560, idealHeight: 680)
+        .searchable(text: $search, placement: .sidebar, prompt: "Search lessons")
+        .tint(VoxaAppearance.blue)
+        .accentColor(VoxaAppearance.blue)
+        .frame(minWidth: 940, idealWidth: 1060, minHeight: 560, idealHeight: 680, alignment: .topLeading)
         .toolbar {
             if let onShortReview, currentSection.isLibrary {
                 Button(action: onShortReview) { Label("Review", systemImage: "arrow.triangle.2.circlepath") }
@@ -131,6 +135,9 @@ struct SavedCorrectionsView: View {
         }
         .onChange(of: lessons.map(\.id)) { ids in
             if !ids.contains(where: { $0 == selection }) { selection = ids.first }
+        }
+        .onChange(of: search) { query in
+            if !query.isEmpty && !currentSection.isLibrary { section = .allLessons }
         }
         .alert("Delete all saved lessons?", isPresented: $confirmDeleteAll) {
             Button("Delete all", role: .destructive) { controller.deleteAll() }
@@ -150,16 +157,6 @@ struct SavedCorrectionsView: View {
             }
             HSplitView {
                 VStack(spacing: 0) {
-                    HStack {
-                        TextField("Search lessons", text: $search).textFieldStyle(.roundedBorder)
-                            .accessibilityLabel("Search lessons")
-                        if !search.isEmpty {
-                            Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
-                                .buttonStyle(.plain).foregroundStyle(.secondary).help("Clear search")
-                                .accessibilityLabel("Clear lesson search")
-                        }
-                    }.padding(12)
-                    Divider()
                     List(lessons, selection: $selection) { item in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.feedback.focus?.label ?? item.feedback.kind.label)

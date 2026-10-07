@@ -22,19 +22,38 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .apiKey: return "key"
         }
     }
+
+    func matches(_ query: String) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keywords: String
+        switch self {
+        case .general: keywords = "dictation transcription model output recording limit microphone accessibility input monitoring permissions"
+        case .shortcuts: keywords = "keyboard start stop finish send save feedback cancel close escape"
+        case .learning: keywords = "English feedback lessons corrections practice context excluded apps"
+        case .apiKey: keywords = "OpenAI API key connection credentials storage Keychain"
+        }
+        return query.isEmpty || (title + " " + keywords).localizedStandardContains(query)
+    }
 }
 
 struct SettingsSidebarLayout<Content: View>: View {
     @Binding var selection: SettingsPane?
+    @SettingsState private var search = ""
     @ViewBuilder var content: Content
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsPane.allCases, selection: $selection) { pane in
-                Label(pane.title, systemImage: pane.symbol)
-                    .padding(.vertical, 5).tag(pane)
+            List(selection: $selection) {
+                sidebarSection("Voxa", panes: [.general, .shortcuts, .learning])
+                sidebarSection("Connection", panes: [.apiKey])
             }
             .listStyle(.sidebar)
+            .environment(\.sidebarRowSize, .small)
+            .overlay {
+                if !SettingsPane.allCases.contains(where: { $0.matches(search) }) {
+                    Text("No settings found").font(.callout).foregroundStyle(.secondary)
+                }
+            }
             .navigationTitle("Voxa Settings")
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
         } detail: {
@@ -43,7 +62,22 @@ struct SettingsSidebarLayout<Content: View>: View {
                 .navigationTitle((selection ?? .general).title)
         }
         .navigationSplitViewStyle(.balanced)
+        .searchable(text: $search, placement: .sidebar, prompt: "Search")
+        .tint(VoxaAppearance.blue)
+        .accentColor(VoxaAppearance.blue)
         .frame(minWidth: 760, idealWidth: 820, minHeight: 560, idealHeight: 620, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func sidebarSection(_ title: String, panes: [SettingsPane]) -> some View {
+        let matching = panes.filter { $0.matches(search) }
+        if !matching.isEmpty {
+            Section(title) {
+                ForEach(matching) { pane in
+                    VoxaSidebarLabel(title: pane.title, symbol: pane.symbol).tag(pane)
+                }
+            }
+        }
     }
 }
 

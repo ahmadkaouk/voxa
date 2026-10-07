@@ -6,11 +6,7 @@ import SwiftUI
 private typealias FeedbackViewState<Value> = SwiftUI.State<Value>
 
 enum FeedbackPalette {
-    static let addedText = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.55, green: 0.76, blue: 1, alpha: 1)
-            : NSColor(srgbRed: 0, green: 0.32, blue: 0.68, alpha: 1)
-    }
+    static let addedText = NSColor.systemBlue
     static let added = Color.primary
     static let addedBackground = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua

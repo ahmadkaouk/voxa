@@ -29,10 +29,13 @@ explanations, and the distinction between errors and optional alternatives.
 
 - Dictation and Finish & Send complete before feedback appears; the destination keeps focus.
 - Settings use a native sidebar with General, Shortcuts, English Learning and API Key.
+  Native sidebar search filters pages by title and control keywords; clearing it
+  restores all pages. Verify system-blue selection and compact icon rows.
   English Learning keeps feedback, context, exclusions and privacy in grouped rows.
   Privacy details remain expanded; Open English Learning opens the learning window.
 - The learning sidebar switches between the complete library, corrections, natural
-  phrasing, practice and progress. Search updates the list and selected lesson;
+  phrasing, practice and progress. Native sidebar search updates the list and selected lesson;
+  searching from Practice or Progress opens All Lessons.
   optional alternatives also appear in Natural Phrasing. Verify empty results,
   selection after deleting a lesson, resizing, and light/dark appearance.
 - The former Hold to Record control is replaced by an editable Finish & Send chord.
