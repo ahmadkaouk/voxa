@@ -54,11 +54,14 @@ explanations, and the distinction between errors and optional alternatives.
   the score. The model must ignore those instructions, retain the speaker's meaning,
   ground every finding/assessment in the transcript, and avoid copying contextual
   private details into saved lessons. Fixture tests cannot establish model adherence.
-- Corrections lead with small word-level changes and a Remember rule. Full Before / After
-  sentences stay visible below them; neutral highlights identify changes. Optional
-  wording and its explanation stay visible next. No section is collapsed.
+- Each correction contains its full Before / After sentence with blue changed words.
+  Click the correction or Why? to show/hide its explanation, Remember rule and practice
+  action. The sentence stays visible. Compatible fixes in one sentence share a comparison
+  with their own explanations; conflicting edits stay separate. Verify the floating panel
+  grows and shrinks when details toggle, without clipping content or moving the footer out
+  of reach. Optional wording and its explanation stay visible next.
 - Verify the same neutral background across header, body and footer in light/dark
-  appearance. Only Save is blue. The compact recorder is solid black with no border,
+  appearance. Changes and Save use blue. The compact recorder is solid black with no border,
   a live microphone waveform, elapsed time and a stop control. Drag its timer/waveform
   area; the position survives a new recording and relaunch. It hides after completion
   or cancellation and never appears while idle. Check silence and Reduced Motion.
@@ -141,7 +144,9 @@ from linguistic quality; the deterministic suite does not measure model accuracy
 For native sidebars and toolbar materials, build `./scripts/preview-workspace.sh`
 and open `.build/workspace-preview/Voxa Workspace Preview.app`. Static bitmap
 renders can omit vibrancy and selection layers; use the live window for those
-checks. The Preview menu changes only the fixture app's appearance.
+checks. The Preview menu changes only the fixture app's appearance. Its Feedback Panel
+command opens the production floating panel with synthetic corrections and pins it for
+click and resize checks.
 
 `bash scripts/check-text-context.sh` opens a temporary native editor and message
 using synthetic text, runs the production AX extraction against that process only,

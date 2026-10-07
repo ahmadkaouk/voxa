@@ -98,16 +98,17 @@ Enable **Voxa Settings → English Learning → Feedback after dictation** for
 background English coaching. Dictation is inserted normally and never rewritten;
 feedback failures do not interrupt it.
 
-The review shows changed words first, followed by a short **Remember** rule and a
-**Try once** action for practice. Full **Before / After** sentences stay visible
-below the changes, with deleted words struck through and replacements highlighted
-in neutral gray. Independent corrections in the same sentence are combined when
-they agree. Conflicting suggestions remain separate comparisons.
+Each correction shows its full **Before / After** sentence, with blue highlights
+on changed words and a strike through removed wording. Click the correction or
+**Why?** to reveal its explanation, **Remember** rule and **Try once** practice
+action. Click again to hide those details; the full sentence stays visible.
+Independent corrections in the same sentence share one comparison and keep their
+explanations together. Conflicting suggestions remain separate comparisons.
 
-**Optional wording** stays visible after the full sentences, with a short explanation
-and any reusable pattern. There are no collapsed sections. Short reviews fit their
+**Optional wording** stays visible after the corrections, with a short explanation
+and any reusable pattern. Short reviews fit their
 content; longer reviews scroll above the fixed action bar. The panel uses one
-uniform neutral background in light and dark appearance; blue is reserved for Save.
+uniform neutral background in light and dark appearance, with blue changes and Save.
 Grammar confirmation and successful patterns stay in a quiet summary. The coach
 preserves meaning, tone, uncertainty and technical terms, and ignores fillers and
 clear self-corrections.

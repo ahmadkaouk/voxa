@@ -6,11 +6,15 @@ import SwiftUI
 private typealias FeedbackViewState<Value> = SwiftUI.State<Value>
 
 enum FeedbackPalette {
-    static let addedText = NSColor.labelColor
+    static let addedText = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.55, green: 0.76, blue: 1, alpha: 1)
+            : NSColor(srgbRed: 0, green: 0.32, blue: 0.68, alpha: 1)
+    }
     static let added = Color.primary
     static let addedBackground = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(white: 0.27, alpha: 1) : NSColor(white: 0.89, alpha: 1)
+            ? NSColor.systemBlue.withAlphaComponent(0.22) : NSColor.systemBlue.withAlphaComponent(0.12)
     }
     static let accent = Color.primary
     // One opaque neutral surface keeps every part of the feedback the same color.
@@ -210,10 +214,12 @@ private struct FeedbackSentenceText: NSViewRepresentable {
             if range.length > 0 {
                 if corrected {
                     text.addAttributes([.font: NSFont.systemFont(ofSize: 14, weight: .medium),
+                                        .foregroundColor: FeedbackPalette.addedText,
                                         .backgroundColor: FeedbackPalette.addedBackground], range: range)
                 } else {
                     text.addAttributes([.strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                                        .foregroundColor: NSColor.secondaryLabelColor], range: range)
+                                        .foregroundColor: FeedbackPalette.addedText,
+                                        .backgroundColor: FeedbackPalette.addedBackground], range: range)
                 }
             }
             offset += (change.suggestion as NSString).length - change.range.length
@@ -233,6 +239,8 @@ private struct FeedbackSentenceText: NSViewRepresentable {
 struct FeedbackReviewView: View {
     @ObservedObject var controller: FeedbackController
     var maximumHeight: CGFloat = 680
+    var onLayoutChange: () -> Void = {}
+    @FeedbackViewState private var expandedCorrections: Set<[Int]> = []
     static let width: CGFloat = 520
 
     private var maximumListHeight: CGFloat {
@@ -247,8 +255,10 @@ struct FeedbackReviewView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     grammarSummary
-                    ForEach(controller.corrections) { item in changeGroup(item) }
-                    fullSentences
+                    ForEach(FeedbackSentence.groups(transcript: controller.transcript,
+                            findings: controller.corrections.map(\.feedback)), id: \.findingIndices) { group in
+                        correctionGroup(group)
+                    }
                     optionalWording
                     ForEach(controller.transcriptionIssues) { item in
                         Divider().opacity(0.6)
@@ -273,32 +283,67 @@ struct FeedbackReviewView: View {
         .background(FeedbackPalette.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.primary.opacity(0.09)))
         .onHover { controller.setReading($0) }
+        .onChange(of: expandedCorrections) { _ in onLayoutChange() }
+        .onChange(of: controller.findings.first?.id) { _ in expandedCorrections.removeAll() }
     }
 
-    private func changeGroup(_ item: SavedCorrection) -> some View {
-        let feedback = item.feedback
-        let changes = FeedbackWordDiff(original: feedback.original, suggestion: feedback.suggestion).changes.filter {
-            EnglishText.spokenWords($0.original) != EnglishText.spokenWords($0.suggestion)
+    private func correctionGroup(_ group: FeedbackSentence.Group) -> some View {
+        let items = group.findingIndices.map { controller.corrections[$0] }
+        let titles = items.reduce(into: [String]()) { titles, item in
+            let title = correctionTitle(item.feedback)
+            if !titles.contains(title) { titles.append(title) }
         }
-        return VStack(alignment: .leading, spacing: 9) {
+        let title = titles.joined(separator: " · ")
+        let expanded = expandedCorrections.contains(group.findingIndices)
+        return VStack(alignment: .leading, spacing: 12) {
+            Button {
+                if expanded { expandedCorrections.remove(group.findingIndices) }
+                else { expandedCorrections.insert(group.findingIndices) }
+            } label: {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(title).font(.system(size: 12, weight: .semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        HStack(spacing: 5) {
+                            Text(expanded ? "Less" : "Why?")
+                            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        }.font(.system(size: 11)).foregroundStyle(Color(nsColor: FeedbackPalette.addedText))
+                            .fixedSize()
+                    }
+                    sentenceLine("Before", pair: group.sentence, corrected: false)
+                    sentenceLine("After", pair: group.sentence, corrected: true)
+                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title). Before: \(group.sentence.original) After: \(group.sentence.suggestion)")
+            .accessibilityValue(expanded ? "Explanation shown" : "Explanation hidden")
+            .accessibilityHint("Click to \(expanded ? "hide" : "show") the explanation.")
+            .help(expanded ? "Hide explanation" : "Show why this sentence changed")
+            if expanded {
+                ForEach(items) { item in
+                    correctionExplanation(item, showTitle: items.count > 1)
+                }
+            }
+        }
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func correctionTitle(_ feedback: EnglishFeedback) -> String {
+        feedback.focus?.label ?? (feedback.kind == .construction ? "Sentence structure" : "Correction")
+    }
+
+    private func correctionExplanation(_ item: SavedCorrection, showTitle: Bool) -> some View {
+        let feedback = item.feedback
+        return VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text(feedback.focus?.label ?? (feedback.kind == .construction ? "Sentence structure" : "Correction"))
-                    .font(.system(size: 12, weight: .medium))
-                Spacer()
+                if showTitle { Text(correctionTitle(feedback)).font(.system(size: 12, weight: .medium)) }
                 if let focus = feedback.focus, controller.previousOccurrences(of: focus) > 0 {
                     Text("Seen before").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
+                Spacer()
                 practiceButton(item)
-            }
-            ForEach(Array(changes.enumerated()), id: \.offset) { _, change in
-                HStack(alignment: .firstTextBaseline, spacing: 9) {
-                    let before = change.original.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let after = change.suggestion.trimmingCharacters(in: .whitespacesAndNewlines)
-                    Text(before.isEmpty ? "Add" : before).strikethrough(!before.isEmpty).foregroundStyle(.secondary)
-                    Image(systemName: "arrow.right").font(.system(size: 11)).foregroundStyle(.secondary)
-                    Text(after.isEmpty ? "Remove" : after).fontWeight(.medium)
-                }.font(.system(size: 16)).fixedSize(horizontal: false, vertical: true)
-                    .accessibilityElement(children: .combine)
             }
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text("Remember").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
@@ -306,26 +351,12 @@ struct FeedbackReviewView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }.accessibilityElement(children: .combine)
             if feedback.pattern != nil {
-                Text(feedback.explanation).font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(feedback.explanation).font(.system(size: 12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        }.frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder private var fullSentences: some View {
-        let pairs = FeedbackSentence.comparisons(transcript: controller.transcript,
-                                                findings: controller.corrections.map(\.feedback))
-        if !pairs.isEmpty {
-            Divider().opacity(0.6)
-            VStack(alignment: .leading, spacing: 12) {
-                sectionTitle(pairs.count == 1 ? "Full sentence" : "Full sentences")
-                ForEach(Array(pairs.enumerated()), id: \.offset) { index, pair in
-                    if index > 0 { Divider().opacity(0.35) }
-                    sentenceLine("Before", pair: pair, corrected: false)
-                    sentenceLine("After", pair: pair, corrected: true)
-                }
-            }
         }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: FeedbackPalette.addedText).opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private func sentenceLine(_ label: String, pair: FeedbackSentence, corrected: Bool) -> some View {
@@ -399,7 +430,7 @@ struct FeedbackReviewView: View {
                 Text("English feedback").font(.system(size: 16, weight: .semibold))
                 Text(summary + (controller.contextAppName.map { " · Context: " + $0 } ?? ""))
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
-                    .help(controller.contextAppName.map { "Context from " + $0 + ". Nearby text is not saved." } ?? "Changes first, then the full sentence.")
+                    .help(controller.contextAppName.map { "Context from " + $0 + ". Nearby text is not saved." } ?? "Full sentences with highlighted corrections. Click a correction for its explanation.")
             }
             Spacer(minLength: 0)
             Button { controller.togglePinned() } label: {
@@ -470,22 +501,24 @@ final class FeedbackPanelController {
         let pointer = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) } ?? NSScreen.main
         let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 800)
-        let content = FeedbackReviewView(controller: controller, maximumHeight: frame.height - 110)
+        let content = FeedbackReviewView(controller: controller, maximumHeight: frame.height - 110,
+                                         onLayoutChange: { [weak self] in self?.scheduleResize() })
         let hosting = NSHostingView(rootView: content)
         self.hosting = hosting; availableFrame = frame
         panel.contentView = hosting
         resize()
-        observation = controller.objectWillChange.sink { [weak self] in
-            guard let self, !self.resizeScheduled else { return }
-            self.resizeScheduled = true
-            // Published values change after objectWillChange. Refit on the next
-            // main turn so a save error or late progress update cannot be clipped.
-            DispatchQueue.main.async { [weak self] in
-                self?.resizeScheduled = false
-                self?.resize()
-            }
-        }
+        observation = controller.objectWillChange.sink { [weak self] in self?.scheduleResize() }
         panel.orderFrontRegardless() // Never activates Voxa or makes it the paste destination.
+    }
+
+    private func scheduleResize() {
+        guard !resizeScheduled else { return }
+        resizeScheduled = true
+        // Published values and SwiftUI disclosure state must settle before measuring.
+        DispatchQueue.main.async { [weak self] in
+            self?.resizeScheduled = false
+            self?.resize()
+        }
     }
 
     private func resize() {

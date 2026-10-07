@@ -132,6 +132,28 @@ enum FeedbackChecks {
         ])
         try unitEqual(conflict.count, 2)
         try unitExpect(conflict[0].suggestion.contains("I went") && conflict[1].suggestion.contains("I walked"))
+        // Sentence groups must retain the exact explanations, even when input order differs.
+        let context = "There's a list of application and time. A chart I was thinking about are the following."
+        let contextual = FeedbackSentence.groups(transcript: context, findings: [
+            finding("are", "is"), finding("application", "applications")
+        ])
+        try unitEqual(contextual.map(\.findingIndices), [[1], [0]])
+        try unitEqual(contextual[0].sentence.suggestion.trimmingCharacters(in: .whitespaces),
+                      "There's a list of applications and time.")
+        try unitEqual(contextual[1].sentence.suggestion.trimmingCharacters(in: .whitespaces),
+                      "A chart I was thinking about is the following.")
+        let grouped = FeedbackSentence.groups(transcript: before, findings: [
+            finding("I go", "I went"), finding("Maya explain", "Maya explained")
+        ])
+        try unitEqual(grouped.map(\.findingIndices), [[0, 1]])
+        try unitEqual(grouped.map(\.sentence), [.init(original: before, suggestion: after)])
+        let conflicting = FeedbackSentence.groups(transcript: before, findings: [
+            finding("I go", "I went"), finding("I go", "I walked")
+        ])
+        try unitEqual(conflicting.map(\.findingIndices), [[0], [1]])
+        let unavailable = FeedbackSentence.groups(transcript: "", findings: [finding("She ready.", "She is ready.")])
+        try unitEqual(unavailable.map(\.findingIndices), [[0]])
+        try unitEqual(unavailable[0].sentence, .init(original: "She ready.", suggestion: "She is ready."))
         for pair in [("We discussed about it.", "We discussed it."), ("I need answer.", "I need an answer."),
                      ("😊 I go home.", "😊 I went home."), ("a a b", "a b b"), ("", "new"), ("old", "")] {
             let rebuilt = NSMutableString(string: pair.0)

@@ -140,6 +140,9 @@ Use `./scripts/preview-workspace.sh` and open
 toolbar materials, search and window resizing. Press Command-comma for Settings;
 the Preview menu switches light/dark appearance for the fixture app only. It uses
 in-memory lessons and preferences, with no credentials or microphone access.
+Choose **Preview → Feedback Panel** (Command-Shift-F) to check sentence context,
+click-to-expand explanations and the floating panel's resizing. The fixture pins
+this panel open so it stays available during interaction checks.
 
 `./scripts/test.sh output --live` opens a temporary text window to
 check the actual paste shortcut, selection replacement, Unicode, and clipboard

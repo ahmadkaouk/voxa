@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 private typealias PreviewState<Value> = SwiftUI.State<Value>
@@ -20,10 +21,27 @@ private actor WorkspaceReviews: PracticeHistoryStoring {
     func save(_ reviews: [PracticeReview]) {}
 }
 
+private struct WorkspaceFeedback: FeedbackAnalyzing {
+    static let transcript = "And there's a list of application and time. One of the, there's a chart I was thinking about are the following."
+    func analyze(_ transcript: String, apiKey: String, knownPatterns: Set<LearningFocus>, context: FeedbackTextContext?) async throws -> FeedbackAnalysis {
+        .init(feedback: [
+            .init(kind: .grammar, original: "application", suggestion: "applications",
+                  explanation: "Use the plural form when referring to multiple applications.",
+                  practicePrompt: "Describe a list of things.", pattern: "a list of + plural count noun", focus: .plurals),
+            .init(kind: .grammar, original: "are", suggestion: "is",
+                  explanation: "The singular subject a chart takes is, not are.",
+                  practicePrompt: "Describe one chart.", pattern: "A chart I was thinking about is…", focus: .agreement)
+        ])
+    }
+}
+
 @MainActor
 private final class WorkspaceFixtures: ObservableObject {
     let feedback: FeedbackController
     let history = PracticeHistory(store: WorkspaceReviews())
+    let review = FeedbackController(client: WorkspaceFeedback(), store: WorkspaceLessons([]), progressStore: WorkspaceProgress())
+    private let reviewPanel = FeedbackPanelController()
+    private var reviewObservation: AnyCancellable?
 
     init() {
         let lessons: [EnglishFeedback] = [
@@ -44,14 +62,43 @@ private final class WorkspaceFixtures: ObservableObject {
         feedback = FeedbackController(store: WorkspaceLessons(lessons.enumerated().map { index, lesson in
             .init(id: UUID(), date: Date().addingTimeInterval(Double(-index) * 86_400), feedback: lesson)
         }), progressStore: WorkspaceProgress())
+        reviewObservation = review.$panelVisible.removeDuplicates().sink { [weak self] visible in
+            guard let self else { return }
+            if visible {
+                self.reviewPanel.show(self.review)
+                // Hold this synthetic panel open while checking its disclosure controls.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.review.panelVisible, !self.review.isPinned else { return }
+                    self.review.togglePinned()
+                }
+            }
+            else { self.reviewPanel.hide() }
+        }
+    }
+
+    func showFeedback() {
+        if review.hasReview { review.showLatest(); return }
+        review.setEnabled(true)
+        let id = UUID()
+        review.updateDictation(.starting(.init(id: id, origin: .manual, settings: .init()), requested: nil))
+        review.analyze(id: id, transcript: WorkspaceFeedback.transcript, apiKey: "synthetic-preview")
+        review.deliveryFinished(id: id)
+        review.updateDictation(.idle)
     }
 }
 
 /// Live native window checks with in-memory data, no credentials and no microphone.
 @main
 private struct WorkspacePreview: App {
-    @StateObject private var fixtures = WorkspaceFixtures()
+    @StateObject private var fixtures: WorkspaceFixtures
     @Environment(\.openWindow) private var openWindow
+
+    init() {
+        let fixtures = WorkspaceFixtures()
+        _fixtures = StateObject(wrappedValue: fixtures)
+        // Keep the fixture inspectable even if macOS restores a previously closed main window.
+        DispatchQueue.main.async { fixtures.showFeedback() }
+    }
 
     var body: some Scene {
         WindowGroup("English Learning Preview") {
@@ -65,6 +112,8 @@ private struct WorkspacePreview: App {
                 Button("Settings Preview…") { openWindow(id: "settings-preview") }.keyboardShortcut(",")
             }
             CommandMenu("Preview") {
+                Button("Feedback Panel") { fixtures.showFeedback() }.keyboardShortcut("f", modifiers: [.command, .shift])
+                Divider()
                 Button("Light Appearance") { NSApp.appearance = NSAppearance(named: .aqua) }
                 Button("Dark Appearance") { NSApp.appearance = NSAppearance(named: .darkAqua) }
             }

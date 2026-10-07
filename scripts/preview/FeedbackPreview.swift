@@ -74,6 +74,18 @@ private enum FeedbackPreview {
         try await render(FeedbackReviewView(controller: design), name: "review-design-light", scheme: .light)
         try await render(FeedbackReviewView(controller: design), name: "review-design-dark", scheme: .dark)
         await design.shutdown()
+        let contextText = "And there's a list of application and time. One of the, there's a chart I was thinking about are the following."
+        let contextual = try await review(.init(feedback: [
+            .init(kind: .grammar, original: "application", suggestion: "applications",
+                  explanation: "Use the plural form when referring to multiple applications.",
+                  practicePrompt: "Describe a list of things.", pattern: "a list of + plural count noun", focus: .plurals),
+            .init(kind: .grammar, original: "are", suggestion: "is",
+                  explanation: "The singular subject a chart takes is, not are.",
+                  practicePrompt: "Describe one chart.", pattern: "A chart I was thinking about is…", focus: .agreement)
+        ]), text: contextText, history: [])
+        try await render(FeedbackReviewView(controller: contextual), name: "review-context-light", scheme: .light)
+        try await render(FeedbackReviewView(controller: contextual), name: "review-context-dark", scheme: .dark)
+        await contextual.shutdown()
         let bar = ActivityOverlayModel()
         bar.phase = .listening; bar.content = .init(title: "Listening", subtitle: nil)
         bar.startedAt = now.addingTimeInterval(-12); bar.level = 0.65

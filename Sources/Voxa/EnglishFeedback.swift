@@ -173,22 +173,33 @@ struct FeedbackSentence: Equatable {
     let original: String
     let suggestion: String
 
+    struct Group: Equatable {
+        let sentence: FeedbackSentence
+        let findingIndices: [Int]
+    }
+
     static func comparisons(transcript: String, findings: [EnglishFeedback]) -> [Self] {
+        groups(transcript: transcript, findings: findings).map(\.sentence)
+    }
+
+    /// Keep each explanation attached to exactly the sentence edits it describes.
+    static func groups(transcript: String, findings: [EnglishFeedback]) -> [Group] {
         let source = transcript as NSString
         var sentences: [NSRange] = []
         transcript.enumerateSubstrings(in: transcript.startIndex..., options: .bySentences) { _, range, _, _ in
             sentences.append(NSRange(range, in: transcript))
         }
         struct Entry {
+            let index: Int
             let excerpt: NSRange
             let sentence: NSRange
             let finding: EnglishFeedback
         }
-        let entries = findings.compactMap { finding -> Entry? in
+        let entries = findings.enumerated().compactMap { index, finding -> Entry? in
             let excerpt = source.range(of: finding.original)
             guard excerpt.location != NSNotFound else { return nil }
             let sentence = sentences.filter { NSIntersectionRange($0, excerpt).length > 0 }.reduce(excerpt, NSUnionRange)
-            return Entry(excerpt: excerpt, sentence: sentence, finding: finding)
+            return Entry(index: index, excerpt: excerpt, sentence: sentence, finding: finding)
         }
         var groups: [[Entry]] = []
         for entry in entries.sorted(by: { $0.sentence.location < $1.sentence.location }) {
@@ -196,7 +207,7 @@ struct FeedbackSentence: Equatable {
                 groups[groups.count - 1].append(entry)
             } else { groups.append([entry]) }
         }
-        return groups.flatMap { group -> [Self] in
+        let combined = groups.flatMap { group -> [Group] in
             let range = group.dropFirst().reduce(group[0].sentence) { NSUnionRange($0, $1.sentence) }
             let original = source.substring(with: range)
             var edits: [FeedbackWordDiff.Change] = []
@@ -217,14 +228,23 @@ struct FeedbackSentence: Equatable {
                 return group.map { entry in
                     let sentence = source.substring(with: entry.sentence) as NSString
                     let local = NSRange(location: entry.excerpt.location - entry.sentence.location, length: entry.excerpt.length)
-                    return Self(original: sentence as String, suggestion: sentence.replacingCharacters(in: local, with: entry.finding.suggestion))
+                    return Group(sentence: Self(original: sentence as String,
+                        suggestion: sentence.replacingCharacters(in: local, with: entry.finding.suggestion)),
+                        findingIndices: [entry.index])
                 }
             }
             let corrected = NSMutableString(string: original)
             for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
                 corrected.replaceCharacters(in: edit.range, with: edit.suggestion)
             }
-            return [Self(original: original, suggestion: corrected as String)]
+            return [Group(sentence: Self(original: original, suggestion: corrected as String),
+                          findingIndices: group.map(\.index).sorted())]
+        }
+        // Context can be unavailable; still show the supplied comparison and its explanation.
+        let located = Set(entries.map(\.index))
+        return combined + findings.enumerated().compactMap { index, finding in
+            guard !located.contains(index) else { return nil }
+            return Group(sentence: Self(original: finding.original, suggestion: finding.suggestion), findingIndices: [index])
         }
     }
 }
