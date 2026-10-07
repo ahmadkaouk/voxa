@@ -77,6 +77,10 @@ explanations, and the distinction between errors and optional alternatives.
 - Esc cancels an active recording, including startup, without transcription or output.
   The bar hides immediately. Without an eligible recording/review these keys pass
   through normally; plain S and D always type normally.
+- Change Save feedback and Cancel / Close through the single key-combination controls
+  in Settings → Shortcuts. Check custom bindings after relaunch and a permission refresh,
+  conflict rejection, key-up/repeat consumption, and normal typing while idle. Legacy
+  dictation bindings must survive migration even if they previously used Cmd-S or Escape.
 - Saved lessons, including older files and paired alternatives, survive relaunch.
   Practice answers do not persist.
 - Each correction and optional wording has a Try once action. Opening practice preserves

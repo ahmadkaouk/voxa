@@ -57,7 +57,12 @@ the relevant System Settings page. Return to Voxa after granting access.
 
 Change shortcuts in **Voxa Settings… → Shortcuts**. **General** contains the
 transcription model, output mode, recording limit and permission status.
-Press **Esc** while capturing a shortcut to cancel without closing Settings.
+Click the displayed key combination to record a replacement; release the keys to save.
+Start / Stop, Finish & Send, Save feedback and Cancel / Close are configurable.
+Shortcuts cannot overlap. Save feedback requires a modifier and one key;
+Cancel / Close accepts Escape or a modifier and one key.
+Press **Esc** while capturing a shortcut to cancel without closing Settings,
+or click the same control again. When editing Cancel / Close, Escape assigns Escape.
 **Max Recording** sets the recording limit; the default is five minutes. Transcription begins after
 recording finishes. Discarding a recording skips transcription and output.
 
@@ -135,6 +140,9 @@ Saving lessons cancels the timer; a failed save keeps the review open for retry.
 - **Save / ⌘S:** save all corrections and alternatives, then close.
   Recognition issues are excluded. ⌘S also closes a review with no lessons.
 - **Close / Esc:** close without saving lessons. Local progress remains available.
+
+These are the default shortcuts. Customize both in Settings → Shortcuts; the
+feedback buttons and English Learning settings show your current combinations.
 - **English Learning → Lessons & Progress…:** review, practise, or delete saved
   lessons, and view or clear progress separately.
 - **Try once:** beside a pattern, say the improved version,

@@ -446,7 +446,8 @@ struct FeedbackReviewView: View {
             Button { controller.discardReview() } label: {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary).frame(width: 26, height: 26).contentShape(Circle())
-            }.buttonStyle(.plain).disabled(controller.isSaving).help("Close · Esc").accessibilityLabel("Close feedback")
+            }.buttonStyle(.plain).disabled(controller.isSaving)
+                .help("Close · \(controller.cancelHotkey.symbolLabel)").accessibilityLabel("Close feedback")
         }
     }
 
@@ -459,14 +460,14 @@ struct FeedbackReviewView: View {
     private var footer: some View {
         HStack {
             Button { controller.discardReview() } label: {
-                HStack(spacing: 12) { Text("Close"); keycap(FeedbackShortcut.discardLabel) }
+                HStack(spacing: 12) { Text("Close"); keycap(controller.cancelHotkey.symbolLabel) }
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.primary.opacity(0.13)))
             }.buttonStyle(.plain).disabled(controller.isSaving)
             Spacer()
             if controller.hasLessons {
                 Button { controller.saveAndClose() } label: {
-                    HStack(spacing: 16) { Text(controller.isSaving ? "Saving…" : "Save"); keycap(FeedbackShortcut.saveLabel) }
+                    HStack(spacing: 16) { Text(controller.isSaving ? "Saving…" : "Save"); keycap(controller.saveHotkey.symbolLabel) }
                 }.buttonStyle(FeedbackSaveButtonStyle())
                     .disabled(controller.isSaving || !controller.storageReady)
                     .help("Save these patterns for later practice.")

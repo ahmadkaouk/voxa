@@ -131,6 +131,74 @@ enum NativeSetupChecks {
         bridge.stop()
     }
 
+    static func configurableFeedbackShortcuts() async throws {
+        let bridge = GlobalHotkeyBridge()
+        let save = HotkeyOption(keyCodes: [KeyCode.d], modifiers: [.command, .shift])
+        let cancel = HotkeyOption(keyCodes: [KeyCode.escape], modifiers: .control)
+        bridge.updateBindings(toggle: .optionF, finishAndSubmit: .optionG, saveFeedback: save, cancel: cancel)
+        var review = true, recording = false, saves = 0, cancels = 0
+        bridge.onSaveFeedback = { guard review else { return false }; saves += 1; review = false; return true }
+        bridge.onCancelDictation = { guard recording else { return false }; cancels += 1; recording = false; return true }
+        func swallowed(_ key: UInt16, down: Bool = true, flags: CGEventFlags = [], repeated: Bool = false) -> Bool {
+            let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: down)!
+            event.flags = flags
+            event.setIntegerValueField(.keyboardEventAutorepeat, value: repeated ? 1 : 0)
+            return bridge.handleTapEvent(type: down ? .keyDown : .keyUp, event: event) == nil
+        }
+        for reset in [false, true] {
+            if reset { bridge.resetForSystemInterruption(); bridge.stop() }
+            review = true
+            try unitExpect(!swallowed(KeyCode.s, flags: .maskCommand)); _ = swallowed(KeyCode.s, down: false)
+            try unitExpect(!swallowed(KeyCode.d)); _ = swallowed(KeyCode.d, down: false)
+            try unitExpect(swallowed(KeyCode.d, flags: [.maskCommand, .maskShift]))
+            try unitExpect(swallowed(KeyCode.d, repeated: true))
+            try unitExpect(swallowed(KeyCode.d, down: false))
+            try unitExpect(!swallowed(KeyCode.d, flags: [.maskCommand, .maskShift]))
+            _ = swallowed(KeyCode.d, down: false)
+            recording = true
+            try unitExpect(!swallowed(KeyCode.escape)); _ = swallowed(KeyCode.escape, down: false)
+            try unitExpect(swallowed(KeyCode.escape, flags: .maskControl))
+            try unitExpect(swallowed(KeyCode.escape, down: false))
+        }
+        try unitEqual(saves, 2); try unitEqual(cancels, 2)
+        bridge.setEnabled(false) // Recording a replacement shortcut must pass through to the recorder.
+        review = true
+        try unitExpect(!swallowed(KeyCode.d, flags: [.maskCommand, .maskShift]))
+        _ = swallowed(KeyCode.d, down: false)
+        try unitEqual(saves, 2)
+        bridge.stop()
+
+        try withStore { defaults in
+            var preferences = Preferences()
+            preferences.saveFeedbackHotkey = save.persistedValue
+            preferences.cancelHotkey = cancel.persistedValue
+            let store = PreferencesStore(defaults: defaults)
+            try store.save(preferences)
+            try unitEqual(try PreferencesStore(defaults: defaults).load(), preferences)
+            for invalid in [HotkeyOption(keyCodes: [KeyCode.d], modifiers: []), .defaultToggle, .rightOption, cancel] {
+                var changed = preferences
+                changed.saveFeedbackHotkey = invalid.persistedValue
+                try rejected { try store.save(changed) }
+                try unitEqual(try store.load(), preferences)
+            }
+            var changed = preferences
+            changed.cancelHotkey = HotkeyOption(keyCodes: [KeyCode.d], modifiers: []).persistedValue
+            try rejected { try store.save(changed) }
+            changed.cancelHotkey = HotkeyOption.defaultCancel.persistedValue
+            try store.save(changed)
+        }
+        // Legacy users who assigned Cmd-S or Esc to dictation keep those bindings.
+        for existing in [HotkeyOption.defaultSaveFeedback, .defaultCancel, .rightOption] {
+            var old = savedPreferences
+            old["toggleHotkey"] = existing.persistedValue
+            old["finishAndSubmitHotkey"] = HotkeyOption(keyCodes: [KeyCode.g], modifiers: .control).persistedValue
+            let migrated = try JSONDecoder().decode(Preferences.self, from: JSONSerialization.data(withJSONObject: old)).validated()
+            try unitEqual(HotkeyOption.fromRaw(migrated.toggleHotkey), existing)
+            try unitExpect(!HotkeyOption.fromRaw(migrated.saveFeedbackHotkey)!.overlaps(existing))
+            try unitExpect(!HotkeyOption.fromRaw(migrated.cancelHotkey)!.overlaps(existing))
+        }
+    }
+
     private static func withStore(_ run: (UserDefaults) throws -> Void) throws {
         let name = "com.voxa.tests.preferences.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
@@ -272,6 +340,7 @@ enum NativeSetupChecks {
         ("setup: existing v1 settings and relaunch preserved", savedSettingsSurviveRelaunch),
         ("setup: retired hold shortcut migrates without losing enabled features", submitShortcutMigration),
         ("shortcuts: plain Enter passes through and Finish & Send is contextual", globalShortcutRouting),
+        ("shortcuts: custom feedback bindings route, persist, and migrate without conflicts", configurableFeedbackShortcuts),
         ("setup: save failure recovery and clean install", saveFailureRecovery),
         ("setup: credential sources, denied access and worker isolation", credentialSourcesAndErrors),
         ("setup: native Keychain add/read/update with disposable item", nativeKeychainRoundTrip),
@@ -285,6 +354,7 @@ final class NativeSetupTests: XCTestCase {
     func testSavedSettingsSurviveRelaunch() async throws { try await NativeSetupChecks.savedSettingsSurviveRelaunch() }
     func testSubmitShortcutMigration() async throws { try await NativeSetupChecks.submitShortcutMigration() }
     func testGlobalShortcutRouting() async throws { try await NativeSetupChecks.globalShortcutRouting() }
+    func testConfigurableFeedbackShortcuts() async throws { try await NativeSetupChecks.configurableFeedbackShortcuts() }
     func testSaveFailureRecovery() async throws { try await NativeSetupChecks.saveFailureRecovery() }
     func testCredentialSourcesAndErrors() async throws { try await NativeSetupChecks.credentialSourcesAndErrors() }
     func testNativeKeychainRoundTrip() async throws { try await NativeSetupChecks.nativeKeychainRoundTrip() }

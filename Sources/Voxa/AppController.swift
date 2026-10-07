@@ -161,6 +161,8 @@ final class AppController: ObservableObject {
     }
     var toggleHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.toggleHotkey) }
     var finishAndSubmitHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.finishAndSubmitHotkey, fallback: .defaultFinishAndSubmit) }
+    var saveFeedbackHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.saveFeedbackHotkey, fallback: .defaultSaveFeedback) }
+    var cancelHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.cancelHotkey, fallback: .defaultCancel) }
     var model: ModelOption { session.settings.model }
     var outputMode: OutputModeOption { session.settings.outputMode }
     var maxRecordingSeconds: UInt64 { preferences.maxRecordingSeconds }
@@ -196,7 +198,7 @@ final class AppController: ObservableObject {
                 guard !closing else { return }
                 isAPIKeySet = key != nil
                 isReady = true
-                hotkeys.updateBindings(toggle: toggleHotkey, finishAndSubmit: finishAndSubmitHotkey)
+                updateHotkeyBindings()
                 refreshPermissions()
                 present(session.state, level: session.level)
             } catch {
@@ -242,6 +244,7 @@ final class AppController: ObservableObject {
             try store.save(next)
             _ = session.updateSettings(next.dictation)
             let hotkeysChanged = next.toggleHotkey != preferences.toggleHotkey || next.finishAndSubmitHotkey != preferences.finishAndSubmitHotkey
+                || next.saveFeedbackHotkey != preferences.saveFeedbackHotkey || next.cancelHotkey != preferences.cancelHotkey
             if !next.automaticContextEnabled || next.contextExcludedApps != preferences.contextExcludedApps {
                 feedback.contextPreferencesChanged()
             }
@@ -250,25 +253,50 @@ final class AppController: ObservableObject {
             settingsError = nil
             // Non-shortcut edits leave physical key tracking alone.
             if hotkeysChanged {
-                hotkeys.updateBindings(toggle: toggleHotkey, finishAndSubmit: finishAndSubmitHotkey)
+                updateHotkeyBindings()
                 present(session.state, level: session.level)
             }
         } catch { settingsError = error.localizedDescription }
     }
-    func setToggleHotkey(_ value: HotkeyOption) {
-        guard !value.overlaps(finishAndSubmitHotkey) else {
-            settingsError = "Choose a shortcut that doesn’t overlap Finish & Send."; return
+    private func updateHotkeyBindings() {
+        hotkeys.updateBindings(toggle: toggleHotkey, finishAndSubmit: finishAndSubmitHotkey,
+                               saveFeedback: saveFeedbackHotkey, cancel: cancelHotkey)
+        feedback.updateShortcuts(save: saveFeedbackHotkey, cancel: cancelHotkey)
+    }
+
+    private func acceptsShortcut(_ value: HotkeyOption, replacing title: String) -> Bool {
+        let bindings = [("Start / Stop", toggleHotkey), ("Finish & Send", finishAndSubmitHotkey),
+                        ("Save feedback", saveFeedbackHotkey), ("Cancel / Close", cancelHotkey)]
+        if let conflict = bindings.first(where: { $0.0 != title && value.overlaps($0.1) }) {
+            settingsError = "Choose a shortcut that doesn’t overlap \(conflict.0)."; return false
         }
+        return true
+    }
+
+    func setToggleHotkey(_ value: HotkeyOption) {
+        guard acceptsShortcut(value, replacing: "Start / Stop") else { return }
         update { $0.toggleHotkey = value.persistedValue }
     }
     func setFinishAndSubmitHotkey(_ value: HotkeyOption) {
         guard value.isValidForSubmit else {
             settingsError = "Finish & Send needs one key plus a modifier, such as Option + G."; return
         }
-        guard !value.overlaps(toggleHotkey) else {
-            settingsError = "Choose a shortcut that doesn’t overlap Start / Stop."; return
-        }
+        guard acceptsShortcut(value, replacing: "Finish & Send") else { return }
         update { $0.finishAndSubmitHotkey = value.persistedValue }
+    }
+    func setSaveFeedbackHotkey(_ value: HotkeyOption) {
+        guard value.isValidForSubmit else {
+            settingsError = "Save feedback needs one key plus a modifier, such as Command + S."; return
+        }
+        guard acceptsShortcut(value, replacing: "Save feedback") else { return }
+        update { $0.saveFeedbackHotkey = value.persistedValue }
+    }
+    func setCancelHotkey(_ value: HotkeyOption) {
+        guard value.isValidForCancel else {
+            settingsError = "Cancel / Close needs Escape or one key plus a modifier."; return
+        }
+        guard acceptsShortcut(value, replacing: "Cancel / Close") else { return }
+        update { $0.cancelHotkey = value.persistedValue }
     }
     func setModel(_ value: ModelOption) { update(duringDictation: true) { $0.model = value.rawValue } }
     func setOutputMode(_ value: OutputModeOption) { update(duringDictation: true) { $0.outputMode = value.rawValue } }
@@ -323,7 +351,8 @@ final class AppController: ObservableObject {
 
     private func show(_ phase: ActivityOverlayPhase, title: String, level: Double = 0) {
         guard !closing, isReady else { return }
-        overlay.show(phase, content: ActivityOverlayContent(title: title, subtitle: phase == .idle ? toggleHotkey.label : nil),
+        overlay.show(phase, content: ActivityOverlayContent(title: title, subtitle: phase == .idle ? toggleHotkey.label : nil,
+                     cancelShortcut: cancelHotkey.symbolLabel),
                      level: level, onStart: { [weak self] in self?.startRecording() },
                      onCancel: { [weak self] in self?.session.cancel() },
                      onStop: { [weak self] in self?.session.stop() })

@@ -12,6 +12,7 @@ enum ActivityOverlayPhase: Equatable {
 struct ActivityOverlayContent: Equatable {
     let title: String
     let subtitle: String?
+    var cancelShortcut = "Esc"
 }
 
 /// The hosting view stays mounted as meter events arrive, preserving hover and motion.
@@ -69,7 +70,7 @@ struct ActivityOverlayView: View {
             .background(.black, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
             .padding(.bottom, 12)
-            .help(model.phase == .listening ? "Drag to move · Esc to cancel" : model.content.title + " · Drag to move")
+            .help(model.phase == .listening ? "Drag to move · \(model.content.cancelShortcut) to cancel" : model.content.title + " · Drag to move")
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Voxa: \(model.content.title)")
         }
@@ -114,7 +115,7 @@ struct ActivityOverlayView: View {
                     .contentShape(RoundedRectangle(cornerRadius: 9))
             }.buttonStyle(.plain)
                 .accessibilityLabel(model.phase == .idle ? "Start dictation" : "Finish dictation")
-                .help(model.phase == .idle ? "Start dictation · \(model.content.subtitle ?? "")" : "Finish dictation and paste · Esc to cancel")
+                .help(model.phase == .idle ? "Start dictation · \(model.content.subtitle ?? "")" : "Finish dictation and paste · \(model.content.cancelShortcut) to cancel")
         } else {
             Color.clear.frame(width: 32, height: 32).accessibilityHidden(true)
         }

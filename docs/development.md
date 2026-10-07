@@ -143,6 +143,10 @@ in-memory lessons and preferences, with no credentials or microphone access.
 Choose **Preview → Feedback Panel** (Command-Shift-F) to check sentence context,
 click-to-expand explanations and the floating panel's resizing. The fixture pins
 this panel open so it stays available during interaction checks.
+Its Settings preview uses the production shortcut recorder with in-memory bindings.
+Check a new combination, Escape cancellation, reassigning Escape under Cancel / Close,
+and direct typing/pasting in the full-width secure API key field. Saving in the fixture
+only clears its synthetic input; the Keychain suite uses a separate disposable item.
 
 `./scripts/test.sh output --live` opens a temporary text window to
 check the actual paste shortcut, selection replacement, Unicode, and clipboard

@@ -135,6 +135,12 @@ private struct WorkspaceSettingsPreview: View {
     @PreviewState private var feedback = true
     @PreviewState private var context = true
     @PreviewState private var key = ""
+    @PreviewState private var keyConfigured = true
+    @PreviewState private var toggle = HotkeyOption.defaultToggle
+    @PreviewState private var submit = HotkeyOption.defaultFinishAndSubmit
+    @PreviewState private var save = HotkeyOption.defaultSaveFeedback
+    @PreviewState private var cancel = HotkeyOption.defaultCancel
+    @StateObject private var recorder = HotkeyRecorder()
 
     var body: some View {
         SettingsSidebarLayout(selection: $selection) {
@@ -145,26 +151,29 @@ private struct WorkspaceSettingsPreview: View {
             case .learning:
                 SettingsPage(title: "English Learning", subtitle: "Turn everyday dictation into a little practice.") {
                     EnglishLearningSettingsView(feedbackEnabled: $feedback, contextEnabled: $context,
-                        excludedApps: [], hasAccessibility: true, onExclude: { _ in }, onAllow: { _ in }, onOpenLessons: {})
+                        excludedApps: [], hasAccessibility: true, saveShortcut: save.symbolLabel, cancelShortcut: cancel.symbolLabel,
+                        onExclude: { _ in }, onAllow: { _ in }, onOpenLessons: {})
                 }
             case .apiKey:
-                APIKeySettingsView(configured: true, source: "keychain", input: $key, onSave: {})
+                APIKeySettingsView(configured: keyConfigured, source: "keychain", input: $key,
+                    onSave: { key = ""; keyConfigured = true })
             case .shortcuts:
-                SettingsPage(title: "Shortcuts", subtitle: "Keep dictation close, wherever you’re working.") {
-                    Form {
-                        Section("Dictation") {
-                            SettingsShortcutRow(title: "Start / Stop", detail: "Press again to finish and paste.",
-                                shortcut: "Opt+F", onRecord: {}, onCancel: {})
-                            SettingsShortcutRow(title: "Finish & Send", detail: "Paste and press Return while recording.",
-                                shortcut: "Opt+G", onRecord: {}, onCancel: {})
-                        }
-                        Section("While recording or reviewing feedback") {
-                            LabeledContent("Cancel dictation or close feedback", value: "Esc")
-                            LabeledContent("Save feedback", value: "⌘S")
-                        }
-                    }.formStyle(.grouped)
+                ShortcutsSettingsView(recorder: recorder, toggle: toggle, finishAndSubmit: submit,
+                    saveFeedback: save, cancel: cancel)
+            }
+        }
+        .onAppear {
+            recorder.onCommit = { target, shortcut in
+                switch target {
+                case .toggle: toggle = shortcut
+                case .finishAndSubmit: submit = shortcut
+                case .saveFeedback: save = shortcut
+                case .cancel: cancel = shortcut
                 }
             }
         }
+        .onChange(of: selection) { _ in recorder.stop(); key = "" }
+        .onDisappear { recorder.stop(); key = "" }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in recorder.stop() }
     }
 }

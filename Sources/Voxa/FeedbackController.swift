@@ -19,6 +19,8 @@ final class FeedbackController: ObservableObject {
     @Published private(set) var isPinned = false
     @Published private(set) var isReading = false
     @Published private(set) var dismissalDeadline: Date?
+    @Published private(set) var saveHotkey = HotkeyOption.defaultSaveFeedback
+    @Published private(set) var cancelHotkey = HotkeyOption.defaultCancel
     let progress: LearningProgress
     var onPractice: ((PracticeTarget) -> Void)?
     var onLessonsDeleted: ((Set<UUID>) -> Void)?
@@ -64,6 +66,11 @@ final class FeedbackController: ObservableObject {
             contextAppName = nil; transcript = ""
             hidePanel(); isAnalyzing = false; status = nil
         }
+    }
+
+    func updateShortcuts(save: HotkeyOption, cancel: HotkeyOption) {
+        saveHotkey = save
+        cancelHotkey = cancel
     }
 
     func updateDictation(_ state: DictationState) {

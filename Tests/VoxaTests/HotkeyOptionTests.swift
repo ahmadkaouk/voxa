@@ -8,7 +8,8 @@ import XCTest
 
 enum HotkeyOptionChecks {
     static func testFeedbackShortcuts() throws {
-        let shortcuts: [(UInt16, HotkeyModifiers)] = [(KeyCode.s, .command), (KeyCode.escape, [])]
+        let shortcuts: [(UInt16, HotkeyModifiers)] = [(KeyCode.s, .command), (KeyCode.escape, []),
+                                                    (KeyCode.d, [.command, .shift]), (KeyCode.escape, .control)]
         for (target, modifiers) in shortcuts {
             var shortcut = FeedbackShortcut(keyCode: target, modifiers: modifiers)
             var activations = 0
@@ -21,7 +22,7 @@ enum HotkeyOptionChecks {
             }
             let combinations: [HotkeyModifiers] = [[], .option, .command, .shift, .control, [.option, .command], [.command, .shift]]
             for flags in combinations where flags != modifiers { try unitExpect(!press(true, flags: flags)) }
-            try unitExpect(!press(true, key: KeyCode.d))
+            try unitExpect(!press(true, key: KeyCode.f))
             try unitExpect(!press(true, repeated: true))
             try unitEqual(activations, 0)
             try unitExpect(!press(true, accepted: false)) // No eligible recording/review: pass through.
@@ -35,6 +36,9 @@ enum HotkeyOptionChecks {
             try unitExpect(press(true))
             try unitEqual(activations, 3)
         }
+        try unitEqual(HotkeyOption.defaultSaveFeedback.symbolLabel, "⌘S")
+        try unitEqual(HotkeyOption.optionF.symbolLabel, "⌥F")
+        try unitEqual(HotkeyOption.defaultCancel.symbolLabel, "Esc")
     }
 
     static func testPresetHotkeysRoundTrip() throws {

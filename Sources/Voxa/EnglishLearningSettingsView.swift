@@ -29,12 +29,19 @@ struct SettingsShortcutRow: View {
         HStack(alignment: .center, spacing: 12) {
             SettingsControlLabel(title: title, detail: detail)
             Spacer(minLength: 4)
-            Text(shortcut).font(.system(size: 12, weight: .medium, design: .monospaced))
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 5))
-                .fixedSize()
-            Button(recording ? "Cancel" : "Change…", action: recording ? onCancel : onRecord)
-                .accessibilityLabel(recording ? "Cancel changing \(title) shortcut" : "Change \(title) shortcut")
+            Button(action: recording ? onCancel : onRecord) {
+                Text(shortcut).font(.system(size: 13, weight: .medium))
+                    .frame(minWidth: 74).padding(.horizontal, 10).padding(.vertical, 6)
+                    .foregroundStyle(recording ? Color.accentColor : Color.primary)
+                    .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(recording ? Color.accentColor : Color.primary.opacity(0.15), lineWidth: recording ? 2 : 1))
+                    .fixedSize()
+            }.buttonStyle(.plain)
+                .accessibilityLabel("\(title) shortcut")
+                .accessibilityValue(recording ? "Recording shortcut" : shortcut)
+                .accessibilityHint(recording ? "Press your new shortcut, or click to cancel." : "Click to change this shortcut.")
+                .help(recording ? "Press your new shortcut. Click here to cancel." : "Click the key combination to change it")
         }.padding(.vertical, 3).accessibilityElement(children: .contain)
     }
 }
@@ -45,6 +52,8 @@ struct EnglishLearningSettingsView: View {
     @Binding var contextEnabled: Bool
     let excludedApps: [ContextExcludedApp]
     let hasAccessibility: Bool
+    var saveShortcut = HotkeyOption.defaultSaveFeedback.symbolLabel
+    var cancelShortcut = HotkeyOption.defaultCancel.symbolLabel
     var canEdit = true
     var onExclude: (ContextExcludedApp) -> Void
     var onAllow: (String) -> Void
@@ -94,8 +103,8 @@ struct EnglishLearningSettingsView: View {
                     Spacer()
                     Button("Open English Learning", action: onOpenLessons)
                 }
-                LabeledContent("Save feedback", value: "⌘S")
-                LabeledContent("Close feedback", value: "Esc")
+                LabeledContent("Save feedback", value: saveShortcut)
+                LabeledContent("Close feedback", value: cancelShortcut)
             }
 
             Section("Data & privacy") {
