@@ -151,8 +151,12 @@ click-to-expand explanations and the floating panel's resizing. The fixture pins
 this panel open so it stays available during interaction checks.
 Its Settings preview uses the production shortcut recorder with in-memory bindings.
 Check a new combination, Escape cancellation, reassigning Escape under Cancel / Close,
+the inline Save feedback and Cancel / Close key buttons in English Learning settings,
 and direct typing/pasting in the full-width secure API key field. Saving in the fixture
 only clears its synthetic input; the Keychain suite uses a separate disposable item.
+Settings uses native grouped forms, neutral action buttons, and system typography;
+compare API Key with General and Shortcuts at the same window size. Blue correction
+highlights belong to feedback, with no blue tint forced on Settings or the library.
 
 `./scripts/test.sh output --live` opens a temporary text window to
 check the actual paste shortcut, selection replacement, Unicode, and clipboard

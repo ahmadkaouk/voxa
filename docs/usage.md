@@ -143,6 +143,10 @@ Saving lessons cancels the timer; a failed save keeps the review open for retry.
 
 These are the default shortcuts. Customize both in Settings → Shortcuts; the
 feedback buttons and English Learning settings show your current combinations.
+The Save feedback and Cancel / Close key buttons in English Learning settings can
+also be edited directly. Click a combination, press the new keys, and release them
+to save. Escape can be assigned to Cancel / Close.
+
 - **English Learning → Lessons & Progress…:** review, practise, or delete saved
   lessons, and view or clear progress separately.
 - **Try once:** beside a pattern, say the improved version,

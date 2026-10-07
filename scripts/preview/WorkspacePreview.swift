@@ -200,6 +200,8 @@ private struct WorkspaceSettingsPreview: View {
                 SettingsPage(title: "English Learning", subtitle: "Turn everyday dictation into a little practice.") {
                     EnglishLearningSettingsView(feedbackEnabled: $feedback, contextEnabled: $context,
                         excludedApps: [], hasAccessibility: true, saveShortcut: save.symbolLabel, cancelShortcut: cancel.symbolLabel,
+                        recordingShortcut: recorder.target, shortcutPreview: recorder.preview?.symbolLabel,
+                        onEditShortcut: editShortcut,
                         onExclude: { _ in }, onAllow: { _ in }, onOpenLessons: {})
                 }
             case .apiKey:
@@ -223,5 +225,17 @@ private struct WorkspaceSettingsPreview: View {
         .onChange(of: selection) { _ in recorder.stop(); key = "" }
         .onDisappear { recorder.stop(); key = "" }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in recorder.stop() }
+    }
+
+    private func editShortcut(_ target: HotkeyRecordingTarget) {
+        if recorder.target == target { recorder.stop(); return }
+        let current: HotkeyOption
+        switch target {
+        case .toggle: current = toggle
+        case .finishAndSubmit: current = submit
+        case .saveFeedback: current = save
+        case .cancel: current = cancel
+        }
+        recorder.start(target: target, current: current)
     }
 }

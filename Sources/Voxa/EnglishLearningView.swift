@@ -116,8 +116,6 @@ struct SavedCorrectionsView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .searchable(text: $search, placement: .sidebar, prompt: "Search lessons")
-        .tint(VoxaAppearance.blue)
-        .accentColor(VoxaAppearance.blue)
         .frame(minWidth: 940, idealWidth: 1060, minHeight: 560, idealHeight: 680, alignment: .topLeading)
         .toolbar {
             if let onShortReview, currentSection.isLibrary {

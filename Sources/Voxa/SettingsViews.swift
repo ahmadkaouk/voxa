@@ -66,8 +66,7 @@ struct SettingsSidebarLayout<Content: View>: View {
         }
         .navigationSplitViewStyle(.balanced)
         .searchable(text: $search, placement: .sidebar, prompt: "Search")
-        .tint(VoxaAppearance.blue)
-        .accentColor(VoxaAppearance.blue)
+        .buttonStyle(.bordered)
         .frame(minWidth: 760, idealWidth: 820, minHeight: 560, idealHeight: 620, alignment: .topLeading)
     }
 
@@ -92,7 +91,7 @@ struct SettingsPage<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.title2.weight(.semibold))
+                Text(title).font(.headline).foregroundStyle(.primary)
                 Text(subtitle).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }.padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 8)
@@ -115,15 +114,15 @@ struct GeneralSettingsView: View {
                 Section("Dictation") {
                     Picker("Transcription model", selection: $model) {
                         ForEach(ModelOption.allCases) { Text($0.label).tag($0) }
-                    }
+                    }.tint(.primary)
                     Picker("Output", selection: $output) {
                         ForEach(OutputModeOption.allCases) { Text($0.label).tag($0) }
-                    }
+                    }.tint(.primary)
                     Picker("Recording limit", selection: $duration) {
                         ForEach(Array(Set([30, 60, 120, 300, 600, 1800, 3600, duration])).sorted(), id: \.self) { seconds in
                             Text(seconds % 60 == 0 ? "\(seconds / 60) min" : "\(seconds) sec").tag(seconds)
                         }
-                    }
+                    }.tint(.primary)
                 }.disabled(!canEdit)
                 Section {
                     permission("Microphone", detail: "Record your voice.",
@@ -166,51 +165,41 @@ struct APIKeySettingsView: View {
 
     var body: some View {
         SettingsPage(title: "API Key", subtitle: "Connect the service used for dictation and English feedback.") {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("OpenAI").font(.headline)
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("Status")
-                            Spacer()
-                            Label(configured ? "Configured" : "Not configured", systemImage: configured ? "checkmark.circle" : "key")
-                                .foregroundStyle(.secondary)
-                        }
-                        Divider()
-                        HStack {
-                            Text("Storage")
-                            Spacer()
-                            Text(source == "keychain" ? "macOS Keychain" : "Environment").foregroundStyle(.secondary)
-                        }
-                        Divider()
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(configured ? "Replace API key" : "API key").font(.callout)
-                            SecureField("Paste your API key", text: $input)
-                                .labelsHidden().textFieldStyle(.roundedBorder)
-                                .frame(maxWidth: .infinity, alignment: .leading).frame(height: 28)
-                                .disabled(busy || source == "env")
-                                .accessibilityLabel("OpenAI API key")
-                                .accessibilityHint(configured ? "A key is saved. Enter a new key to replace it." : "Enter your API key.")
-                                .onSubmit { if canSave { onSave() } }
-                        }.padding(.vertical, 6)
-                        if let error, !error.isEmpty {
-                            Label(error, systemImage: "exclamationmark.triangle")
-                                .font(.callout).fixedSize(horizontal: false, vertical: true)
-                        }
-                        HStack {
-                            Spacer()
-                            Button(saving ? "Saving…" : (configured ? "Replace Key" : "Save Key"), action: onSave)
-                                .disabled(!canSave)
-                        }
-                    }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+            Form {
+                Section {
+                    LabeledContent("Status") {
+                        Label(configured ? "Configured" : "Not configured", systemImage: configured ? "checkmark.circle" : "key")
+                            .foregroundStyle(.secondary)
+                    }
+                    LabeledContent("Storage") {
+                        Text(source == "keychain" ? "macOS Keychain" : "Environment").foregroundStyle(.secondary)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(configured ? "Replace API key" : "API key")
+                        SecureField("Paste your API key", text: $input)
+                            .labelsHidden().textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .disabled(busy || source == "env")
+                            .accessibilityLabel("OpenAI API key")
+                            .accessibilityHint(configured ? "A key is saved. Enter a new key to replace it." : "Enter your API key.")
+                            .onSubmit { if canSave { onSave() } }
+                    }.padding(.vertical, 4)
+                    if let error, !error.isEmpty {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack {
+                        Spacer()
+                        Button(saving ? "Saving…" : (configured ? "Replace Key" : "Save Key"), action: onSave)
+                            .foregroundStyle(.primary).disabled(!canSave)
+                    }
+                } header: { Text("OpenAI") } footer: {
                     Text(source == "env"
                          ? "This key comes from OPENAI_API_KEY. Update it in the environment, then restart Voxa."
                          : "Paste a new key and choose Save or Replace Key. Your saved key stays private in macOS Keychain.")
-                        .font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
-            }
+                }
+            }.formStyle(.grouped)
         }
     }
 
@@ -320,6 +309,8 @@ struct VoxaSettingsView: View {
                     hasAccessibility: controller.permissions.accessibility,
                     saveShortcut: controller.saveFeedbackHotkey.symbolLabel, cancelShortcut: controller.cancelHotkey.symbolLabel,
                     canEdit: controller.canEditDictationSettings,
+                    recordingShortcut: hotkeyRecorder.target, shortcutPreview: hotkeyRecorder.preview?.symbolLabel,
+                    onEditShortcut: editShortcut,
                     onExclude: controller.excludeContextApp, onAllow: controller.allowContextApp,
                     onOpenLessons: { openWindow(id: "english-lessons") })
             }
@@ -328,6 +319,18 @@ struct VoxaSettingsView: View {
                 input: $controller.apiKeyInput, busy: controller.isBusy, saving: controller.isSavingKey,
                 error: controller.apiKeyError, onSave: controller.saveAPIKey)
         }
+    }
+
+    private func editShortcut(_ target: HotkeyRecordingTarget) {
+        if hotkeyRecorder.target == target { hotkeyRecorder.stop(); return }
+        let current: HotkeyOption
+        switch target {
+        case .toggle: current = controller.toggleHotkey
+        case .finishAndSubmit: current = controller.finishAndSubmitHotkey
+        case .saveFeedback: current = controller.saveFeedbackHotkey
+        case .cancel: current = controller.cancelHotkey
+        }
+        hotkeyRecorder.start(target: target, current: current)
     }
 
     private func configureHotkeyRecorder() {

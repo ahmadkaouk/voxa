@@ -10,7 +10,7 @@ struct SettingsControlLabel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 13, weight: .medium))
+            Text(title).font(.body).foregroundStyle(.primary)
             Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
                 .lineSpacing(2).fixedSize(horizontal: false, vertical: true)
         }
@@ -30,14 +30,12 @@ struct SettingsShortcutRow: View {
             SettingsControlLabel(title: title, detail: detail)
             Spacer(minLength: 4)
             Button(action: recording ? onCancel : onRecord) {
-                Text(shortcut).font(.system(size: 13, weight: .medium))
-                    .frame(minWidth: 74).padding(.horizontal, 10).padding(.vertical, 6)
-                    .foregroundStyle(recording ? Color.accentColor : Color.primary)
-                    .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(recording ? Color.accentColor : Color.primary.opacity(0.15), lineWidth: recording ? 2 : 1))
+                Text(shortcut).font(.body)
+                    .frame(minWidth: 74)
                     .fixedSize()
-            }.buttonStyle(.plain)
+            }.buttonStyle(.bordered).foregroundStyle(.primary)
+                .overlay(RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(recording ? Color.accentColor : Color.clear, lineWidth: 2))
                 .accessibilityLabel("\(title) shortcut")
                 .accessibilityValue(recording ? "Recording shortcut" : shortcut)
                 .accessibilityHint(recording ? "Press your new shortcut, or click to cancel." : "Click to change this shortcut.")
@@ -55,6 +53,9 @@ struct EnglishLearningSettingsView: View {
     var saveShortcut = HotkeyOption.defaultSaveFeedback.symbolLabel
     var cancelShortcut = HotkeyOption.defaultCancel.symbolLabel
     var canEdit = true
+    var recordingShortcut: HotkeyRecordingTarget?
+    var shortcutPreview: String?
+    var onEditShortcut: ((HotkeyRecordingTarget) -> Void)?
     var onExclude: (ContextExcludedApp) -> Void
     var onAllow: (String) -> Void
     var onOpenLessons: () -> Void
@@ -103,8 +104,16 @@ struct EnglishLearningSettingsView: View {
                     Spacer()
                     Button("Open English Learning", action: onOpenLessons)
                 }
-                LabeledContent("Save feedback", value: saveShortcut)
-                LabeledContent("Close feedback", value: cancelShortcut)
+                shortcut("Save feedback", detail: "Save the visible corrections and close feedback.",
+                         value: saveShortcut, target: .saveFeedback)
+                shortcut("Cancel / Close", detail: "Discard dictation or close feedback.",
+                         value: cancelShortcut, target: .cancel)
+            }
+            if let recordingShortcut {
+                Text(recordingShortcut == .cancel
+                     ? "Release the keys to save. Click the shortcut again to cancel. Escape can be assigned here."
+                     : "Release the keys to save. Press Esc or click the shortcut again to cancel.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
 
             Section("Data & privacy") {
@@ -117,6 +126,14 @@ struct EnglishLearningSettingsView: View {
         .formStyle(.grouped)
         .toggleStyle(.switch)
         .sheet(isPresented: $showExcludedApps) { exclusions }
+    }
+
+    private func shortcut(_ title: String, detail: String, value: String, target: HotkeyRecordingTarget) -> some View {
+        SettingsShortcutRow(title: title, detail: detail,
+            shortcut: recordingShortcut == target ? (shortcutPreview ?? "Type shortcut") : value,
+            recording: recordingShortcut == target,
+            onRecord: { onEditShortcut?(target) }, onCancel: { onEditShortcut?(target) })
+            .disabled(!canEdit || onEditShortcut == nil)
     }
 
     private func detail(_ title: String, _ text: String) -> some View {

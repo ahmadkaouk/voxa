@@ -1,10 +1,6 @@
 import AppKit
 import SwiftUI
 
-enum VoxaAppearance {
-    static let blue = Color(nsColor: .systemBlue)
-}
-
 /// Compact sidebar labels share macOS Settings' icon and text proportions.
 struct VoxaSidebarLabel: View {
     let title: String
@@ -18,7 +14,7 @@ struct VoxaSidebarLabel: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white)
                 .frame(width: 18, height: 18)
-                .background(VoxaAppearance.blue, in: RoundedRectangle(cornerRadius: 4))
+                .background(Color(nsColor: .systemGray), in: RoundedRectangle(cornerRadius: 4))
         }
     }
 }
