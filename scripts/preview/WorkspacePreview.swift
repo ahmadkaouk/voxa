@@ -42,6 +42,7 @@ private final class WorkspaceFixtures: ObservableObject {
     let review = FeedbackController(client: WorkspaceFeedback(), store: WorkspaceLessons([]), progressStore: WorkspaceProgress())
     private let reviewPanel = FeedbackPanelController()
     private var reviewObservation: AnyCancellable?
+    private var useCardWindow = false
 
     init() {
         let lessons: [EnglishFeedback] = [
@@ -70,7 +71,7 @@ private final class WorkspaceFixtures: ObservableObject {
         reviewObservation = review.$panelVisible.removeDuplicates().sink { [weak self] visible in
             guard let self else { return }
             if visible {
-                self.reviewPanel.show(self.review)
+                if !self.useCardWindow { self.reviewPanel.show(self.review) }
                 // Hold this synthetic panel open while checking its disclosure controls.
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.review.panelVisible, !self.review.isPinned else { return }
@@ -81,8 +82,23 @@ private final class WorkspaceFixtures: ObservableObject {
         }
     }
 
+    func showFeedbackCard() {
+        useCardWindow = true
+        reviewPanel.hide()
+        showFeedback()
+    }
+
+    func showFloatingFeedback() {
+        useCardWindow = false
+        if review.panelVisible { reviewPanel.show(review) }
+        else { showFeedback() }
+    }
+
     func showFeedback() {
-        if review.hasReview { review.showLatest(); return }
+        if review.hasReview {
+            if !review.panelVisible { review.showLatest() }
+            return
+        }
         review.setEnabled(true)
         let id = UUID()
         review.updateDictation(.starting(.init(id: id, origin: .manual, settings: .init()), requested: nil))
@@ -117,7 +133,11 @@ private struct WorkspacePreview: App {
                 Button("Settings Preview…") { openWindow(id: "settings-preview") }.keyboardShortcut(",")
             }
             CommandMenu("Preview") {
-                Button("Feedback Panel") { fixtures.showFeedback() }.keyboardShortcut("f", modifiers: [.command, .shift])
+                Button("Feedback Panel") { fixtures.showFloatingFeedback() }.keyboardShortcut("f", modifiers: [.command, .shift])
+                Button("Feedback Card Window") {
+                    fixtures.showFeedbackCard()
+                    openWindow(id: "feedback-card-preview")
+                }.keyboardShortcut("v", modifiers: [.command, .shift])
                 Divider()
                 Button("Light Appearance") { NSApp.appearance = NSAppearance(named: .aqua) }
                 Button("Dark Appearance") { NSApp.appearance = NSAppearance(named: .darkAqua) }
@@ -128,7 +148,11 @@ private struct WorkspacePreview: App {
                 Button("Window Size Details…") { showWindowSize() }
             }
         }
-        Window("Voxa Settings Preview", id: "settings-preview") {
+        Window("Feedback Card Preview", id: "feedback-card-preview") {
+            FeedbackCardPreview(controller: fixtures.review, onReplay: fixtures.showFeedbackCard)
+        }
+        .windowResizability(.contentSize)
+        Window("Settings Preview", id: "settings-preview") {
             WorkspaceSettingsPreview()
         }
         .defaultSize(width: 820, height: 620)
@@ -182,6 +206,7 @@ private struct WorkspaceSettingsPreview: View {
     @PreviewState private var duration: UInt64 = 300
     @PreviewState private var feedback = true
     @PreviewState private var context = true
+    @PreviewState private var autoCloseSeconds: UInt64 = 5
     @PreviewState private var key = ""
     @PreviewState private var keyConfigured = true
     @PreviewState private var toggle = HotkeyOption.defaultToggle
@@ -199,6 +224,7 @@ private struct WorkspaceSettingsPreview: View {
             case .learning:
                 SettingsPage(title: "English Learning", subtitle: "Turn everyday dictation into a little practice.") {
                     EnglishLearningSettingsView(feedbackEnabled: $feedback, contextEnabled: $context,
+                        autoCloseSeconds: $autoCloseSeconds,
                         excludedApps: [], hasAccessibility: true, saveShortcut: save.symbolLabel, cancelShortcut: cancel.symbolLabel,
                         recordingShortcut: recorder.target, shortcutPreview: recorder.preview?.symbolLabel,
                         onEditShortcut: editShortcut,
@@ -237,5 +263,23 @@ private struct WorkspaceSettingsPreview: View {
         case .cancel: current = cancel
         }
         recorder.start(target: target, current: current)
+    }
+}
+
+/// A regular window makes the production glass view inspectable by screenshot tools.
+private struct FeedbackCardPreview: View {
+    @ObservedObject var controller: FeedbackController
+    let onReplay: () -> Void
+    var body: some View {
+        VStack {
+            if controller.panelVisible {
+                FeedbackReviewView(controller: controller, maximumHeight: 600)
+            } else {
+                VStack(spacing: 16) {
+                    Text("Feedback closed").font(.headline)
+                    Button("Replay feedback", action: onReplay)
+                }.frame(width: FeedbackReviewView.width, height: 200)
+            }
+        }.padding(28).background(Color(nsColor: .windowBackgroundColor))
     }
 }

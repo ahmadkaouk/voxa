@@ -28,7 +28,7 @@ and quit Voxa first. The installer preserves a signed backup of the previous app
 
 ### Set up Voxa
 
-1. Open Voxa from the menu bar and choose **Voxa Settings… → API Key**. Save your OpenAI API
+1. Open Voxa from the menu bar and choose **Settings… → API Key**. Save your OpenAI API
    key; Voxa stores it in macOS Keychain.
 2. Allow the permissions needed for the features you use:
 
@@ -55,7 +55,7 @@ the relevant System Settings page. Return to Voxa after granting access.
 | Finish & Send | Press **Option + G** while recording in Autopaste mode |
 | Discard a recording | Press **Esc** while recording (also cancels microphone startup) |
 
-Change shortcuts in **Voxa Settings… → Shortcuts**. **General** contains the
+Change shortcuts in **Settings… → Shortcuts**. **General** contains the
 transcription model, output mode, recording limit and permission status.
 Click the displayed key combination to record a replacement; release the keys to save.
 Start / Stop, Finish & Send, Save feedback and Cancel / Close are configurable.
@@ -66,8 +66,9 @@ or click the same control again. When editing Cancel / Close, Escape assigns Esc
 **Max Recording** sets the recording limit; the default is five minutes. Transcription begins after
 recording finishes. Discarding a recording skips transcription and output.
 
-The compact black bar appears while recording or processing, then hides after a brief
-completion checkmark. Its waveform responds to your microphone level. Drag the timer
+The compact glass bar has a Dock-style rounded rectangular shape and uses clear native Liquid Glass on macOS 26 and later, with a material
+fallback on earlier versions. It shows a red stop control while recording, a spinner
+while processing, then a brief green checkmark and “Text ready” before hiding. Its waveform responds to your microphone level. Drag the timer
 or waveform area to move the bar; Voxa remembers its position across recordings and
 relaunches. The stop button remains clickable. Reduced Motion removes continuous
 waveform movement while keeping the microphone level visible.
@@ -99,21 +100,23 @@ you replace it with another dictation or quit Voxa.
 
 ### English learning
 
-Enable **Voxa Settings → English Learning → Feedback after dictation** for
+Enable **Settings → English Learning → Feedback after dictation** for
 background English coaching. Dictation is inserted normally and never rewritten;
 feedback failures do not interrupt it.
 
-Each correction shows its full **Before / After** sentence, with blue highlights
-on changed words and a strike through removed wording. Click the correction or
-**Why?** to reveal its explanation, **Remember** rule and **Try once** practice
+The compact **Quiet card** shows the full **You said / Improved** sentences, with
+blue highlights behind changed words and a strike through removed wording. Choose
+**Why this change?** to reveal its explanation, **Remember** rule and **Try once** practice
 action. Click again to hide those details; the full sentence stays visible.
 Independent corrections in the same sentence share one comparison and keep their
 explanations together. Conflicting suggestions remain separate comparisons.
 
 **Optional wording** stays visible after the corrections, with a short explanation
 and any reusable pattern. Short reviews fit their
-content; longer reviews scroll above the fixed action bar. The panel uses one
-uniform neutral background in light and dark appearance, with blue changes and Save.
+content; longer reviews scroll above the fixed Save action and auto-close status.
+The 380-point-wide panel uses clear native Liquid Glass on macOS 26+, a material fallback
+on older systems, and an opaque background with Reduce Transparency. The pin and
+close controls stay in the header. Your configured Save and Cancel shortcuts still work.
 Grammar confirmation and successful patterns stay in a quiet summary. The coach
 preserves meaning, tone, uncertainty and technical terms, and ignores fillers and
 clear self-corrections.
@@ -131,10 +134,13 @@ pronunciation or conversational fluency. A clean dictation can still show a brie
 positive review. Old grammar-only observations stay saved but cannot be converted
 into a broader level without their original text.
 
-The panel appears after delivery without taking focus and hides automatically after
-five seconds. Hovering pauses the countdown; the timer button pins the panel open.
+The panel appears after delivery without taking focus. Choose its duration in
+**Settings → English Learning → Auto-close feedback** (five seconds by default),
+or choose **Never** to keep it open until you close or save it.
+Hovering pauses the countdown; the timer button pins the panel open.
 Leaving the panel or unpinning resumes the remaining time. A new recording also hides it; **English Learning → Show Latest Feedback**
-reopens the latest review for another five seconds until another transcript replaces it.
+reopens the latest review with your chosen duration until another transcript replaces it.
+Changing the duration restarts the countdown while preserving hover and pin pauses.
 Saving lessons cancels the timer; a failed save keeps the review open for retry.
 
 - **Save / ⌘S:** save all corrections and alternatives, then close.
@@ -213,7 +219,7 @@ unsaved findings; saved lessons and existing progress remain until deleted.
 
 ### Automatic text context
 
-Enable **Voxa Settings → English Learning → Use nearby text automatically** once
+Enable **Settings → English Learning → Use nearby text automatically** once
 to give English feedback more background while you work. It is off by default,
 including after upgrading. English feedback must also be enabled. A menu toggle
 is available under **English Learning**.

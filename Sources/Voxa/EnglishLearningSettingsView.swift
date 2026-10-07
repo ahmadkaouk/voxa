@@ -11,7 +11,7 @@ struct SettingsControlLabel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.body).foregroundStyle(.primary)
-            Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
+            Text(detail).font(.callout).foregroundStyle(.secondary)
                 .lineSpacing(2).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -48,6 +48,7 @@ struct SettingsShortcutRow: View {
 struct EnglishLearningSettingsView: View {
     @Binding var feedbackEnabled: Bool
     @Binding var contextEnabled: Bool
+    @Binding var autoCloseSeconds: UInt64
     let excludedApps: [ContextExcludedApp]
     let hasAccessibility: Bool
     var saveShortcut = HotkeyOption.defaultSaveFeedback.symbolLabel
@@ -70,8 +71,21 @@ struct EnglishLearningSettingsView: View {
                 }.disabled(!canEdit)
                     .accessibilityLabel("Feedback after dictation")
                     .accessibilityHint("Corrections, natural phrasing and short practice.")
+                Picker("Auto-close feedback", selection: $autoCloseSeconds) {
+                    Text("Never").tag(UInt64(0))
+                    ForEach(autoCloseOptions, id: \.self) { seconds in
+                        Text(seconds % 60 == 0 ? "\(seconds / 60) \(seconds == 60 ? "minute" : "minutes")" :
+                             "\(seconds) \(seconds == 1 ? "second" : "seconds")")
+                            .tag(seconds)
+                    }
+                }
+                .tint(.primary)
+                .disabled(!canEdit || !feedbackEnabled)
+                .accessibilityHint("Choose how long feedback stays open. Never keeps it open until you close it.")
             } header: { Text("Feedback") } footer: {
-                Text("Feedback appears for five seconds. Hover to keep reading, or pin it to keep it open.")
+                Text(autoCloseSeconds == 0
+                     ? "Feedback stays open until you close or save it."
+                     : "The timer starts when feedback appears. Hover to pause it, or pin feedback to keep it open.")
             }
 
             Section {
@@ -123,9 +137,13 @@ struct EnglishLearningSettingsView: View {
                 Link("OpenAI data retention details", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
             }
         }
-        .formStyle(.grouped)
+        .voxaSettingsFormStyle()
         .toggleStyle(.switch)
         .sheet(isPresented: $showExcludedApps) { exclusions }
+    }
+
+    private var autoCloseOptions: [UInt64] {
+        Array(Set([3, 5, 10, 15, 30, 60, 120, 300, autoCloseSeconds])).filter { $0 > 0 }.sorted()
     }
 
     private func shortcut(_ title: String, detail: String, value: String, target: HotkeyRecordingTarget) -> some View {

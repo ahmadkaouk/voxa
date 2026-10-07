@@ -29,8 +29,10 @@ final class ActivityOverlayModel: ObservableObject {
 }
 
 enum ActivityOverlayMetrics {
-    static let panelSize = NSSize(width: 312, height: 80)
-    static let activeSize = NSSize(width: 280, height: 52)
+    static let panelSize = NSSize(width: 268, height: 96)
+    static let activeSize = NSSize(width: 220, height: 48)
+    // Continuous corners with flat sides, following the Dock's rounded rectangle.
+    static let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
     static let waveform: [CGFloat] = [7, 11, 17, 25, 14, 28, 19, 34, 24, 15, 30, 38, 26, 16, 33, 22, 28, 18, 23, 13, 7]
 
     static func barHeight(index: Int, level: Double, time: TimeInterval) -> CGFloat {
@@ -45,86 +47,128 @@ enum ActivityOverlayMetrics {
 struct ActivityOverlayView: View {
     @ObservedObject var model: ActivityOverlayModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var ink: Color { Color(nsColor: .labelColor) }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Color.clear
-            HStack(spacing: 18) {
-                HStack(spacing: 18) {
+            barContent
+                .frame(width: ActivityOverlayMetrics.activeSize.width, height: ActivityOverlayMetrics.activeSize.height)
+                .modifier(ActivityOverlaySurface())
+                .shadow(color: .black.opacity(0.16), radius: 12, y: 5)
+                .padding(.bottom, 20)
+                .help(model.phase == .listening ? "Drag to move · \(model.content.cancelShortcut) to cancel" : model.content.title + " · Drag to move")
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Voxa: \(model.content.title)")
+        }
+        .frame(width: ActivityOverlayMetrics.panelSize.width, height: ActivityOverlayMetrics.panelSize.height)
+    }
+
+    @ViewBuilder private var barContent: some View {
+        switch model.phase {
+        case .idle, .listening:
+            HStack(spacing: 16) {
+                HStack(spacing: 16) {
                     TimelineView(.animation(minimumInterval: 1, paused: model.phase != .listening)) { timeline in
                         Text(elapsed(at: timeline.date))
                             .font(.system(size: 12, weight: .medium)).monospacedDigit()
-                            .foregroundStyle(.white.opacity(0.65))
-                    }.frame(width: 39, alignment: .leading)
-                    indicator.frame(maxWidth: .infinity)
+                            .foregroundStyle(ink)
+                            .lineLimit(1).minimumScaleFactor(0.75)
+                    }.frame(width: 34, alignment: .leading)
+                    waveform
                 }
                 .frame(height: ActivityOverlayMetrics.activeSize.height)
                 .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                    .onChanged { model.onMove($0.startLocation, $0.location, false) }
-                    .onEnded { model.onMove($0.startLocation, $0.location, true) })
-                control
+                .gesture(moveGesture)
+                recordingControl
             }
-            .padding(.horizontal, 14)
-            .frame(width: ActivityOverlayMetrics.activeSize.width, height: ActivityOverlayMetrics.activeSize.height)
-            .background(.black, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
-            .padding(.bottom, 12)
-            .help(model.phase == .listening ? "Drag to move · \(model.content.cancelShortcut) to cancel" : model.content.title + " · Drag to move")
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Voxa: \(model.content.title)")
-        }
-        .frame(width: ActivityOverlayMetrics.panelSize.width, height: ActivityOverlayMetrics.panelSize.height)
-        .preferredColorScheme(.dark)
-    }
-
-    @ViewBuilder private var indicator: some View {
-        switch model.phase {
-        case .idle, .listening:
-            TimelineView(.animation(minimumInterval: 1.0 / 30,
-                                    paused: reduceMotion || model.phase != .listening || model.level <= 0.015)) { timeline in
-                HStack(spacing: 2) {
-                    ForEach(ActivityOverlayMetrics.waveform.indices, id: \.self) { index in
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(.white.opacity(0.9))
-                            .frame(width: 3, height: ActivityOverlayMetrics.barHeight(
-                                index: index, level: model.phase == .listening ? model.level : 0,
-                                time: reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate))
-                    }
-                }
-                .frame(height: 26)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: model.level)
-            }.accessibilityLabel("Microphone level").accessibilityValue("\(Int(model.level * 100)) percent")
+            .padding(.horizontal, 16)
         case .transcribing:
-            ProgressView().controlSize(.small).tint(.primary)
-                .accessibilityLabel(model.content.title)
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text(processingTitle).font(.callout.weight(.medium)).foregroundStyle(.primary)
+                    .lineLimit(1).minimumScaleFactor(0.85)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(ActivityOverlayMetrics.shape)
+            .gesture(moveGesture)
+            .accessibilityElement(children: .ignore).accessibilityLabel(model.content.title)
         case .outputting:
-            Image(systemName: "checkmark").font(.system(size: 18, weight: .medium))
-                .accessibilityLabel(model.content.title)
+            HStack(spacing: 9) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(Color(nsColor: .systemGreen))
+                Text("Text ready").font(.callout.weight(.medium)).foregroundStyle(.primary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(ActivityOverlayMetrics.shape)
+            .gesture(moveGesture)
+            .accessibilityElement(children: .ignore).accessibilityLabel(model.content.title)
         }
     }
 
-    @ViewBuilder private var control: some View {
-        if model.phase == .idle || model.phase == .listening {
-            Button(action: model.phase == .idle ? model.onStart : model.onStop) {
-                Image(systemName: model.phase == .idle ? "mic.fill" : "stop.fill")
-                    .font(.system(size: model.phase == .idle ? 14 : 11, weight: .medium))
-                    .frame(width: 32, height: 32)
-                    .foregroundStyle(.white)
-                    .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
-                    .contentShape(RoundedRectangle(cornerRadius: 9))
-            }.buttonStyle(.plain)
-                .accessibilityLabel(model.phase == .idle ? "Start dictation" : "Finish dictation")
-                .help(model.phase == .idle ? "Start dictation · \(model.content.subtitle ?? "")" : "Finish dictation and paste · \(model.content.cancelShortcut) to cancel")
-        } else {
-            Color.clear.frame(width: 32, height: 32).accessibilityHidden(true)
+    private var waveform: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30,
+                                paused: reduceMotion || model.phase != .listening || model.level <= 0.015)) { timeline in
+            HStack(spacing: 2) {
+                ForEach(0..<17, id: \.self) { index in
+                    let sample = index * (ActivityOverlayMetrics.waveform.count - 1) / 16
+                    Capsule().fill(ink)
+                        .frame(width: 3, height: ActivityOverlayMetrics.barHeight(
+                            index: sample, level: model.phase == .listening ? model.level : 0,
+                            time: reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate))
+                }
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: model.level)
         }
+        .frame(width: 88, height: 26)
+        .accessibilityLabel("Microphone level").accessibilityValue("\(Int(model.level * 100)) percent")
+    }
+
+    private var recordingControl: some View {
+        Button(action: model.phase == .idle ? model.onStart : model.onStop) {
+            Image(systemName: model.phase == .idle ? "mic.fill" : "stop.fill")
+                .font(.system(size: model.phase == .idle ? 14 : 10, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(Color(nsColor: .systemRed), in: Circle())
+                .contentShape(Circle())
+        }.buttonStyle(.plain)
+            .accessibilityLabel(model.phase == .idle ? "Start dictation" : "Finish dictation")
+            .help(model.phase == .idle ? "Start dictation · \(model.content.subtitle ?? "")" : "Finish dictation and paste · \(model.content.cancelShortcut) to cancel")
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .global)
+            .onChanged { model.onMove($0.startLocation, $0.location, false) }
+            .onEnded { model.onMove($0.startLocation, $0.location, true) }
+    }
+
+    private var processingTitle: String {
+        model.content.title.hasSuffix("…") ? model.content.title : model.content.title + "…"
     }
 
     private func elapsed(at date: Date) -> String {
         guard let started = model.startedAt else { return "0:00" }
         let seconds = max(0, Int((model.finishedAt ?? date).timeIntervalSince(started)))
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+private struct ActivityOverlaySurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(Color(nsColor: .windowBackgroundColor), in: ActivityOverlayMetrics.shape)
+                .overlay(ActivityOverlayMetrics.shape.strokeBorder(.primary.opacity(0.12), lineWidth: 0.5))
+        } else if #available(macOS 26.0, *) {
+            content.glassEffect(.clear, in: ActivityOverlayMetrics.shape)
+        } else {
+            content.background(.regularMaterial, in: ActivityOverlayMetrics.shape)
+                .overlay(ActivityOverlayMetrics.shape.strokeBorder(.primary.opacity(0.12), lineWidth: 0.5))
+        }
     }
 }
 
@@ -237,7 +281,14 @@ final class ActivityOverlayController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isReleasedWhenClosed = false
         panel.contentView = TransparentOverlayHostingView(rootView: ActivityOverlayView(model: model))
-        if !panel.setFrameUsingName(frameName, force: true) { position(panel) }
+        if panel.setFrameUsingName(frameName, force: true) {
+            // Keep the saved center and bottom when migrating from the wider bar.
+            let savedFrame = panel.frame
+            panel.setContentSize(ActivityOverlayMetrics.panelSize)
+            panel.setFrameOrigin(NSPoint(x: savedFrame.midX - panel.frame.width / 2, y: savedFrame.minY))
+        } else {
+            position(panel)
+        }
         // AppKit restores the user's position across recordings and app launches.
         panel.setFrameAutosaveName(frameName)
         self.panel = panel

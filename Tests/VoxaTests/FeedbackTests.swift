@@ -82,6 +82,136 @@ private final class FeedbackTimerFixture {
 
 @MainActor
 enum FeedbackChecks {
+    static func configurableAutoClose() async throws {
+        let timer = FeedbackTimerFixture()
+        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
+        controller.setEnabled(true)
+        controller.setAutoCloseSeconds(30)
+        let id = UUID()
+        start(controller, id: id); finish(controller, id: id)
+        try await eventually { timer.delays.count == 1 }
+        try unitEqual(timer.delays, [.seconds(30)])
+
+        controller.setAutoCloseSeconds(10)
+        try await eventually { timer.delays.count == 2 }
+        try unitEqual(timer.delays[1], .seconds(10))
+        try await timer.fire(0)
+        try unitExpect(controller.panelVisible) // Replaced timers cannot close the current review.
+        let deadline = controller.dismissalDeadline
+        controller.setAutoCloseSeconds(10)
+        controller.setAutoCloseSeconds(301)
+        try unitEqual(controller.dismissalDeadline, deadline)
+        try unitEqual(controller.autoCloseSeconds, 10)
+
+        controller.setAutoCloseSeconds(0)
+        try unitExpect(controller.dismissalDeadline == nil)
+        try await timer.fire(1)
+        try unitExpect(controller.panelVisible)
+        controller.showLatest()
+        for _ in 0..<10 { await Task.yield() }
+        try unitEqual(timer.delays.count, 2)
+        try unitExpect(controller.panelVisible && controller.dismissalDeadline == nil)
+
+        controller.setAutoCloseSeconds(1)
+        try await eventually { timer.delays.count == 3 }
+        try unitEqual(timer.delays[2], .seconds(1))
+        try await timer.fire(2)
+        try await eventually { !controller.panelVisible }
+        controller.setAutoCloseSeconds(60)
+        try unitExpect(!controller.panelVisible) // Editing settings does not reopen a timed-out review.
+        controller.showLatest()
+        try await eventually { timer.delays.count == 4 }
+        try unitEqual(timer.delays[3], .seconds(60))
+        try await timer.fire(3)
+        try await eventually { !controller.panelVisible }
+
+        controller.setAutoCloseSeconds(0)
+        let next = UUID()
+        start(controller, id: next); finish(controller, id: next)
+        try await eventually { controller.panelVisible }
+        try unitExpect(controller.dismissalDeadline == nil)
+        try unitEqual(timer.delays.count, 4)
+        await controller.shutdown()
+    }
+
+    static func autoCloseChangesRetainReadingAndPinPauses() async throws {
+        let timer = FeedbackTimerFixture()
+        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
+        controller.setEnabled(true)
+        let id = UUID()
+        start(controller, id: id); finish(controller, id: id)
+        try await eventually { timer.delays.count == 1 }
+        controller.setReading(true)
+        controller.setAutoCloseSeconds(20)
+        try await timer.fire(0)
+        try unitExpect(controller.panelVisible && controller.isReading && controller.dismissalDeadline == nil)
+        controller.togglePinned()
+        controller.setReading(false)
+        controller.setAutoCloseSeconds(40)
+        for _ in 0..<10 { await Task.yield() }
+        try unitEqual(timer.delays.count, 1)
+        try unitExpect(controller.isPinned && controller.dismissalDeadline == nil)
+        controller.togglePinned()
+        try await eventually { timer.delays.count == 2 }
+        try unitEqual(timer.delays[1], .seconds(40))
+
+        controller.setReading(true)
+        controller.setAutoCloseSeconds(0)
+        controller.setReading(false)
+        controller.togglePinned(); controller.togglePinned()
+        try await timer.fire(1)
+        try unitExpect(controller.panelVisible && controller.dismissalDeadline == nil)
+        try unitEqual(timer.delays.count, 2)
+        controller.setReading(true)
+        controller.setAutoCloseSeconds(300)
+        try unitExpect(controller.dismissalDeadline == nil)
+        controller.setReading(false)
+        try await eventually { timer.delays.count == 3 }
+        try unitEqual(timer.delays[2], .seconds(300))
+        try await timer.fire(2)
+        try await eventually { !controller.panelVisible }
+        await controller.shutdown()
+    }
+
+    static func autoCloseResumesAfterUnrelatedPersistence() async throws {
+        let timer = FeedbackTimerFixture(), store = MemoryCorrections()
+        let first = UUID(), second = UUID()
+        store.items = [first, second].map { SavedCorrection(id: $0, date: Date(), feedback: lesson) }
+        let controller = FeedbackController(client: FeedbackFixture(), store: store,
+            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
+        controller.setEnabled(true)
+        let review = UUID()
+        start(controller, id: review); finish(controller, id: review)
+        try await eventually { timer.delays.count == 1 && controller.storageReady }
+        let deadline = controller.dismissalDeadline
+        let firstSave = PipelineGate()
+        store.saveGate = firstSave
+        controller.delete(first)
+        try await eventually { firstSave.entered }
+        firstSave.open()
+        try await eventually { !controller.isSaving }
+        try unitEqual(controller.dismissalDeadline, deadline) // Ordinary deletion preserves the running countdown.
+        try unitEqual(timer.delays.count, 1)
+
+        let secondSave = PipelineGate()
+        store.saveGate = secondSave
+        controller.delete(second)
+        try await eventually { secondSave.entered }
+        controller.setAutoCloseSeconds(30)
+        try unitExpect(controller.dismissalDeadline == nil && controller.panelVisible)
+        try await timer.fire(0)
+        try unitExpect(controller.panelVisible)
+        secondSave.open()
+        try await eventually { !controller.isSaving && timer.delays.count == 2 }
+        try unitEqual(timer.delays[1], .seconds(30))
+        try unitExpect(controller.dismissalDeadline != nil)
+        try await timer.fire(1)
+        try await eventually { !controller.panelVisible }
+        await controller.shutdown()
+    }
+
     static func readingPausesDismissal() async throws {
         let timer = FeedbackTimerFixture()
         let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
@@ -879,6 +1009,9 @@ enum FeedbackChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("feedback: configured auto-close durations, Never, and live changes", configurableAutoClose),
+        ("feedback: auto-close changes retain hover and pin pauses", autoCloseChangesRetainReadingAndPinPauses),
+        ("feedback: auto-close resumes after unrelated persistence", autoCloseResumesAfterUnrelatedPersistence),
         ("feedback: hover and pin pause dismissal", readingPausesDismissal),
         ("feedback: granular edits and complete sentence comparisons", granularChangesAndFullSentences),
         ("feedback: five-second dismissal starts on presentation and allows reopening", automaticDismissalAndReopening),
@@ -907,6 +1040,9 @@ enum FeedbackChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class FeedbackTests: XCTestCase {
+    func testConfigurableAutoClose() async throws { try await FeedbackChecks.configurableAutoClose() }
+    func testAutoCloseChangesRetainPauses() async throws { try await FeedbackChecks.autoCloseChangesRetainReadingAndPinPauses() }
+    func testAutoCloseResumesAfterPersistence() async throws { try await FeedbackChecks.autoCloseResumesAfterUnrelatedPersistence() }
     func testReadingPausesDismissal() async throws { try await FeedbackChecks.readingPausesDismissal() }
     func testGranularChanges() async throws { try await FeedbackChecks.granularChangesAndFullSentences() }
     func testAutomaticDismissal() async throws { try await FeedbackChecks.automaticDismissalAndReopening() }

@@ -166,6 +166,7 @@ final class AppController: ObservableObject {
     var model: ModelOption { session.settings.model }
     var outputMode: OutputModeOption { session.settings.outputMode }
     var maxRecordingSeconds: UInt64 { preferences.maxRecordingSeconds }
+    var feedbackAutoCloseSeconds: UInt64 { preferences.feedbackAutoCloseSeconds }
     var apiKeySource: String { preferences.apiKeySource }
     var errorMessage: String? {
         if case .failed(_, let message) = session.state { return message }
@@ -191,6 +192,7 @@ final class AppController: ObservableObject {
                 let loaded = try store.load()
                 preferences = loaded
                 feedback.setEnabled(loaded.englishFeedbackEnabled)
+                feedback.setAutoCloseSeconds(loaded.feedbackAutoCloseSeconds)
                 _ = session.updateSettings(loaded.dictation)
                 try CaptureGuard.check()
                 let key = try await keychain.value(source: loaded.apiKeySource)
@@ -250,6 +252,7 @@ final class AppController: ObservableObject {
             }
             preferences = next
             feedback.setEnabled(next.englishFeedbackEnabled)
+            feedback.setAutoCloseSeconds(next.feedbackAutoCloseSeconds)
             settingsError = nil
             // Non-shortcut edits leave physical key tracking alone.
             if hotkeysChanged {
@@ -302,6 +305,7 @@ final class AppController: ObservableObject {
     func setOutputMode(_ value: OutputModeOption) { update(duringDictation: true) { $0.outputMode = value.rawValue } }
     func setMaxRecordingSeconds(_ value: UInt64) { update(duringDictation: true) { $0.maxRecordingSeconds = value } }
     func setEnglishFeedbackEnabled(_ value: Bool) { update(duringDictation: true) { $0.englishFeedbackEnabled = value } }
+    func setFeedbackAutoCloseSeconds(_ value: UInt64) { update(duringDictation: true) { $0.feedbackAutoCloseSeconds = value } }
     func setAutomaticContextEnabled(_ value: Bool) { update(duringDictation: true) { $0.automaticContextEnabled = value } }
     func excludeContextApp(_ app: ContextExcludedApp) {
         update(duringDictation: true) {

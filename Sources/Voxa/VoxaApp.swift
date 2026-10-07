@@ -18,7 +18,7 @@ struct VoxaApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Window("Voxa Settings", id: "settings") {
+        Window("Settings", id: "settings") {
             VoxaSettingsView(controller: appDelegate.controller)
         }
         .defaultSize(width: 820, height: 620)
@@ -128,7 +128,7 @@ struct VoxaMenuView: View {
                 get: { controller.preferences.automaticContextEnabled },
                 set: { controller.setAutomaticContextEnabled($0) }))
                 .disabled(!controller.canEditDictationSettings || !controller.preferences.englishFeedbackEnabled)
-                .help("Sends a short text excerpt from the active app to your feedback service. No screenshots; excerpts aren’t saved locally. Manage excluded apps in Voxa Settings.")
+                .help("Sends a short text excerpt from the active app to your feedback service. No screenshots; excerpts aren’t saved locally. Manage excluded apps in Settings.")
             if controller.feedback.isAnalyzing { Text("Reviewing your English…") }
             if let status = controller.feedback.status { Text(status) }
             Button("Show Latest Feedback") { controller.feedback.showLatest() }
@@ -158,7 +158,7 @@ struct VoxaMenuView: View {
             Button("Enable Input Monitoring…") { Permissions.openSettings("ListenEvent") }
         }
         Button { showSettings() } label: {
-            Label("Voxa Settings…", systemImage: "gearshape")
+            Label("Settings…", systemImage: "gearshape")
         }
         .keyboardShortcut(",")
         Button("Quit Voxa") { controller.quit() }

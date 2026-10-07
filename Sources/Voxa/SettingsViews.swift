@@ -16,10 +16,10 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     }
     var symbol: String {
         switch self {
-        case .general: return "slider.horizontal.3"
+        case .general: return "gear"
         case .shortcuts: return "keyboard"
-        case .learning: return "text.book.closed"
-        case .apiKey: return "key"
+        case .learning: return "globe"
+        case .apiKey: return "key.horizontal"
         }
     }
 
@@ -29,7 +29,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: keywords = "dictation transcription model output recording limit microphone accessibility input monitoring permissions"
         case .shortcuts: keywords = "keyboard start stop finish send save feedback cancel close escape"
-        case .learning: keywords = "English feedback lessons corrections practice context excluded apps"
+        case .learning: keywords = "English feedback lessons corrections practice context excluded apps auto-close delay duration timer seconds never"
         case .apiKey: keywords = "OpenAI API key connection credentials storage Keychain"
         }
         return query.isEmpty || (title + " " + keywords).localizedStandardContains(query)
@@ -44,18 +44,16 @@ struct SettingsSidebarLayout<Content: View>: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                sidebarSection("Voxa", panes: [.general, .shortcuts, .learning])
+                sidebarSection("Settings", panes: [.general, .shortcuts, .learning])
                 sidebarSection("Connection", panes: [.apiKey])
             }
-            .listStyle(.sidebar)
-            .environment(\.sidebarRowSize, .small)
+            .voxaSidebarStyle()
             .overlay {
                 if !SettingsPane.allCases.contains(where: { $0.matches(search) }) {
                     Text("No settings found").font(.callout).foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Voxa Settings")
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+            .navigationTitle("Settings")
         } detail: {
             // Native forms must use the column's current bounds after a resize.
             GeometryReader { geometry in
@@ -76,7 +74,8 @@ struct SettingsSidebarLayout<Content: View>: View {
         if !matching.isEmpty {
             Section(title) {
                 ForEach(matching) { pane in
-                    VoxaSidebarLabel(title: pane.title, symbol: pane.symbol).tag(pane)
+                    VoxaSidebarLabel(title: pane.title, symbol: pane.symbol,
+                                     isSelected: (selection ?? .general) == pane).tag(pane)
                 }
             }
         }
@@ -91,10 +90,11 @@ struct SettingsPage<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.headline).foregroundStyle(.primary)
+                Text(title).font(VoxaAppearance.pageTitle).foregroundStyle(.primary)
                 Text(subtitle).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }.padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 8)
+            }.padding(.horizontal, VoxaAppearance.contentPadding)
+                .padding(.top, VoxaAppearance.contentPadding).padding(.bottom, 8)
                 .fixedSize(horizontal: false, vertical: true)
             content.clipped()
         }
@@ -134,7 +134,7 @@ struct GeneralSettingsView: View {
                 } header: { Text("Permissions") } footer: {
                     Text("Manage access in macOS System Settings. Recording changes apply to your next dictation.")
                 }
-            }.formStyle(.grouped)
+            }.voxaSettingsFormStyle()
         }
     }
 
@@ -199,7 +199,7 @@ struct APIKeySettingsView: View {
                          : "Paste a new key and choose Save or Replace Key. Your saved key stays private in macOS Keychain.")
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            }.formStyle(.grouped)
+            }.voxaSettingsFormStyle()
         }
     }
 
@@ -238,7 +238,7 @@ struct ShortcutsSettingsView: View {
                          : "Release the keys to save. Press Esc or click the shortcut again to cancel.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-            }.formStyle(.grouped).disabled(!canEdit)
+            }.voxaSettingsFormStyle().disabled(!canEdit)
         }
     }
 
@@ -305,6 +305,8 @@ struct VoxaSettingsView: View {
                     get: { controller.preferences.englishFeedbackEnabled }, set: { controller.setEnglishFeedbackEnabled($0) }),
                     contextEnabled: Binding(get: { controller.preferences.automaticContextEnabled },
                                             set: { controller.setAutomaticContextEnabled($0) }),
+                    autoCloseSeconds: Binding(get: { controller.feedbackAutoCloseSeconds },
+                                              set: { controller.setFeedbackAutoCloseSeconds($0) }),
                     excludedApps: controller.preferences.contextExcludedApps,
                     hasAccessibility: controller.permissions.accessibility,
                     saveShortcut: controller.saveFeedbackHotkey.symbolLabel, cancelShortcut: controller.cancelHotkey.symbolLabel,

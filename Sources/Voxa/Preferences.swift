@@ -10,6 +10,7 @@ struct Preferences: Codable, Equatable {
     var maxRecordingSeconds: UInt64 = 300
     var apiKeySource = "keychain"
     var englishFeedbackEnabled = false
+    var feedbackAutoCloseSeconds: UInt64 = 5
     var automaticContextEnabled = false
     var contextExcludedApps: [ContextExcludedApp] = []
 
@@ -17,7 +18,7 @@ struct Preferences: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case toggleHotkey, finishAndSubmitHotkey, model, outputMode, maxRecordingSeconds, apiKeySource, englishFeedbackEnabled
-        case automaticContextEnabled, contextExcludedApps
+        case automaticContextEnabled, contextExcludedApps, feedbackAutoCloseSeconds
         case saveFeedbackHotkey, cancelHotkey
     }
     private enum LegacyKeys: String, CodingKey { case holdHotkey }
@@ -46,6 +47,7 @@ struct Preferences: Codable, Equatable {
         apiKeySource = try values.decode(String.self, forKey: .apiKeySource)
         // Older v1 preferences remain valid and never opt users in implicitly.
         englishFeedbackEnabled = try values.decodeIfPresent(Bool.self, forKey: .englishFeedbackEnabled) ?? false
+        feedbackAutoCloseSeconds = try values.decodeIfPresent(UInt64.self, forKey: .feedbackAutoCloseSeconds) ?? 5
         automaticContextEnabled = try values.decodeIfPresent(Bool.self, forKey: .automaticContextEnabled) ?? false
         contextExcludedApps = try values.decodeIfPresent([ContextExcludedApp].self, forKey: .contextExcludedApps) ?? []
     }
@@ -59,6 +61,7 @@ struct Preferences: Codable, Equatable {
               !cancel.overlaps(toggle), !cancel.overlaps(submit),
               ModelOption(rawValue: model) != nil, OutputModeOption(rawValue: outputMode) != nil,
               (1...3600).contains(maxRecordingSeconds), ["env", "keychain"].contains(apiKeySource),
+              feedbackAutoCloseSeconds <= 300,
               contextExcludedApps.count <= 100,
               Set(contextExcludedApps.map(\.bundleID)).count == contextExcludedApps.count,
               contextExcludedApps.allSatisfy({ !$0.bundleID.isEmpty && $0.bundleID.utf8.count <= 255 &&

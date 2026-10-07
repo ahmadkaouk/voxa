@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+private typealias PreviewState<Value> = SwiftUI.State<Value>
+
 // Uses the shipping overlay and audio code, with simulated meter input only.
 final class PreviewController: ObservableObject {
     let overlay = ActivityOverlayController()
@@ -52,6 +54,8 @@ final class PreviewController: ObservableObject {
 
 struct PreviewView: View {
     @StateObject var controller = PreviewController()
+    @PreviewState private var backdrop = "Wallpaper"
+    @PreviewState private var darkAppearance = false
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Voxa · recording bar").font(.system(size: 23, weight: .semibold))
@@ -60,7 +64,23 @@ struct PreviewView: View {
             ActivityOverlayView(model: controller.overlay.model)
                 .scaleEffect(1.5)
                 .frame(width: 530, height: 156)
-                .background(Color(red: 0.90, green: 0.88, blue: 0.84), in: RoundedRectangle(cornerRadius: 14))
+                .background {
+                    ZStack {
+                        if backdrop == "Wallpaper" {
+                            LinearGradient(colors: [.indigo, .cyan, .orange], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        } else {
+                            (backdrop == "Light" ? Color.white : Color(white: 0.08))
+                        }
+                    }.clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+            HStack {
+                Picker("Background", selection: $backdrop) {
+                    Text("Wallpaper").tag("Wallpaper")
+                    Text("Light").tag("Light")
+                    Text("Dark").tag("Dark")
+                }.pickerStyle(.segmented)
+                Toggle("Dark appearance", isOn: $darkAppearance).toggleStyle(.checkbox)
+            }
             HStack(spacing: 10) {
                 Button("Idle / hidden") { controller.show(.idle) }
                 Button("Listening") { controller.show(.listening) }
@@ -82,6 +102,7 @@ struct PreviewView: View {
         }
         .padding(28)
         .frame(width: 530)
+        .preferredColorScheme(darkAppearance ? .dark : .light)
         .onAppear { controller.show(.listening) }
     }
 }

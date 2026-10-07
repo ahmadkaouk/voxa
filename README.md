@@ -36,7 +36,7 @@ pasted as dictated; suggestions appear separately for you to review.
 *Voxa’s feedback panel, shown with sample text.*
 [See a practice example](assets/screenshots/english-practice.png).
 
-Enable it in **Voxa Settings → English Learning → Feedback after dictation**.
+Enable it in **Settings → English Learning → Feedback after dictation**.
 
 ## Get started
 
@@ -46,7 +46,7 @@ OpenAI API usage is billed separately.
 Voxa currently installs from source and requires Swift 6.0+ developer tools.
 Follow the [installation guide](docs/usage.md#install), then:
 
-1. Open **Voxa Settings…** from the menu bar and save your OpenAI API key.
+1. Open **Settings…** from the menu bar and save your OpenAI API key.
 2. Allow **Microphone**, **Accessibility**, and **Input Monitoring** when prompted.
 3. Focus a text field, press **Option + F**, speak, and press it again to paste.
 

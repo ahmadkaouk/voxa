@@ -17,8 +17,8 @@ enum LearningSection: String, CaseIterable, Identifiable {
     }
     var symbol: String {
         switch self {
-        case .allLessons: return "tray"
-        case .corrections: return "text.badge.checkmark"
+        case .allLessons: return "book.closed"
+        case .corrections: return "checkmark.circle"
         case .phrasing: return "text.bubble"
         case .practice: return "arrow.triangle.2.circlepath"
         case .progress: return "chart.bar"
@@ -81,26 +81,26 @@ struct SavedCorrectionsView: View {
             List(selection: $section) {
                 Section("Library") {
                     ForEach([LearningSection.allLessons, .corrections, .phrasing]) { item in
-                        VoxaSidebarLabel(title: item.title, symbol: item.symbol)
-                            .badge(item.lessons(in: controller.saved).count)
+                        VoxaSidebarLabel(title: item.title, symbol: item.symbol,
+                                         count: item.lessons(in: controller.saved).count,
+                                         isSelected: currentSection == item)
                             .tag(item)
                     }
                 }
                 Section("Learning") {
                     ForEach([LearningSection.practice, .progress]) { item in
-                        VoxaSidebarLabel(title: item.title, symbol: item.symbol).tag(item)
+                        VoxaSidebarLabel(title: item.title, symbol: item.symbol,
+                                         isSelected: currentSection == item).tag(item)
                     }
                 }
             }
-            .listStyle(.sidebar)
-            .environment(\.sidebarRowSize, .small)
+            .voxaSidebarStyle()
             .safeAreaInset(edge: .bottom) {
                 Label("On this Mac", systemImage: "internaldrive")
                     .font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(16)
             }
             .navigationTitle("English Learning")
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 250)
         } detail: {
             // Constrain nested split and scrolling views to the current native column.
             GeometryReader { geometry in
@@ -112,7 +112,7 @@ struct SavedCorrectionsView: View {
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             }
             .navigationTitle(currentSection.title)
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
         .searchable(text: $search, placement: .sidebar, prompt: "Search lessons")
@@ -193,7 +193,7 @@ struct SavedCorrectionsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Practice").font(.title2.weight(.semibold))
+                    Text("Practice").font(VoxaAppearance.pageTitle)
                     Text("Make the patterns you’ve saved part of your everyday English.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
@@ -239,7 +239,7 @@ struct SavedCorrectionsView: View {
                 }
                 Text("Reviewed patterns return over time. Practice is tracked separately from the level estimated from your dictation.")
                     .font(.caption).foregroundStyle(.secondary)
-            }.frame(maxWidth: 640, alignment: .leading).padding(28).frame(maxWidth: .infinity)
+            }.frame(maxWidth: 640, alignment: .leading).padding(VoxaAppearance.contentPadding).frame(maxWidth: .infinity)
         }
     }
 }
@@ -270,7 +270,7 @@ private struct CorrectionDetailView: View {
             VStack(alignment: .leading, spacing: 24) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(item.feedback.focus?.label ?? item.feedback.kind.label).font(.title2.weight(.semibold))
+                        Text(item.feedback.focus?.label ?? item.feedback.kind.label).font(VoxaAppearance.pageTitle)
                         Text(item.date, format: .dateTime.month(.wide).day().year())
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -285,7 +285,7 @@ private struct CorrectionDetailView: View {
                     sentence("Original", item.feedback.original)
                     sentence(item.feedback.kind == .phrasing ? "Alternative" : "Corrected", item.feedback.suggestion)
                 }.textSelection(.enabled)
-            }.padding(28).frame(maxWidth: 680, alignment: .leading).frame(maxWidth: .infinity)
+            }.padding(VoxaAppearance.contentPadding).frame(maxWidth: 680, alignment: .leading).frame(maxWidth: .infinity)
         }
     }
 

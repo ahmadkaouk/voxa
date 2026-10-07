@@ -15,6 +15,8 @@ behavior. All commands below run from the repository root.
 | `install.sh` | Stage and verify an app, preserve a backup, and restore the previous app if replacement fails. |
 | `test-install.sh` | Exercise installation and recovery in temporary directories using two supplied signed apps. |
 | `preview-overlay.sh` | Build an optional visual preview without recording or transcription. |
+| `preview-recording-styles.sh` | Build four native Liquid Glass recording-bar concepts for side-by-side and floating previews (macOS 26+). |
+| `preview-feedback-styles.sh` | Compare three interactive native Liquid Glass feedback concepts with synthetic text (macOS 26+). |
 | `preview-feedback.sh` | Render native feedback and learning views with isolated sample data. |
 | `preview-workspace.sh` | Build an interactive Settings and English Learning preview with in-memory fixtures. |
 | `check-text-context.sh` | Inspect focused editor context without recording or an API request. |
@@ -127,11 +129,60 @@ defaults delete com.voxa.menubar VoxaTimingLogPath
 
 Build the overlay preview with `./scripts/preview-overlay.sh`, then open
 `dist/apps.noindex/Voxa Overlay Preview.app`. It uses the production overlay and
-sounds with simulated recording states and levels, without microphone access.
+sounds with simulated recording states and levels, without microphone access. The
+shipping bar is a 220 × 48 rounded rectangle with continuous 16-point corners,
+following the Dock silhouette, with clear Liquid Glass on macOS 26+, regular
+material on earlier systems, and an opaque surface with Reduce Transparency. It
+uses system red and green for recording and completion, respects Reduce Motion,
+and preserves the saved screen position when migrating from the wider bar.
+
+For the recording-bar design study, run `./scripts/preview-recording-styles.sh` and
+open `dist/apps.noindex/Voxa Glass Preview.app`. It opens the refined **Compact native**
+concept: a 220 × 48 Dock-shaped rounded rectangle using clear system Liquid Glass, semantic label colors,
+and macOS `systemRed` / `systemGreen` for recording and completion. Recording shows
+the timer, waveform, and one stop control. Processing replaces these with a spinner
+and status; completion shows a green checkmark and Text ready. It has no duplicate
+status dot, custom gradient, forced dark appearance, or inactive button. Listening, Processing, and Complete are
+also shown together beneath the interactive preview. **Original four styles** opens
+the earlier Clear capsule, Frosted studio, Split glass, and Compact pebble gallery.
+Both views show actual point sizes using Apple's native `glassEffect` and
+`GlassEffectContainer` APIs. Switch the shared
+background between wallpaper, a light workspace, and a dark workspace, and compare
+Listening, Processing, and Complete. Animate controls the simulated waveform; the
+timer stays at 0:24 for comparison. The preview respects Reduce Motion.
+
+Each **Float on desktop** button opens that style in a draggable, transparent panel.
+The stop button demonstrates processing and completion; **Replay recording** resets
+the state. Press Escape or **Hide floating preview** to dismiss the panel. Command-1
+through Command-4 switch the original floating styles; Command-5 floats the combined
+concept. This separate preview app needs macOS 26+
+and never records, registers dictation hotkeys, saves preferences, or changes the
+installed recording bar. The production app still supports macOS 13.
+
+For the feedback design study, run `./scripts/preview-feedback-styles.sh` and open
+`dist/apps.noindex/Voxa Feedback Preview.app`. Compare **Quiet card**, **Reading panel**,
+and **One at a time** on wallpaper, light, and dark backdrops. The example picker
+includes two corrections, a long sentence, and optional wording. Expand explanations,
+pin, move between corrections, simulate saving or closing, and replay each card.
+**Float on desktop** (Command-1 through Command-3) opens the selected concept in a
+movable native glass panel; Escape hides it. The preview uses synthetic text, does
+not record audio, and does not save or modify lessons or production feedback.
+
+The production feedback panel uses **Quiet card**: a 380-point-wide glass surface,
+full You said / Improved sentences, disclosure explanations, header pin/close controls,
+and a fixed Save action with the live auto-close status. macOS 26+ uses native Liquid
+Glass; earlier systems use regular material, and Reduce Transparency uses an opaque
+surface. It preserves grouped corrections, optional wording, recognition issues,
+practice actions, storage recovery, and the user's shortcuts and dismissal preferences.
 
 `./scripts/preview-feedback.sh` renders feedback, saved-lesson, progress, settings,
 and practice views under `.build/feedback-previews/`. It uses synthetic findings
 and in-memory storage, without microphone capture, credentials or user history.
+Native Liquid Glass is rendered by the window server and may be absent from the
+static bitmap captures. Use **Preview → Feedback Card Window** (Command-Shift-V) in
+the interactive workspace preview to inspect the production glass view, including
+explanations and Save. This window hides the fixture's floating panel so it cannot
+cover the controls being tested.
 Check short and long comparisons, insertions/deletions, optional phrasing,
 recognition issues, light/dark appearance and a constrained panel height.
 
@@ -157,6 +208,13 @@ only clears its synthetic input; the Keychain suite uses a separate disposable i
 Settings uses native grouped forms, neutral action buttons, and system typography;
 compare API Key with General and Shortcuts at the same window size. Blue correction
 highlights belong to feedback, with no blue tint forced on Settings or the library.
+Both sidebars share 32-point rows, unboxed outline SF Symbols in 20-point frames,
+native body text, and the same column widths. Icons are neutral gray; selected rows
+use a charcoal background with white labels, icons, and counts, inspired by Apple
+Books. Check light/dark and inactive-window contrast, keyboard selection, and that
+labels and lesson counts fit at minimum width.
+In English Learning settings, change Auto-close feedback and select Never; verify
+the explanatory footer updates and the picker follows the feedback toggle.
 
 `./scripts/test.sh output --live` opens a temporary text window to
 check the actual paste shortcut, selection replacement, Unicode, and clipboard

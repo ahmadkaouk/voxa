@@ -19,6 +19,7 @@ final class FeedbackController: ObservableObject {
     @Published private(set) var isPinned = false
     @Published private(set) var isReading = false
     @Published private(set) var dismissalDeadline: Date?
+    @Published private(set) var autoCloseSeconds: UInt64 = 5
     @Published private(set) var saveHotkey = HotkeyOption.defaultSaveFeedback
     @Published private(set) var cancelHotkey = HotkeyOption.defaultCancel
     let progress: LearningProgress
@@ -71,6 +72,16 @@ final class FeedbackController: ObservableObject {
     func updateShortcuts(save: HotkeyOption, cancel: HotkeyOption) {
         saveHotkey = save
         cancelHotkey = cancel
+    }
+
+    /// Zero keeps reviews open until explicitly closed. A changed duration starts
+    /// a fresh countdown, retaining any active reading or pin pause.
+    func setAutoCloseSeconds(_ seconds: UInt64) {
+        guard !closed, seconds <= 300, autoCloseSeconds != seconds else { return }
+        autoCloseSeconds = seconds
+        cancelAutoDismiss()
+        dismissalRemaining = TimeInterval(seconds)
+        scheduleAutoDismiss()
     }
 
     func updateDictation(_ state: DictationState) {
@@ -160,7 +171,7 @@ final class FeedbackController: ObservableObject {
         cancelAutoDismiss()
         reviewTimedOut = false
         isPinned = false; isReading = false
-        dismissalRemaining = 5
+        dismissalRemaining = TimeInterval(autoCloseSeconds)
         panelVisible = true
         scheduleAutoDismiss()
     }
@@ -183,7 +194,8 @@ final class FeedbackController: ObservableObject {
     }
 
     private func scheduleAutoDismiss() {
-        guard panelVisible, !isPinned, !isReading, (!isSaving || !storageReady), storageError == nil else { return }
+        guard autoCloseSeconds > 0, panelVisible, !isPinned, !isReading,
+              (!isSaving || !storageReady), storageError == nil else { return }
         cancelAutoDismiss()
         let delay = Duration.seconds(dismissalRemaining)
         dismissalDeadline = Date().addingTimeInterval(dismissalRemaining)
@@ -296,6 +308,7 @@ final class FeedbackController: ObservableObject {
                 self.saved = items; self.storageError = nil; self.isSaving = false
                 if !removed.isEmpty { self.onLessonsDeleted?(removed) }
                 if let dismissGeneration, self.generation == dismissGeneration { self.dismiss() }
+                else if self.panelVisible, self.dismissalDeadline == nil { self.scheduleAutoDismiss() }
             } catch {
                 guard let self, !self.closed else { return }
                 self.isSaving = false

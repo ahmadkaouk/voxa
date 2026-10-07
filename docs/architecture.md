@@ -160,8 +160,11 @@ Live reviews use `FeedbackWordDiff` to lead with individual changes and reusable
 conflicting edits remain separate comparisons. The current transcript stays in memory
 for this presentation and never enters saved lessons. Optional wording is always expanded.
 `FeedbackLessonView` retains inline comparisons in saved details and recognition checks.
-One neutral background covers the review; only Save is blue. A five-second presentation
-timer pauses on hover or pin, is cancelled during saving, and cannot hide a newer review.
+One system window background covers the review; Save and text changes use blue.
+The presentation timer uses `Preferences.feedbackAutoCloseSeconds` (five seconds by
+default; zero disables it), pauses on hover or pin, is cancelled during saving, and
+cannot hide a newer review. Changing its duration resets the remaining time without
+unpinning, clearing hover, or reopening a hidden review.
 
 `CorrectionStore` is an actor that stores a versioned JSON file in Application
 Support/Voxa. A failed load blocks mutations to protect unreadable data. Only

@@ -57,22 +57,26 @@ explanations, and the distinction between errors and optional alternatives.
   the score. The model must ignore those instructions, retain the speaker's meaning,
   ground every finding/assessment in the transcript, and avoid copying contextual
   private details into saved lessons. Fixture tests cannot establish model adherence.
-- Each correction contains its full Before / After sentence with blue changed words.
-  Click the correction or Why? to show/hide its explanation, Remember rule and practice
+- Each Quiet card correction contains its full You said / Improved sentences with blue
+  highlights behind changed words. Choose Why this change? to show/hide its explanation, Remember rule and practice
   action. The sentence stays visible. Compatible fixes in one sentence share a comparison
   with their own explanations; conflicting edits stay separate. Verify the floating panel
   grows and shrinks when details toggle, without clipping content or moving the footer out
   of reach. Optional wording and its explanation stay visible next.
-- Verify the same neutral background across header, body and footer in light/dark
-  appearance. Changes and Save use blue. The compact recorder is solid black with no border,
-  a live microphone waveform, elapsed time and a stop control. Drag its timer/waveform
+- Verify the Quiet card's clear native Liquid Glass across header, body and footer in light/dark
+  appearance, regular material fallback on macOS 13–15, and opaque Reduce Transparency surface.
+  Changes and Save use system blue. The compact recorder uses Dock-style continuous corners,
+  clear native Liquid Glass, a live microphone waveform, elapsed time and a red stop control. Drag its timer/waveform
   area; the position survives a new recording and relaunch. It hides after completion
   or cancellation and never appears while idle. Check silence and Reduced Motion.
 - Short reviews fit their contents; longer reviews scroll while footer actions remain
   visible. Recognition issues come last and never claim a grammar mistake. Check
   multiple distant fixes in a sentence, compatible overlaps, conflicting alternatives,
   long excerpts, a small viewport and saved-lesson details.
-- The panel hides five seconds after presentation. Hover pauses the remaining time;
+- The panel hides after the duration chosen in Settings → English Learning → Auto-close
+  feedback (five seconds by default); Never disables the timer. Check the selection
+  survives relaunch and changing it restarts an eligible timer without reopening hidden feedback.
+  Hover pauses the remaining time;
   pin keeps it open. Show Latest Feedback reopens it. Stale timers must not close
   a newer review. Saving suspends dismissal and failed saves keep the review open.
 - ⌘S saves every lesson in one write; Esc closes without saving. Both leave automatic
