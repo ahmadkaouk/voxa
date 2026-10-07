@@ -329,6 +329,46 @@ enum FeedbackChecks {
         await controller.shutdown()
     }
 
+    static func outsideClickDismissalAndReopening() async throws {
+        let timer = FeedbackTimerFixture(), store = MemoryCorrections()
+        let controller = FeedbackController(client: FeedbackFixture(), store: store,
+            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
+        controller.setEnabled(true)
+        let id = UUID()
+        start(controller, id: id); finish(controller, id: id)
+        try await eventually { timer.delays.count == 1 && controller.storageReady }
+        controller.setReading(true)
+        controller.togglePinned()
+        controller.dismissAfterOutsideClick()
+        try unitExpect(!controller.panelVisible && controller.hasReview && store.items.isEmpty)
+        try unitExpect(controller.dismissalDeadline == nil)
+        try unitExpect(!controller.saveAndClose()) // A hidden card cannot consume another app's Save.
+        try await timer.fire(0)
+        finish(controller, id: id)
+        controller.setPracticeActive(true); controller.setPracticeActive(false)
+        try unitExpect(!controller.panelVisible) // Idle and delivery callbacks cannot reopen it.
+
+        controller.setAutoCloseSeconds(0)
+        controller.showLatest()
+        try unitExpect(controller.panelVisible && !controller.isPinned && !controller.isReading)
+        try unitEqual(controller.findings.first?.id, id)
+        controller.togglePinned()
+        controller.dismissAfterOutsideClick()
+        try unitExpect(!controller.panelVisible && controller.hasReview)
+        finish(controller, id: id)
+        try unitExpect(!controller.panelVisible) // Never disables the timer, not outside clicks.
+        controller.showLatest()
+        try unitExpect(controller.panelVisible && controller.dismissalDeadline == nil)
+        controller.dismissAfterOutsideClick()
+
+        let next = UUID()
+        start(controller, id: next); finish(controller, id: next)
+        try await eventually { controller.panelVisible && controller.findings.first?.id == next }
+        await controller.shutdown()
+        controller.dismissAfterOutsideClick()
+        try unitExpect(!controller.panelVisible)
+    }
+
     static func dismissalCancellationAndReplacement() async throws {
         let timer = FeedbackTimerFixture()
         let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
@@ -383,6 +423,7 @@ enum FeedbackChecks {
         try unitExpect(controller.saveAndClose())
         try await eventually { saving.entered }
         try await timer.fire(0)
+        controller.dismissAfterOutsideClick()
         try unitExpect(controller.panelVisible && controller.isSaving)
         saving.open()
         try await eventually { !controller.isSaving }
@@ -1015,6 +1056,7 @@ enum FeedbackChecks {
         ("feedback: hover and pin pause dismissal", readingPausesDismissal),
         ("feedback: granular edits and complete sentence comparisons", granularChangesAndFullSentences),
         ("feedback: five-second dismissal starts on presentation and allows reopening", automaticDismissalAndReopening),
+        ("feedback: outside clicks dismiss pinned and Never reviews without losing them", outsideClickDismissalAndReopening),
         ("feedback: stale dismissal timers cannot hide a newer or reopened review", dismissalCancellationAndReplacement),
         ("feedback: saving cancels dismissal and failed saves remain visible", savingCancelsDismissal),
         ("feedback: cosmetic noise and duplicate optional alternatives", noiseAndDuplicateFiltering),
@@ -1046,6 +1088,7 @@ final class FeedbackTests: XCTestCase {
     func testReadingPausesDismissal() async throws { try await FeedbackChecks.readingPausesDismissal() }
     func testGranularChanges() async throws { try await FeedbackChecks.granularChangesAndFullSentences() }
     func testAutomaticDismissal() async throws { try await FeedbackChecks.automaticDismissalAndReopening() }
+    func testOutsideClickDismissal() async throws { try await FeedbackChecks.outsideClickDismissalAndReopening() }
     func testDismissalCancellation() async throws { try await FeedbackChecks.dismissalCancellationAndReplacement() }
     func testSavingCancelsDismissal() async throws { try await FeedbackChecks.savingCancelsDismissal() }
     func testNoiseFiltering() async throws { try await FeedbackChecks.noiseAndDuplicateFiltering() }

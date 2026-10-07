@@ -221,6 +221,14 @@ final class FeedbackController: ObservableObject {
 
     func dismiss() { hidePanel(); findings = []; assessment = nil; successfulPatterns = []; contextAppName = nil; transcript = "" }
 
+    /// Clicking away ends this presentation, even when pinned, but leaves the
+    /// review available from Show Latest Feedback. An explicit save must finish.
+    func dismissAfterOutsideClick() {
+        guard !closed, panelVisible, !isSaving else { return }
+        reviewTimedOut = true
+        hidePanel()
+    }
+
     /// Revoking context or excluding an app clears any context-bearing pending review.
     func contextPreferencesChanged() {
         guard contextAppName != nil else { return }

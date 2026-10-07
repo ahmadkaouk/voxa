@@ -267,7 +267,7 @@ struct FeedbackReviewView: View {
     static let width: CGFloat = 380
 
     private var maximumListHeight: CGFloat {
-        let chrome: CGFloat = controller.storageError == nil && controller.progress.error == nil ? 190 : 285
+        let chrome: CGFloat = controller.storageError == nil && controller.progress.error == nil ? 214 : 309
         return max(80, maximumHeight - chrome)
     }
 
@@ -474,21 +474,36 @@ struct FeedbackReviewView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             TimelineView(.periodic(from: .now, by: 1)) { timeline in
                 Text(timerLabel(at: timeline.date)).font(.system(size: 10)).foregroundStyle(.secondary)
                     .lineLimit(1).minimumScaleFactor(0.85)
             }
-            Spacer(minLength: 2)
-            if controller.hasLessons {
-                Button { controller.saveAndClose() } label: {
-                    Text(controller.isSaving ? "Saving…" : "Save")
-                        .font(.system(size: 12, weight: .medium)).padding(.horizontal, 5)
-                }.modifier(FeedbackPrimaryAction())
-                    .disabled(controller.isSaving || !controller.storageReady)
-                    .help("Save these patterns for later practice · \(controller.saveHotkey.symbolLabel)")
+            HStack {
+                Button { controller.discardReview() } label: {
+                    HStack(spacing: 12) {
+                        Text("Close")
+                        shortcutHint(controller.cancelHotkey.symbolLabel)
+                    }.font(.system(size: 12)).padding(.vertical, 8).padding(.horizontal, 5)
+                }.buttonStyle(.plain).foregroundStyle(.secondary).disabled(controller.isSaving)
+                    .help("Close · \(controller.cancelHotkey.symbolLabel)")
+                Spacer(minLength: 12)
+                if controller.hasLessons {
+                    Button { controller.saveAndClose() } label: {
+                        HStack(spacing: 12) {
+                            Text(controller.isSaving ? "Saving…" : "Save")
+                            shortcutHint(controller.saveHotkey.symbolLabel)
+                        }.font(.system(size: 12, weight: .medium)).padding(.horizontal, 5)
+                    }.modifier(FeedbackPrimaryAction())
+                        .disabled(controller.isSaving || !controller.storageReady)
+                        .help("Save these patterns for later practice · \(controller.saveHotkey.symbolLabel)")
+                }
             }
         }
+    }
+
+    private func shortcutHint(_ shortcut: String) -> some View {
+        Text(shortcut).font(.system(size: 11, weight: .medium)).opacity(0.8).fixedSize()
     }
 
     private var summary: String {
@@ -509,6 +524,8 @@ final class FeedbackPanelController {
     private var availableFrame: NSRect?
     private var observation: AnyCancellable?
     private var resizeScheduled = false
+    private var localClickMonitor: Any?
+    private var globalClickMonitor: Any?
 
     func show(_ controller: FeedbackController) {
         let panel = panel ?? makePanel()
@@ -523,6 +540,32 @@ final class FeedbackPanelController {
         resize()
         observation = controller.objectWillChange.sink { [weak self] in self?.scheduleResize() }
         panel.orderFrontRegardless() // Never activates Voxa or makes it the paste destination.
+        startOutsideClickMonitoring(controller)
+    }
+
+    private func startOutsideClickMonitoring(_ controller: FeedbackController) {
+        stopOutsideClickMonitoring()
+        let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: clicks) { [weak controller] _ in
+            // Global monitors receive clicks delivered to other applications only.
+            controller?.dismissAfterOutsideClick()
+        }
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: clicks) { [weak self, weak controller] event in
+            guard let panel = self?.panel, panel.isVisible else { return event }
+            var target = event.window
+            while let window = target {
+                if window === panel { return event }
+                target = window.parent
+            }
+            controller?.dismissAfterOutsideClick()
+            return event // The clicked window must still receive the original click.
+        }
+    }
+
+    private func stopOutsideClickMonitoring() {
+        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
+        if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
+        localClickMonitor = nil; globalClickMonitor = nil
     }
 
     private func scheduleResize() {
@@ -543,6 +586,7 @@ final class FeedbackPanelController {
     }
 
     func hide() {
+        stopOutsideClickMonitoring()
         observation = nil; hosting = nil; availableFrame = nil
         panel?.orderOut(nil); panel?.contentView = nil
     }
@@ -560,6 +604,11 @@ final class FeedbackPanelController {
         panel.isReleasedWhenClosed = false
         self.panel = panel
         return panel
+    }
+
+    deinit {
+        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
+        if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
     }
 }
 

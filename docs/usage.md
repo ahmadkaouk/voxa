@@ -116,7 +116,10 @@ and any reusable pattern. Short reviews fit their
 content; longer reviews scroll above the fixed Save action and auto-close status.
 The 380-point-wide panel uses clear native Liquid Glass on macOS 26+, a material fallback
 on older systems, and an opaque background with Reduce Transparency. The pin and
-close controls stay in the header. Your configured Save and Cancel shortcuts still work.
+close controls stay in the header. The footer shows your configured shortcuts next to
+Save and Close (Command-S and Esc by default). Clicking outside the card dismisses it,
+including when pinned or set to Never; choose **Show Latest Feedback** to reopen it.
+An in-progress save finishes before the card can be dismissed.
 Grammar confirmation and successful patterns stay in a quiet summary. The coach
 preserves meaning, tone, uncertainty and technical terms, and ignores fillers and
 clear self-corrections.

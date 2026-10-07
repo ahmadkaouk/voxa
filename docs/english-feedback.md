@@ -73,6 +73,11 @@ explanations, and the distinction between errors and optional alternatives.
   visible. Recognition issues come last and never claim a grammar mistake. Check
   multiple distant fixes in a sentence, compatible overlaps, conflicting alternatives,
   long excerpts, a small viewport and saved-lesson details.
+- Save and Close display the configured shortcuts (Command-S and Esc by default).
+  Inside clicks, including explanation controls, keep the panel open. Outside clicks
+  in another Voxa window or another app dismiss it and still reach their destination.
+  Repeat with pinned feedback and Never auto-close, reopen from Show Latest Feedback,
+  and verify an active save is not interrupted.
 - The panel hides after the duration chosen in Settings → English Learning → Auto-close
   feedback (five seconds by default); Never disables the timer. Check the selection
   survives relaunch and changing it restarts an eligible timer without reopening hidden feedback.
