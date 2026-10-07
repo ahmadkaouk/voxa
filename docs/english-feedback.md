@@ -154,6 +154,10 @@ renders can omit vibrancy and selection layers; use the live window for those
 checks. The Preview menu changes only the fixture app's appearance. Its Feedback Panel
 command opens the production floating panel with synthetic corrections and pins it for
 click and resize checks.
+Use the minimum, standard and large window presets to check the long lesson,
+divider limits, selection retention, and scrolling to the final Settings rows.
+Search from Practice or Progress, then verify the complete query and
+selected lesson remain intact after resizing.
 
 `bash scripts/check-text-context.sh` opens a temporary native editor and message
 using synthetic text, runs the production AX extraction against that process only,

@@ -140,6 +140,12 @@ Use `./scripts/preview-workspace.sh` and open
 toolbar materials, search and window resizing. Press Command-comma for Settings;
 the Preview menu switches light/dark appearance for the fixture app only. It uses
 in-memory lessons and preferences, with no credentials or microphone access.
+Use **Minimum Window Size**, **Standard Window Size**, and **Large Window Size**
+to repeat checks at the native minimum and larger sizes. **Window Size Details…**
+reports the current and minimum dimensions. Select the long subject–verb agreement
+lesson, move both column dividers to their limits, and check that the full sentences
+wrap and remain reachable by scrolling. In Settings, check the final Data & privacy
+rows at the minimum size as well as the API key and shortcut controls.
 Choose **Preview → Feedback Panel** (Command-Shift-F) to check sentence context,
 click-to-expand explanations and the floating panel's resizing. The fixture pins
 this panel open so it stays available during interaction checks.

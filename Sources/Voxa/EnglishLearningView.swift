@@ -102,16 +102,16 @@ struct SavedCorrectionsView: View {
             .navigationTitle("English Learning")
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 250)
         } detail: {
-            Group {
-                if currentSection.isLibrary { library }
-                else if currentSection == .practice {
-                    practice
-                } else {
-                    LearningProgressView(progress: controller.progress)
+            // Constrain nested split and scrolling views to the current native column.
+            GeometryReader { geometry in
+                Group {
+                    if currentSection.isLibrary { library }
+                    else if currentSection == .practice { practice }
+                    else { LearningProgressView(progress: controller.progress) }
                 }
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             }
             .navigationTitle(currentSection.title)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .textBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)

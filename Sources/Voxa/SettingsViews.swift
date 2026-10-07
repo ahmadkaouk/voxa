@@ -57,9 +57,12 @@ struct SettingsSidebarLayout<Content: View>: View {
             .navigationTitle("Voxa Settings")
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
         } detail: {
-            content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(Color(nsColor: .windowBackgroundColor))
-                .navigationTitle((selection ?? .general).title)
+            // Native forms must use the column's current bounds after a resize.
+            GeometryReader { geometry in
+                content.frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            }
+            .background(Color(nsColor: .windowBackgroundColor))
+            .navigationTitle((selection ?? .general).title)
         }
         .navigationSplitViewStyle(.balanced)
         .searchable(text: $search, placement: .sidebar, prompt: "Search")
@@ -93,7 +96,8 @@ struct SettingsPage<Content: View>: View {
                 Text(subtitle).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }.padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 8)
-            content
+                .fixedSize(horizontal: false, vertical: true)
+            content.clipped()
         }
     }
 }

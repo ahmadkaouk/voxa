@@ -57,7 +57,12 @@ private final class WorkspaceFixtures: ObservableObject {
             .init(kind: .grammar, original: "Can you tell me what is the plan?", suggestion: "Can you tell me what the plan is?",
                   explanation: "Use statement word order inside an indirect question.", practicePrompt: "Ask an indirect question.", focus: .questionOrder),
             .init(kind: .grammar, original: "I need answer.", suggestion: "I need an answer.",
-                  explanation: "Use an article with a singular countable noun.", practicePrompt: "Ask for something using an article.", focus: .articles)
+                  explanation: "Use an article with a singular countable noun.", practicePrompt: "Ask for something using an article.", focus: .articles),
+            .init(kind: .grammar,
+                  original: "The list of applications that I use for recording meetings, organising my notes and reviewing the corrections from my English practice are available on this computer whenever I need to prepare for a conversation with my team.",
+                  suggestion: "The list of applications that I use for recording meetings, organising my notes and reviewing the corrections from my English practice is available on this computer whenever I need to prepare for a conversation with my team.",
+                  explanation: "The subject is the singular noun list. The longer phrase about applications describes the list, so the verb still agrees with list rather than applications.",
+                  practicePrompt: "Describe a list you use at work.", pattern: "The list of + plural noun + is…", focus: .agreement)
         ]
         feedback = FeedbackController(store: WorkspaceLessons(lessons.enumerated().map { index, lesson in
             .init(id: UUID(), date: Date().addingTimeInterval(Double(-index) * 86_400), feedback: lesson)
@@ -116,6 +121,11 @@ private struct WorkspacePreview: App {
                 Divider()
                 Button("Light Appearance") { NSApp.appearance = NSAppearance(named: .aqua) }
                 Button("Dark Appearance") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+                Divider()
+                Button("Minimum Window Size") { resizeWindow(.minimum) }
+                Button("Standard Window Size") { resizeWindow(.standard) }
+                Button("Large Window Size") { resizeWindow(.large) }
+                Button("Window Size Details…") { showWindowSize() }
             }
         }
         Window("Voxa Settings Preview", id: "settings-preview") {
@@ -124,6 +134,44 @@ private struct WorkspacePreview: App {
         .defaultSize(width: 820, height: 620)
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified)
+    }
+
+    private enum WindowSize { case minimum, standard, large }
+
+    /// Reproducible native resize checks without touching production preferences.
+    @MainActor private func resizeWindow(_ size: WindowSize) {
+        guard let window = previewWindow else { return }
+        let settings = window.identifier?.rawValue == "settings-preview"
+        let top = window.frame.maxY
+        let contentSize: NSSize
+        switch size {
+        case .minimum:
+            window.setFrame(.init(x: window.frame.minX, y: top - window.minSize.height,
+                                  width: window.minSize.width, height: window.minSize.height), display: true)
+            return
+        case .standard: contentSize = .init(width: settings ? 820 : 1060, height: settings ? 620 : 680)
+        case .large: contentSize = .init(width: 1260, height: 860)
+        }
+        // Respect the same minimum that macOS enforces during a user drag.
+        window.setContentSize(.init(width: max(contentSize.width, window.contentMinSize.width),
+                                    height: max(contentSize.height, window.contentMinSize.height)))
+        window.setFrameOrigin(.init(x: window.frame.minX, y: top - window.frame.height))
+    }
+
+    @MainActor private var previewWindow: NSWindow? {
+        NSApp.keyWindow ?? NSApp.orderedWindows.first {
+            $0.isVisible && $0.styleMask.contains(.resizable)
+        }
+    }
+
+    @MainActor private func showWindowSize() {
+        guard let window = previewWindow else { return }
+        let current = window.contentRect(forFrameRect: window.frame).size
+        let minimum = window.contentMinSize
+        let alert = NSAlert()
+        alert.messageText = "Window size in points"
+        alert.informativeText = "Content: \(Int(current.width)) × \(Int(current.height))\nMinimum content: \(Int(minimum.width)) × \(Int(minimum.height))\nFrame: \(Int(window.frame.width)) × \(Int(window.frame.height))\nMinimum frame: \(Int(window.minSize.width)) × \(Int(window.minSize.height))"
+        alert.runModal()
     }
 }
 

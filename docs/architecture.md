@@ -214,9 +214,13 @@ lessons queues removal of their review records and cancels an affected active ex
 
 ## Settings, credentials, and permissions
 
-`SettingsViews` presents grouped controls inside a native navigation sidebar.
+`SettingsViews` presents grouped controls inside a native navigation sidebar;
+page content is bounded to the available space beneath the heading so scrolling
+reaches the final rows at every supported window size.
 `EnglishLearningView` presents library filters, a searchable lesson list and a
-reading pane, alongside practice and progress destinations. These views use the
+reading pane, alongside practice and progress destinations. Its detail content
+uses the current native column bounds so nested split views reflow on resize.
+These views use the
 existing controllers and stores; category filters and search never alter history.
 Shortcut capture stops when leaving its settings pane or deactivating the app.
 
