@@ -55,14 +55,14 @@ struct PreviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Voxa · recording bar").font(.system(size: 23, weight: .semibold))
-            Text("Preview the bar at the bottom of your screen.")
+            Text("Drag the floating bar to move it. Finishing hides it.")
                 .foregroundStyle(.secondary)
             ActivityOverlayView(model: controller.overlay.model)
-                .scaleEffect(3)
+                .scaleEffect(1.5)
                 .frame(width: 530, height: 156)
                 .background(Color(red: 0.90, green: 0.88, blue: 0.84), in: RoundedRectangle(cornerRadius: 14))
             HStack(spacing: 10) {
-                Button("Resting") { controller.show(.idle) }
+                Button("Idle / hidden") { controller.show(.idle) }
                 Button("Listening") { controller.show(.listening) }
                 Button("Processing") { controller.show(.transcribing) }
                 Button("Complete") { controller.show(.outputting) }

@@ -15,14 +15,22 @@ final class FeedbackController: ObservableObject {
     @Published private(set) var assessment: GrammarAssessment?
     @Published private(set) var successfulPatterns: [LearningFocus] = []
     @Published private(set) var contextAppName: String?
+    @Published private(set) var transcript = ""
+    @Published private(set) var isPinned = false
+    @Published private(set) var isReading = false
+    @Published private(set) var dismissalDeadline: Date?
     let progress: LearningProgress
     var onPractice: ((PracticeTarget) -> Void)?
     var onLessonsDeleted: ((Set<UUID>) -> Void)?
 
     private let client: any FeedbackAnalyzing
     private let store: any CorrectionStoring
+    private let pause: (Duration) async throws -> Void
     private var request: Task<Void, Never>?
     private var persistence: Task<Void, Never>?
+    private var autoDismiss: Task<Void, Never>?
+    private var reviewTimedOut = false
+    private var dismissalRemaining: TimeInterval = 5
     private var generation = UUID()
     private var latestRecording: UUID?
     private var currentRequest: UUID?
@@ -35,9 +43,11 @@ final class FeedbackController: ObservableObject {
 
     init(client: any FeedbackAnalyzing = FeedbackClient(endpoint: FeedbackClient.configuredEndpoint()),
          store: any CorrectionStoring = CorrectionStore(),
-         progressStore: any LearningProgressStoring = LearningProgressStore()) {
+         progressStore: any LearningProgressStoring = LearningProgressStore(),
+         pause: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.client = client
         self.store = store
+        self.pause = pause
         self.progress = LearningProgress(store: progressStore)
         progressSubscription = progress.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         reloadSaved()
@@ -51,8 +61,8 @@ final class FeedbackController: ObservableObject {
             request?.cancel(); request = nil
             findings = []; currentRequest = nil; delivered = nil
             assessment = nil; successfulPatterns = []; learningRecord = nil
-            contextAppName = nil
-            panelVisible = false; isAnalyzing = false; status = nil
+            contextAppName = nil; transcript = ""
+            hidePanel(); isAnalyzing = false; status = nil
         }
     }
 
@@ -60,7 +70,7 @@ final class FeedbackController: ObservableObject {
         if case .starting(let context, _) = state { latestRecording = context.id }
         // Includes clipboard restoration: feedback must never interfere with paste-and-submit.
         busy = state.context != nil
-        if busy { panelVisible = false }
+        if busy { hidePanel() }
         else { presentIfReady() }
     }
 
@@ -70,9 +80,11 @@ final class FeedbackController: ObservableObject {
         let token = UUID()
         generation = token
         currentRequest = id; delivered = nil
-        findings = []; panelVisible = false; status = nil; isAnalyzing = true
+        hidePanel(); reviewTimedOut = false
+        findings = []; status = nil; isAnalyzing = true
         assessment = nil; successfulPatterns = []; learningRecord = nil
         contextAppName = context?.appName
+        self.transcript = transcript
         let client = client
         let knownPatterns = progress.knownPatterns.union(saved.flatMap { item in
             [item.feedback.focus, item.feedback.alternative?.focus].compactMap { $0 }
@@ -96,7 +108,7 @@ final class FeedbackController: ObservableObject {
             } catch {
                 guard let self, !self.closed, self.generation == token, !Task.isCancelled else { return }
                 self.isAnalyzing = false
-                self.request = nil; self.contextAppName = nil
+                self.request = nil; self.contextAppName = nil; self.transcript = ""
                 // Shown only when opening the menu; no error sound, alert, or dictation failure.
                 self.status = (error as? FeedbackError)?.localizedDescription ?? FeedbackError.network.localizedDescription
             }
@@ -127,17 +139,68 @@ final class FeedbackController: ObservableObject {
     }
 
     private func presentIfReady() {
-        guard enabled, !closed, !busy, !practiceActive, hasReview, let currentRequest,
+        guard enabled, !closed, !busy, !practiceActive, !panelVisible, !reviewTimedOut, hasReview, let currentRequest,
               delivered == currentRequest, latestRecording == currentRequest else { return }
-        panelVisible = true
+        showPanel()
     }
 
     func showLatest() {
         guard enabled, !closed, !busy, !practiceActive, hasReview, let currentRequest, delivered == currentRequest else { return }
-        panelVisible = true
+        showPanel()
     }
 
-    func dismiss() { findings = []; assessment = nil; successfulPatterns = []; panelVisible = false; contextAppName = nil }
+    private func showPanel() {
+        cancelAutoDismiss()
+        reviewTimedOut = false
+        isPinned = false; isReading = false
+        dismissalRemaining = 5
+        panelVisible = true
+        scheduleAutoDismiss()
+    }
+
+    func setReading(_ reading: Bool) {
+        guard panelVisible, isReading != reading else { return }
+        isReading = reading
+        if reading { pauseAutoDismiss() } else { scheduleAutoDismiss() }
+    }
+
+    func togglePinned() {
+        guard panelVisible else { return }
+        isPinned.toggle()
+        if isPinned { pauseAutoDismiss() } else { scheduleAutoDismiss() }
+    }
+
+    private func pauseAutoDismiss() {
+        if let dismissalDeadline { dismissalRemaining = max(0, dismissalDeadline.timeIntervalSinceNow) }
+        cancelAutoDismiss()
+    }
+
+    private func scheduleAutoDismiss() {
+        guard panelVisible, !isPinned, !isReading, (!isSaving || !storageReady), storageError == nil else { return }
+        cancelAutoDismiss()
+        let delay = Duration.seconds(dismissalRemaining)
+        dismissalDeadline = Date().addingTimeInterval(dismissalRemaining)
+        autoDismiss = Task { [weak self, pause] in
+            do { try await pause(delay) } catch { return }
+            guard let self, !Task.isCancelled, !self.closed, self.panelVisible else { return }
+            // Keep the latest review available from the menu, but do not let
+            // repeated delivery or idle callbacks automatically reopen it.
+            self.reviewTimedOut = true
+            self.hidePanel()
+        }
+    }
+
+    private func cancelAutoDismiss() {
+        autoDismiss?.cancel(); autoDismiss = nil
+        dismissalDeadline = nil
+    }
+
+    private func hidePanel() {
+        cancelAutoDismiss()
+        panelVisible = false
+    }
+
+    func dismiss() { hidePanel(); findings = []; assessment = nil; successfulPatterns = []; contextAppName = nil; transcript = "" }
 
     /// Revoking context or excluding an app clears any context-bearing pending review.
     func contextPreferencesChanged() {
@@ -149,7 +212,7 @@ final class FeedbackController: ObservableObject {
 
     func setPracticeActive(_ active: Bool) {
         practiceActive = active
-        if active { panelVisible = false }
+        if active { hidePanel() }
         else { presentIfReady() }
     }
 
@@ -181,7 +244,10 @@ final class FeedbackController: ObservableObject {
         let existingIDs = Set(saved.map(\.id))
         let additions = lessons.filter { !existingIDs.contains($0.id) }
         if additions.isEmpty { dismiss() }
-        else { persist(additions + saved, dismissGeneration: generation) }
+        else {
+            cancelAutoDismiss()
+            persist(additions + saved, dismissGeneration: generation)
+        }
         return true
     }
 
@@ -234,9 +300,10 @@ final class FeedbackController: ObservableObject {
     func shutdown() async {
         closed = true; generation = UUID()
         request?.cancel(); request = nil
-        findings = []; panelVisible = false; status = nil; isAnalyzing = false
+        hidePanel()
+        findings = []; status = nil; isAnalyzing = false
         assessment = nil; successfulPatterns = []; learningRecord = nil
-        contextAppName = nil
+        contextAppName = nil; transcript = ""
         // Explicit saves finish, but a stalled feedback API cannot delay Quit.
         await persistence?.value
         await progress.finishPendingWrites()

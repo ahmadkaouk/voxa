@@ -65,6 +65,42 @@ enum NativeSetupChecks {
         for key: UInt16 in [KeyCode.returnKey, 76] {
             try unitExpect(!swallowed(key)); try unitExpect(!swallowed(key, down: false))
         }
+        var recording = false, review = false, cancelled = 0, discarded = 0, saved = 0
+        bridge.onCancelDictation = {
+            guard recording else { return false }
+            cancelled += 1; recording = false; return true
+        }
+        bridge.onDiscardFeedback = {
+            guard review else { return false }
+            discarded += 1; review = false; return true
+        }
+        bridge.onSaveFeedback = {
+            guard review else { return false }
+            saved += 1; review = false; return true
+        }
+        try unitExpect(!swallowed(KeyCode.escape))
+        _ = swallowed(KeyCode.escape, down: false)
+        try unitExpect(!swallowed(KeyCode.s, flags: .maskCommand))
+        _ = swallowed(KeyCode.s, down: false)
+        recording = true; review = true
+        try unitExpect(!swallowed(KeyCode.escape, flags: .maskCommand))
+        _ = swallowed(KeyCode.escape, down: false)
+        try unitExpect(swallowed(KeyCode.escape))
+        try unitEqual(cancelled, 1); try unitEqual(discarded, 0) // Recording takes priority.
+        try unitExpect(swallowed(KeyCode.escape, repeated: true))
+        try unitExpect(swallowed(KeyCode.escape, down: false))
+        try unitExpect(swallowed(KeyCode.escape))
+        try unitEqual(discarded, 1)
+        try unitExpect(swallowed(KeyCode.escape, down: false))
+        review = true
+        try unitExpect(!swallowed(KeyCode.s)); _ = swallowed(KeyCode.s, down: false)
+        try unitExpect(!swallowed(KeyCode.d)); _ = swallowed(KeyCode.d, down: false)
+        try unitExpect(swallowed(KeyCode.s, flags: .maskCommand))
+        try unitExpect(swallowed(KeyCode.s, repeated: true))
+        try unitExpect(swallowed(KeyCode.s, down: false))
+        try unitEqual(saved, 1)
+        try unitExpect(!swallowed(KeyCode.s, flags: .maskCommand))
+        _ = swallowed(KeyCode.s, down: false)
         try unitEqual(submits, 0)
         try unitExpect(!swallowed(KeyCode.g, flags: .maskAlternate))
         try unitExpect(!swallowed(KeyCode.g, down: false))

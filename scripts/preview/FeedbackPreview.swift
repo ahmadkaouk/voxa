@@ -55,7 +55,30 @@ private enum FeedbackPreview {
     }
 
     @MainActor static func run() async throws {
+        try await verifyOverlayLifecycle()
         let now = Date()
+        let designText = "Yesterday I go over the proposal with Maya, and she explain why does the rollout take so long."
+        let designFindings: [EnglishFeedback] = [
+            .init(kind: .grammar, original: "I go over", suggestion: "I went over",
+                  explanation: "Yesterday places the action in the past.", practicePrompt: "Say what you did yesterday.",
+                  pattern: "Yesterday + past-tense verb", focus: .pastTense),
+            .init(kind: .grammar, original: "she explain", suggestion: "she explained",
+                  explanation: "Keep the second action in the past too.", practicePrompt: "Describe what someone explained.", focus: .pastTense),
+            .init(kind: .construction, original: "why does the rollout take so long", suggestion: "why the rollout takes so long",
+                  explanation: "Use statement word order inside an indirect question.", practicePrompt: "Explain why something takes time.",
+                  pattern: "why + subject + verb", focus: .questionOrder)
+        ]
+        let design = try await review(.init(feedback: designFindings, assessment: .tooShort), text: designText, history: [])
+        try await render(FeedbackReviewView(controller: design), name: "review-design-light", scheme: .light)
+        try await render(FeedbackReviewView(controller: design), name: "review-design-dark", scheme: .dark)
+        await design.shutdown()
+        let bar = ActivityOverlayModel()
+        bar.phase = .listening; bar.content = .init(title: "Listening", subtitle: nil)
+        bar.startedAt = now.addingTimeInterval(-12); bar.level = 0.65
+        try await render(ActivityOverlayView(model: bar), name: "recorder-light", scheme: .light)
+        try await render(ActivityOverlayView(model: bar), name: "recorder-dark", scheme: .dark)
+        bar.phase = .idle; bar.startedAt = nil
+        try await render(ActivityOverlayView(model: bar), name: "recorder-idle", scheme: .light)
         let sample = "Yesterday I visited the office because we needed to discuss the next release with the team. We considered several options and agreed that a smaller change would be easier to test. Although the deadline is close, I think we can finish on time if we focus on the most important problems and ask for help when we need it."
         let history: [LearningRecord] = (0..<10).map { index in
             let band: GrammarBand = index < 3 ? .accurate : (index < 7 ? .minor : .recurring)
@@ -93,7 +116,7 @@ private enum FeedbackPreview {
         let single = try await review(singleAnalysis, text: singleCorrection.original, history: singleHistory,
             context: FeedbackTextContext(appName: "ChatGPT", source: .nearbyText, text: "Where should we keep the file versions?"))
         let compactSize = try await render(FeedbackReviewView(controller: single), name: "review-single-light", scheme: .light)
-        guard compactSize.height < 360 else { throw FeedbackError.invalidResponse }
+        guard compactSize.height < 520 else { throw FeedbackError.invalidResponse }
         try await render(FeedbackReviewView(controller: single), name: "review-single-dark", scheme: .dark)
         await single.shutdown()
 
@@ -217,6 +240,65 @@ private enum FeedbackPreview {
         practice.open([target, .init(lesson: .init(id: UUID(), date: now, feedback: phrasing), alternative: false)], review: true)
         try await render(PracticeView(controller: practice).frame(width: 540, height: 590), name: "short-review", scheme: .light)
         await practice.shutdown()
+    }
+
+    @MainActor static func verifyOverlayLifecycle() async throws {
+        let frameName = "VoxaOverlayFixture-" + UUID().uuidString
+        defer { NSWindow.removeFrame(usingName: frameName) }
+        let overlay = ActivityOverlayController(frameName: frameName)
+        func show(_ phase: ActivityOverlayPhase) {
+            overlay.show(phase, content: .init(title: "Fixture", subtitle: nil), level: 0.6,
+                         onStart: {}, onCancel: {}, onStop: {})
+        }
+        show(.listening)
+        guard let panel = NSApp.windows.first(where: { $0.frameAutosaveName == frameName }),
+              panel.isVisible, panel.isMovable else { throw FeedbackError.invalidResponse }
+        let visible = panel.screen!.visibleFrame
+        let origin = NSPoint(x: visible.midX - panel.frame.width / 2, y: visible.midY)
+        panel.setFrameOrigin(origin)
+        // Event positions are relative to the window as it moves. No hardware cursor polling.
+        let start = CGPoint(x: 90, y: 26)
+        overlay.model.onMove(start, start, false)
+        overlay.model.onMove(start, CGPoint(x: 120, y: 30), false)
+        overlay.model.onMove(start, CGPoint(x: 110, y: 31), false)
+        overlay.model.onMove(start, start, true)
+        let moved = NSPoint(x: origin.x + 50, y: origin.y - 9)
+        guard panel.frame.origin == moved else { throw FeedbackError.invalidResponse }
+        show(.transcribing)
+        guard panel.frame.origin == moved else { throw FeedbackError.invalidResponse }
+        show(.idle)
+        try await Task.sleep(for: .milliseconds(200))
+        guard !panel.isVisible else { throw FeedbackError.invalidResponse }
+        show(.idle)
+        guard !panel.isVisible else { throw FeedbackError.invalidResponse }
+        show(.listening)
+        guard panel.frame.origin == moved else { throw FeedbackError.invalidResponse }
+        overlay.hide(); show(.listening)
+        try await Task.sleep(for: .milliseconds(200))
+        guard panel.isVisible, overlay.model.phase == .listening else { throw FeedbackError.invalidResponse }
+        overlay.hide()
+        try await Task.sleep(for: .milliseconds(200))
+        panel.setFrameAutosaveName("")
+        let restored = ActivityOverlayController(frameName: frameName)
+        restored.show(.listening, content: .init(title: "Restored", subtitle: nil), level: 0,
+                      onStart: {}, onCancel: {}, onStop: {})
+        guard let restoredPanel = NSApp.windows.first(where: { $0.frameAutosaveName == frameName }),
+              restoredPanel.frame.origin == moved else { throw FeedbackError.invalidResponse }
+        restored.hide()
+        try await Task.sleep(for: .milliseconds(200))
+        restoredPanel.setFrameAutosaveName("")
+        panel.close(); restoredPanel.close()
+        for index in ActivityOverlayMetrics.waveform.indices {
+            for level in [0, 0.1, 0.7, 1, -1, Double.nan, Double.infinity] {
+                let height = ActivityOverlayMetrics.barHeight(index: index, level: level, time: 0)
+                guard height.isFinite, (3...26).contains(height) else { throw FeedbackError.invalidResponse }
+            }
+        }
+        let quiet = ActivityOverlayMetrics.barHeight(index: 11, level: 0, time: 0)
+        let speaking = ActivityOverlayMetrics.barHeight(index: 11, level: 0.7, time: 0)
+        let later = ActivityOverlayMetrics.barHeight(index: 11, level: 0.7, time: 0.2)
+        guard speaking > quiet, speaking != later else { throw FeedbackError.invalidResponse }
+        print("PASS: native overlay hides at idle, restores moved position, survives rapid restart, and animates microphone levels")
     }
 
     @MainActor static func review(_ result: FeedbackAnalysis, text: String, history: [LearningRecord],

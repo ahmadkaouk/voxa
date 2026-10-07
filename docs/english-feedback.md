@@ -50,22 +50,31 @@ explanations, and the distinction between errors and optional alternatives.
   the score. The model must ignore those instructions, retain the speaker's meaning,
   ground every finding/assessment in the transcript, and avoid copying contextual
   private details into saved lessons. Fixture tests cannot establish model adherence.
-- All findings use one row layout: type and focus, inline wording comparison,
-  Why, and an optional Pattern. Fixes strike through the subdued old wording;
-  alternatives leave it unstruck and show Optional. Replacements use an arrow and
-  green highlights, with shared words around them. Pure fixes can add or remove
-  words without an arrow. Paired alternatives compare with the corrected sentence.
-  An absent pattern leaves no empty section. Recognition issues carry a separate
-  Check transcription label and never claim a grammar mistake.
-- Short reviews fit their contents; longer reviews scroll while all footer actions
-  remain visible. Corrections lead, paired alternatives sit underneath, standalone
-  alternatives follow, and recognition issues come last. Grammar confirmation and
-  Used well observations stay grouped. New reviews start at the top. Check long
-  alternatives, multiple successes, a small viewport and saved-lesson details.
-- S saves every lesson in one write; D closes without saving lessons. Both leave automatic progress intact. Recognition issues are never saved as lessons. Failed writes keep the review open; repeated presses do not duplicate saves.
-- Without a visible review, S and D type normally. Modified shortcuts remain available.
-- Saved lessons, including older files and paired alternatives, survive relaunch. Practice answers do not persist.
-- Practice this sits next to Save lessons. A single lesson opens directly; multiple choices use a menu with corrections first, then paired/standalone alternatives. Recognition issues never appear as practice choices. Opening practice preserves the unsaved review; closing returns to it. A pending Save cannot race a practice launch. Practice suspends normal dictation and never pastes an answer.
+- Corrections lead with small word-level changes and a Remember rule. Full Before / After
+  sentences stay visible below them; neutral highlights identify changes. Optional
+  wording and its explanation stay visible next. No section is collapsed.
+- Verify the same neutral background across header, body and footer in light/dark
+  appearance. Only Save is blue. The compact recorder is solid black with no border,
+  a live microphone waveform, elapsed time and a stop control. Drag its timer/waveform
+  area; the position survives a new recording and relaunch. It hides after completion
+  or cancellation and never appears while idle. Check silence and Reduced Motion.
+- Short reviews fit their contents; longer reviews scroll while footer actions remain
+  visible. Recognition issues come last and never claim a grammar mistake. Check
+  multiple distant fixes in a sentence, compatible overlaps, conflicting alternatives,
+  long excerpts, a small viewport and saved-lesson details.
+- The panel hides five seconds after presentation. Hover pauses the remaining time;
+  pin keeps it open. Show Latest Feedback reopens it. Stale timers must not close
+  a newer review. Saving suspends dismissal and failed saves keep the review open.
+- ⌘S saves every lesson in one write; Esc closes without saving. Both leave automatic
+  progress intact. Recognition issues are excluded. Repeats must not duplicate saves.
+- Esc cancels an active recording, including startup, without transcription or output.
+  The bar hides immediately. Without an eligible recording/review these keys pass
+  through normally; plain S and D always type normally.
+- Saved lessons, including older files and paired alternatives, survive relaunch.
+  Practice answers do not persist.
+- Each correction and optional wording has a Try once action. Opening practice preserves
+  the unsaved review; closing returns to it. A pending Save cannot race practice.
+  Practice suspends normal dictation and never pastes an answer.
 - Record answer / Stop & check uses the existing transcription model and checks only the selected pattern. Type instead works without requesting microphone permission. Close during permission, capture, transcription or checking must not leave capture active or revive a stale result.
 - One-minute Review offers up to three due saved patterns, prioritising recurring mistakes, with examples hidden until requested. Skip and uncertain recognition never count as failures. The same pattern should not reappear immediately through a duplicate saved lesson.
 - Check long excerpts, small screens, light/dark appearance, and VoiceOver labels.
@@ -78,7 +87,7 @@ explanations, and the distinction between errors and optional alternatives.
 - Use at least 20 assessable English words for a score. Short, non-English,
   uncertain or internally inconsistent assessments should abstain. Optional
   alternatives, fillers, punctuation and self-repairs must not lower a score.
-- Verify a clean long dictation shows a positive review and can close with S/D.
+- Verify a clean long dictation shows a positive review and can close with ⌘S/Esc.
   A short clean dictation without any useful observation remains silent.
 - After a past-tense lesson, a later “Yesterday I went to the office” can count as
   correct practice. A present-tense sentence with no past-tense opportunity cannot.

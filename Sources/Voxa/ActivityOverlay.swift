@@ -2,10 +2,6 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
-// Select the property wrapper explicitly: the SDK 27 State macro requires
-// SwiftUIMacros, which is not bundled with the standalone Command Line Tools.
-private typealias ViewState<Value> = SwiftUI.State<Value>
-
 enum ActivityOverlayPhase: Equatable {
     case idle
     case listening
@@ -23,163 +19,111 @@ final class ActivityOverlayModel: ObservableObject {
     @Published var phase: ActivityOverlayPhase = .idle
     @Published var content = ActivityOverlayContent(title: "Start dictation", subtitle: nil)
     @Published var level: Double = 0
+    @Published var startedAt: Date?
+    @Published var finishedAt: Date?
     var onStart: () -> Void = {}
     var onCancel: () -> Void = {}
     var onStop: () -> Void = {}
+    var onMove: (_ start: CGPoint, _ current: CGPoint, _ ended: Bool) -> Void = { _, _, _ in }
 }
 
 enum ActivityOverlayMetrics {
-    static let panelSize = NSSize(width: 132, height: 60)
-    static let activeSize = NSSize(width: 100, height: 30)
-    static let restingSize = NSSize(width: 40, height: 7)
+    static let panelSize = NSSize(width: 312, height: 80)
+    static let activeSize = NSSize(width: 280, height: 52)
+    static let waveform: [CGFloat] = [7, 11, 17, 25, 14, 28, 19, 34, 24, 15, 30, 38, 26, 16, 33, 22, 28, 18, 23, 13, 7]
 
     static func barHeight(index: Int, level: Double, time: TimeInterval) -> CGFloat {
         let level = level.isFinite ? max(0, min(level, 1)) : 0
-        guard level > 0.015 else { return 2 }
-        let envelope = pow(level, 0.6)
-        let profile = 0.45 + 0.55 * sin(Double(index + 1) / 12 * .pi)
-        let motion = 0.45 + 0.55 * abs(sin(time * 9 + Double(index) * 0.72))
-        return 2 + 15 * envelope * profile * motion
+        guard level > 0.015 else { return 3 }
+        let envelope = pow(level, 0.55)
+        let motion = 0.55 + 0.45 * abs(sin(time * 7 + Double(index) * 0.72))
+        return 3 + (waveform[index] * 0.54 - 3) * envelope * motion
     }
 }
 
 struct ActivityOverlayView: View {
     @ObservedObject var model: ActivityOverlayModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ViewState private var hovering = false
-
-    private var resting: Bool { model.phase == .idle }
-    private var expanded: Bool { !resting || hovering }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Color.clear
-            surface
-                .padding(.bottom, 12)
+            HStack(spacing: 18) {
+                HStack(spacing: 18) {
+                    TimelineView(.animation(minimumInterval: 1, paused: model.phase != .listening)) { timeline in
+                        Text(elapsed(at: timeline.date))
+                            .font(.system(size: 12, weight: .medium)).monospacedDigit()
+                            .foregroundStyle(.white.opacity(0.65))
+                    }.frame(width: 39, alignment: .leading)
+                    indicator.frame(maxWidth: .infinity)
+                }
+                .frame(height: ActivityOverlayMetrics.activeSize.height)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                    .onChanged { model.onMove($0.startLocation, $0.location, false) }
+                    .onEnded { model.onMove($0.startLocation, $0.location, true) })
+                control
+            }
+            .padding(.horizontal, 14)
+            .frame(width: ActivityOverlayMetrics.activeSize.width, height: ActivityOverlayMetrics.activeSize.height)
+            .background(.black, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+            .padding(.bottom, 12)
+            .help(model.phase == .listening ? "Drag to move · Esc to cancel" : model.content.title + " · Drag to move")
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Voxa: \(model.content.title)")
         }
         .frame(width: ActivityOverlayMetrics.panelSize.width, height: ActivityOverlayMetrics.panelSize.height)
-        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.82), value: expanded)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: model.phase)
         .preferredColorScheme(.dark)
     }
 
-    private var surface: some View {
-        ZStack {
-            Capsule(style: .continuous)
-                .fill(expanded ? Color(red: 0.045, green: 0.045, blue: 0.05) : Color.black.opacity(0.48))
-            Capsule(style: .continuous)
-                .strokeBorder(Color.white.opacity(expanded ? 0.15 : 0.22), lineWidth: 0.6)
-
-            if expanded {
-                controls
-                    .transition(.opacity)
-            }
-        }
-        .frame(
-            width: expanded ? ActivityOverlayMetrics.activeSize.width : ActivityOverlayMetrics.restingSize.width,
-            height: expanded ? ActivityOverlayMetrics.activeSize.height : ActivityOverlayMetrics.restingSize.height
-        )
-        .shadow(color: .black.opacity(expanded ? 0.22 : 0.08), radius: expanded ? 5 : 2, y: 2)
-        // Give the tiny resting mark a usable target without painting a larger bar.
-        .frame(width: 100, height: 30, alignment: .bottom)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onChange(of: model.phase) { _ in hovering = false }
-        .help(resting ? startHelp : model.content.title)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Voxa: \(model.content.title)")
-        .overlay {
-            if resting && !expanded {
-                Button(action: model.onStart) { Color.clear }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Start dictation")
-                    .accessibilityHint(startHelp)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var controls: some View {
+    @ViewBuilder private var indicator: some View {
         switch model.phase {
-        case .idle:
-            Button(action: model.onStart) {
-                HStack(spacing: 7) {
-                    Image(systemName: "mic.fill").font(.system(size: 11, weight: .medium))
-                    Text("Dictate").font(.system(size: 11, weight: .medium))
-                }
-                .foregroundStyle(Color.white.opacity(0.9))
-                .frame(width: 100, height: 30)
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Start dictation")
-        case .listening:
-            HStack(spacing: 7) {
-                circleControl(symbol: "xmark", bright: false, action: model.onCancel)
-                    .help("Cancel recording")
-                    .accessibilityLabel("Cancel recording")
-                    .accessibilityHint("Discards this recording without transcribing or pasting")
-
-                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion || model.level <= 0.015)) { timeline in
-                    waveform(time: reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate)
-                }
-                .accessibilityHidden(true)
-
-                circleControl(symbol: "checkmark", bright: true, action: model.onStop)
-                    .help("Finish dictation and paste")
-                    .accessibilityLabel("Finish dictation")
-                    .accessibilityHint("Stops recording and transcribes your speech")
-            }
-            .padding(.horizontal, 6)
-        case .transcribing:
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
-                HStack(spacing: 4) {
-                    ForEach(0..<3, id: \.self) { index in
-                        let intensity = reduceMotion ? 0.8 : (sin(timeline.date.timeIntervalSinceReferenceDate * 7 - Double(index) * 0.8) + 1) / 2
-                        Circle()
-                            .fill(Color.white.opacity(0.35 + 0.65 * intensity))
-                            .frame(width: 4, height: 4)
-                            .offset(y: reduceMotion ? 0 : -1.5 * intensity)
+        case .idle, .listening:
+            TimelineView(.animation(minimumInterval: 1.0 / 30,
+                                    paused: reduceMotion || model.phase != .listening || model.level <= 0.015)) { timeline in
+                HStack(spacing: 2) {
+                    ForEach(ActivityOverlayMetrics.waveform.indices, id: \.self) { index in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(.white.opacity(0.9))
+                            .frame(width: 3, height: ActivityOverlayMetrics.barHeight(
+                                index: index, level: model.phase == .listening ? model.level : 0,
+                                time: reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate))
                     }
                 }
-            }
-            .accessibilityLabel("Transcribing")
+                .frame(height: 26)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: model.level)
+            }.accessibilityLabel("Microphone level").accessibilityValue("\(Int(model.level * 100)) percent")
+        case .transcribing:
+            ProgressView().controlSize(.small).tint(.primary)
+                .accessibilityLabel(model.content.title)
         case .outputting:
-            Image(systemName: "checkmark")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
+            Image(systemName: "checkmark").font(.system(size: 18, weight: .medium))
                 .accessibilityLabel(model.content.title)
         }
     }
 
-    private var startHelp: String {
-        if let shortcut = model.content.subtitle { return "Start dictation · \(shortcut)" }
-        return "Start dictation"
+    @ViewBuilder private var control: some View {
+        if model.phase == .idle || model.phase == .listening {
+            Button(action: model.phase == .idle ? model.onStart : model.onStop) {
+                Image(systemName: model.phase == .idle ? "mic.fill" : "stop.fill")
+                    .font(.system(size: model.phase == .idle ? 14 : 11, weight: .medium))
+                    .frame(width: 32, height: 32)
+                    .foregroundStyle(.white)
+                    .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                    .contentShape(RoundedRectangle(cornerRadius: 9))
+            }.buttonStyle(.plain)
+                .accessibilityLabel(model.phase == .idle ? "Start dictation" : "Finish dictation")
+                .help(model.phase == .idle ? "Start dictation · \(model.content.subtitle ?? "")" : "Finish dictation and paste · Esc to cancel")
+        } else {
+            Color.clear.frame(width: 32, height: 32).accessibilityHidden(true)
+        }
     }
 
-    private func circleControl(symbol: String, bright: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(bright ? Color.black.opacity(0.85) : Color.white.opacity(0.8))
-                .frame(width: 18, height: 18)
-                .background(Circle().fill(bright ? Color.white : Color.white.opacity(0.2)))
-                .frame(width: 20, height: 28)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func waveform(time: TimeInterval) -> some View {
-        HStack(spacing: 2) {
-            ForEach(0..<11, id: \.self) { index in
-                Capsule()
-                    .fill(Color.white.opacity(model.level > 0.015 ? 0.94 : 0.56))
-                    .frame(width: 1.5, height: ActivityOverlayMetrics.barHeight(index: index, level: model.level, time: time))
-            }
-        }
-        .frame(width: 34, height: 19)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.09), value: model.level)
+    private func elapsed(at date: Date) -> String {
+        guard let started = model.startedAt else { return "0:00" }
+        let seconds = max(0, Int((model.finishedAt ?? date).timeIntervalSince(started)))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
 
@@ -188,6 +132,10 @@ final class ActivityOverlayController {
     private var panel: NSPanel?
     private var presentationGeneration = 0
     private var hiding = false
+    private var dragStart: (mouse: NSPoint, window: NSPoint)?
+    private let frameName: String
+
+    init(frameName: String = "VoxaRecordingBar") { self.frameName = frameName }
 
     /// Meter updates leave presentation, content, and control callbacks in place.
     func updateLevel(_ level: Double) {
@@ -204,17 +152,22 @@ final class ActivityOverlayController {
         onCancel: @escaping () -> Void,
         onStop: @escaping () -> Void
     ) {
+        guard phase != .idle else { hide(); return }
         let previousPhase = model.phase
+        if phase == .listening && (previousPhase != .listening || hiding) {
+            model.startedAt = Date(); model.finishedAt = nil
+        } else if previousPhase == .listening && phase != .listening { model.finishedAt = Date() }
         model.content = content
         updateLevel(level)
         model.onStart = onStart
         model.onCancel = onCancel
         model.onStop = onStop
+        model.onMove = { [weak self] start, current, ended in self?.move(start: start, current: current, ended: ended) }
         model.phase = phase
 
         let panel = ensurePanel()
         let needsPresentation = !panel.isVisible || hiding
-        if needsPresentation || (previousPhase == .idle && phase != .idle) {
+        if needsPresentation && !NSScreen.screens.contains(where: { $0.visibleFrame.contains(panel.frame) }) {
             position(panel)
         }
         guard needsPresentation else { return }
@@ -230,6 +183,9 @@ final class ActivityOverlayController {
     }
 
     func hide() {
+        dragStart = nil
+        model.phase = .idle
+        model.startedAt = nil; model.finishedAt = nil
         guard let panel, panel.isVisible, !hiding else { return }
         presentationGeneration += 1
         let generation = presentationGeneration
@@ -244,6 +200,25 @@ final class ActivityOverlayController {
         }
     }
 
+    /// SwiftUI owns the gesture; desktop coordinates keep dragging stable as the window moves.
+    private func move(start: CGPoint, current: CGPoint, ended: Bool) {
+        guard let panel, panel.isVisible, !hiding else { dragStart = nil; return }
+        // SwiftUI's global space is the hosting view, with its origin at the top left.
+        // Convert each event using the current window frame, rather than polling the cursor.
+        let mouse = NSPoint(x: panel.frame.minX + current.x, y: panel.frame.maxY - current.y)
+        if dragStart == nil {
+            dragStart = (NSPoint(x: panel.frame.minX + start.x, y: panel.frame.maxY - start.y), panel.frame.origin)
+        }
+        if let dragStart {
+            panel.setFrameOrigin(NSPoint(x: dragStart.window.x + mouse.x - dragStart.mouse.x,
+                                         y: dragStart.window.y + mouse.y - dragStart.mouse.y))
+        }
+        if ended {
+            panel.saveFrame(usingName: frameName)
+            dragStart = nil
+        }
+    }
+
     private func ensurePanel() -> NSPanel {
         if let panel { return panel }
         let panel = NSPanel(
@@ -255,10 +230,15 @@ final class ActivityOverlayController {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
+        panel.isMovable = true
+        panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isReleasedWhenClosed = false
         panel.contentView = TransparentOverlayHostingView(rootView: ActivityOverlayView(model: model))
+        if !panel.setFrameUsingName(frameName, force: true) { position(panel) }
+        // AppKit restores the user's position across recordings and app launches.
+        panel.setFrameAutosaveName(frameName)
         self.panel = panel
         return panel
     }
@@ -275,6 +255,7 @@ final class ActivityOverlayController {
 
 private final class TransparentOverlayHostingView<Content: View>: NSHostingView<Content> {
     override var isOpaque: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     required init(rootView: Content) {
         super.init(rootView: rootView)
         wantsLayer = true

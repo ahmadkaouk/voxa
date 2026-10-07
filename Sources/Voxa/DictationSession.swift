@@ -195,16 +195,20 @@ final class DictationSession: ObservableObject {
     }
 
     /// Recording-only cancellation, including capture still starting or releasing its device.
-    func cancel() {
-        guard !shuttingDown else { return }
-        clearTextContext()
+    @discardableResult
+    func cancel() -> Bool {
+        guard !shuttingDown else { return false }
         switch state {
-        case .starting(let context, _): state = .starting(context, requested: .cancel)
+        case .starting(let context, _):
+            clearTextContext()
+            state = .starting(context, requested: .cancel)
         case .recording(let context), .finishing(let context, _):
+            clearTextContext()
             state = .finishing(context, discard: true)
             recordingMonitor?.cancel()
-        default: break
+        default: return false
         }
+        return true
     }
 
     @discardableResult

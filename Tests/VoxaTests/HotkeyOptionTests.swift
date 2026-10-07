@@ -8,29 +8,26 @@ import XCTest
 
 enum HotkeyOptionChecks {
     static func testFeedbackShortcuts() throws {
-        for target in [KeyCode.s, KeyCode.d] {
-            var shortcut = FeedbackShortcut(keyCode: target)
+        let shortcuts: [(UInt16, HotkeyModifiers)] = [(KeyCode.s, .command), (KeyCode.escape, [])]
+        for (target, modifiers) in shortcuts {
+            var shortcut = FeedbackShortcut(keyCode: target, modifiers: modifiers)
             var activations = 0
-            func press(_ down: Bool, key: UInt16? = nil, flags: HotkeyModifiers = [],
+            func press(_ down: Bool, key: UInt16? = nil, flags: HotkeyModifiers? = nil,
                        repeated: Bool = false, accepted: Bool = true) -> Bool {
-                shortcut.consume(keyCode: key ?? target, isDown: down, flags: flags, isRepeat: repeated) {
+                shortcut.consume(keyCode: key ?? target, isDown: down, flags: flags ?? modifiers, isRepeat: repeated) {
                     activations += 1
                     return accepted
                 }
             }
-            try unitExpect(!press(true, flags: .option))
-            try unitExpect(!press(true, flags: .command))
-            try unitExpect(!press(true, flags: .shift))
-            try unitExpect(!press(true, flags: .control))
-            try unitExpect(!press(true, flags: [.option, .command]))
-            try unitExpect(!press(true, flags: [.option, .shift]))
-            try unitExpect(!press(true, key: KeyCode.f))
+            let combinations: [HotkeyModifiers] = [[], .option, .command, .shift, .control, [.option, .command], [.command, .shift]]
+            for flags in combinations where flags != modifiers { try unitExpect(!press(true, flags: flags)) }
+            try unitExpect(!press(true, key: KeyCode.d))
             try unitExpect(!press(true, repeated: true))
             try unitEqual(activations, 0)
-            try unitExpect(!press(true, accepted: false)) // No visible eligible card: pass through.
+            try unitExpect(!press(true, accepted: false)) // No eligible recording/review: pass through.
             try unitExpect(!press(false))
             try unitExpect(press(true))
-            // Closing the card must not leak repeats or the key-up to the focused app.
+            // Closing/cancelling must not leak repeats or key-up to the focused app.
             try unitExpect(press(true, flags: [], repeated: true, accepted: false))
             try unitExpect(press(false, flags: [], accepted: false))
             try unitEqual(activations, 2)

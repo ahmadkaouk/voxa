@@ -552,7 +552,7 @@ enum DictationSessionChecks {
         f.transcriber.gate = network
         try await f.record(); f.session.stop()
         try await eventually { network.entered }
-        f.session.cancel(); f.session.toggle(prepare: { "other-key" })
+        try unitExpect(!f.session.cancel()); f.session.toggle(prepare: { "other-key" })
         try unitEqual(f.session.state.tag, "transcribing")
         try unitEqual(f.recorder.starts.count, 1)
         let shutdown = Task { await f.session.shutdown() }

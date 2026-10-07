@@ -6,21 +6,17 @@ import SwiftUI
 private typealias FeedbackViewState<Value> = SwiftUI.State<Value>
 
 enum FeedbackPalette {
-    static let addedText = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 0.40, green: 0.85, blue: 0.62, alpha: 1)
-            : NSColor(red: 0.12, green: 0.44, blue: 0.28, alpha: 1)
-    }
-    static let added = Color(nsColor: addedText)
+    static let addedText = NSColor.labelColor
+    static let added = Color.primary
     static let addedBackground = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 0.16, green: 0.27, blue: 0.22, alpha: 1)
-            : NSColor(red: 0.86, green: 0.94, blue: 0.89, alpha: 1)
+            ? NSColor(white: 0.27, alpha: 1) : NSColor(white: 0.89, alpha: 1)
     }
-    static let accent = Color(nsColor: NSColor(name: nil) { appearance in
+    static let accent = Color.primary
+    // One opaque neutral surface keeps every part of the feedback the same color.
+    static let surface = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 0.42, green: 0.81, blue: 0.84, alpha: 1)
-            : NSColor(red: 0.12, green: 0.40, blue: 0.45, alpha: 1)
+            ? NSColor(white: 0.15, alpha: 1) : NSColor(white: 0.98, alpha: 1)
     })
 }
 
@@ -29,11 +25,10 @@ private struct FeedbackSaveButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 11).padding(.vertical, 6)
-            .foregroundStyle(FeedbackPalette.accent)
-            .background(FeedbackPalette.accent.opacity(configuration.isPressed ? 0.22 : 0.12),
-                        in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(FeedbackPalette.accent.opacity(0.15)))
+            .padding(.horizontal, 13).padding(.vertical, 8)
+            .foregroundStyle(.white)
+            .background(Color(nsColor: .systemBlue).opacity(configuration.isPressed ? 0.8 : 1),
+                        in: RoundedRectangle(cornerRadius: 9))
             .opacity(isEnabled ? 1 : 0.45)
     }
 }
@@ -189,35 +184,82 @@ struct FeedbackLessonView: View {
     }
 }
 
+/// Keep the complete sentence visible while highlighting only the words that changed.
+private struct FeedbackSentenceText: NSViewRepresentable {
+    let original: String
+    let suggestion: String
+    var corrected = true
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(wrappingLabelWithString: "")
+        field.maximumNumberOfLines = 0
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        let value = corrected ? suggestion : original
+        let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 5
+        let text = NSMutableAttributedString(string: value, attributes: [
+            .font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph
+        ])
+        var offset = 0
+        for change in FeedbackWordDiff(original: original, suggestion: suggestion).changes {
+            let range = corrected ? NSRange(location: change.range.location + offset, length: (change.suggestion as NSString).length) : change.range
+            if range.length > 0 {
+                if corrected {
+                    text.addAttributes([.font: NSFont.systemFont(ofSize: 14, weight: .medium),
+                                        .backgroundColor: FeedbackPalette.addedBackground], range: range)
+                } else {
+                    text.addAttributes([.strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                                        .foregroundColor: NSColor.secondaryLabelColor], range: range)
+                }
+            }
+            offset += (change.suggestion as NSString).length - change.range.length
+        }
+        field.attributedStringValue = text
+        field.setAccessibilityLabel(value)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
+        let width = proposal.width ?? 430
+        nsView.preferredMaxLayoutWidth = width
+        let size = nsView.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude))
+        return CGSize(width: width, height: ceil(size?.height ?? 0))
+    }
+}
+
 struct FeedbackReviewView: View {
     @ObservedObject var controller: FeedbackController
-    var maximumHeight: CGFloat = 640
-    static let width: CGFloat = 510
+    var maximumHeight: CGFloat = 680
+    static let width: CGFloat = 520
 
     private var maximumListHeight: CGFloat {
-        let chrome: CGFloat = controller.storageError == nil && controller.progress.error == nil ? 180 : 240
+        let chrome: CGFloat = controller.storageError == nil && controller.progress.error == nil ? 174 : 250
         return max(80, maximumHeight - chrome)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             header
-            Divider()
+            Divider().opacity(0.6)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     grammarSummary
-                    ForEach(Array(reviewItems.enumerated()), id: \.element.id) { index, item in
-                        if index > 0 { Divider().opacity(0.6) }
-                        FeedbackLessonView(feedback: item.feedback, previousOccurrences: previousOccurrences(for: item))
+                    ForEach(controller.corrections) { item in changeGroup(item) }
+                    fullSentences
+                    optionalWording
+                    ForEach(controller.transcriptionIssues) { item in
+                        Divider().opacity(0.6)
+                        FeedbackLessonView(feedback: item.feedback)
                     }
-                }.padding(.trailing, 6).padding(.vertical, 2)
+                }.padding(.trailing, 4).padding(.vertical, 2)
             }
-            // Use the native scroll view's ideal content size for a short review.
-            // Only long reviews fill this limit and need to scroll.
             .frame(maxHeight: maximumListHeight)
             .fixedSize(horizontal: false, vertical: true)
             .id(controller.findings.first?.id)
-            Divider()
+            Divider().opacity(0.6)
             footer
             if let error = controller.storageError ?? controller.progress.error {
                 HStack(alignment: .top) {
@@ -228,18 +270,110 @@ struct FeedbackReviewView: View {
             }
         }
         .padding(20).frame(width: Self.width)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.primary.opacity(0.09)))
+        .background(FeedbackPalette.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.primary.opacity(0.09)))
+        .onHover { controller.setReading($0) }
     }
 
-    private var reviewItems: [SavedCorrection] {
-        controller.corrections + controller.alternatives + controller.transcriptionIssues
+    private func changeGroup(_ item: SavedCorrection) -> some View {
+        let feedback = item.feedback
+        let changes = FeedbackWordDiff(original: feedback.original, suggestion: feedback.suggestion).changes.filter {
+            EnglishText.spokenWords($0.original) != EnglishText.spokenWords($0.suggestion)
+        }
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text(feedback.focus?.label ?? (feedback.kind == .construction ? "Sentence structure" : "Correction"))
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                if let focus = feedback.focus, controller.previousOccurrences(of: focus) > 0 {
+                    Text("Seen before").font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                practiceButton(item)
+            }
+            ForEach(Array(changes.enumerated()), id: \.offset) { _, change in
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    let before = change.original.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let after = change.suggestion.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Text(before.isEmpty ? "Add" : before).strikethrough(!before.isEmpty).foregroundStyle(.secondary)
+                    Image(systemName: "arrow.right").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(after.isEmpty ? "Remove" : after).fontWeight(.medium)
+                }.font(.system(size: 16)).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .combine)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text("Remember").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                Text(feedback.pattern ?? feedback.explanation).font(.system(size: 12)).lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }.accessibilityElement(children: .combine)
+            if feedback.pattern != nil {
+                Text(feedback.explanation).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func previousOccurrences(for item: SavedCorrection) -> Int {
-        guard item.feedback.kind == .grammar || item.feedback.kind == .construction,
-              let focus = item.feedback.focus, focus.isGrammar else { return 0 }
-        return controller.previousOccurrences(of: focus)
+    @ViewBuilder private var fullSentences: some View {
+        let pairs = FeedbackSentence.comparisons(transcript: controller.transcript,
+                                                findings: controller.corrections.map(\.feedback))
+        if !pairs.isEmpty {
+            Divider().opacity(0.6)
+            VStack(alignment: .leading, spacing: 12) {
+                sectionTitle(pairs.count == 1 ? "Full sentence" : "Full sentences")
+                ForEach(Array(pairs.enumerated()), id: \.offset) { index, pair in
+                    if index > 0 { Divider().opacity(0.35) }
+                    sentenceLine("Before", pair: pair, corrected: false)
+                    sentenceLine("After", pair: pair, corrected: true)
+                }
+            }
+        }
+    }
+
+    private func sentenceLine(_ label: String, pair: FeedbackSentence, corrected: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(label).font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 38, alignment: .leading).padding(.top, 3)
+            FeedbackSentenceText(original: pair.original, suggestion: pair.suggestion, corrected: corrected)
+        }.accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private var optionalWording: some View {
+        let choices = controller.reviewPracticeTargets.filter { $0.alternative || $0.lesson.feedback.kind == .phrasing }
+        if !choices.isEmpty {
+            Divider().opacity(0.6)
+            VStack(alignment: .leading, spacing: 12) {
+                sectionTitle("Optional wording")
+                ForEach(Array(choices.enumerated()), id: \.offset) { index, target in
+                    if index > 0 { Divider().opacity(0.35) }
+                    let feedback = target.lesson.feedback
+                    let original = target.alternative ? feedback.suggestion : feedback.original
+                    if !target.alternative {
+                        sentenceLine("You said", pair: .init(original: original, suggestion: original), corrected: false)
+                    }
+                    FeedbackSentenceText(original: original, suggestion: target.wording)
+                    Text(target.alternative ? feedback.alternative!.explanation : feedback.explanation)
+                        .font(.system(size: 12)).foregroundStyle(.secondary).lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .firstTextBaseline) {
+                        if let pattern = target.alternative ? feedback.alternative?.pattern : feedback.pattern {
+                            Text("Remember · " + pattern).font(.system(size: 11)).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 8)
+                        practiceButton(target.lesson, alternative: target.alternative)
+                    }
+                }
+            }
+        }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+    }
+
+    private func practiceButton(_ item: SavedCorrection, alternative: Bool = false) -> some View {
+        Button { controller.practise(item, alternative: alternative) } label: {
+            Label("Try once", systemImage: "mic").font(.system(size: 11))
+        }.buttonStyle(.plain).foregroundStyle(.secondary).fixedSize().disabled(controller.isSaving)
+            .help("Practise this pattern in a new sentence.")
     }
 
     @ViewBuilder private var grammarSummary: some View {
@@ -248,96 +382,65 @@ struct FeedbackReviewView: View {
             VStack(alignment: .leading, spacing: 6) {
                 if noErrors {
                     Label("No clear grammar errors", systemImage: "checkmark.circle")
-                        .font(.system(size: reviewItems.isEmpty ? 17 : 12, weight: .medium))
-                        .foregroundStyle(FeedbackPalette.added)
+                        .font(.system(size: 13, weight: .medium))
                 }
                 if !controller.successfulPatterns.isEmpty {
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text("Used well:").fontWeight(.medium).fixedSize()
-                        Text(controller.successfulPatterns.map(\.label).joined(separator: " · "))
-                            .fixedSize(horizontal: false, vertical: true).lineSpacing(3)
-                    }
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .padding(.leading, noErrors ? 20 : 0)
-                    .accessibilityElement(children: .combine)
+                    Text("Used well · " + controller.successfulPatterns.map(\.label).joined(separator: " · "))
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text("English feedback").font(.system(size: 16, weight: .semibold))
-                HStack(spacing: 6) {
-                    Text(summary).lineLimit(1)
-                    if let appName = controller.contextAppName {
-                        Text("·")
-                        Label("Context: " + appName, systemImage: "text.alignleft")
-                            .lineLimit(1).truncationMode(.tail)
-                            .help("Context from \(appName). Nearby text helped interpret your dictation; it isn’t saved locally or counted toward your English level.")
-                            .accessibilityLabel("Context from \(appName)")
-                    }
-                }.font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(summary + (controller.contextAppName.map { " · Context: " + $0 } ?? ""))
+                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    .help(controller.contextAppName.map { "Context from " + $0 + ". Nearby text is not saved." } ?? "Changes first, then the full sentence.")
             }
             Spacer(minLength: 0)
-            score
+            Button { controller.togglePinned() } label: {
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    HStack(spacing: 4) {
+                        Image(systemName: controller.isPinned ? "pin.fill" : "timer")
+                        Text(timerLabel(at: timeline.date))
+                    }.font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }.buttonStyle(.plain).disabled(controller.isSaving)
+                .help(controller.isPinned ? "Unpin to resume automatic dismissal" : "Keep open · Hover to pause the timer")
+                .accessibilityLabel(controller.isPinned ? "Unpin feedback" : "Keep feedback open")
+            Button { controller.discardReview() } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary).frame(width: 26, height: 26).contentShape(Circle())
+            }.buttonStyle(.plain).disabled(controller.isSaving).help("Close · Esc").accessibilityLabel("Close feedback")
         }
+    }
+
+    private func timerLabel(at date: Date) -> String {
+        if controller.isPinned { return "Pinned" }
+        if controller.isReading || controller.dismissalDeadline == nil { return "Paused" }
+        return "\(max(1, Int(ceil(controller.dismissalDeadline!.timeIntervalSince(date)))))s"
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
+        HStack {
             Button { controller.discardReview() } label: {
-                HStack(spacing: 6) { Text("Close"); keycap(FeedbackShortcut.discardLabel) }
-            }.buttonStyle(.bordered).foregroundStyle(.secondary).disabled(controller.isSaving)
-                .help("Close without saving lessons. Local progress is kept in Lessons & Progress.")
-            Spacer(minLength: 0)
-            practiceAction
+                HStack(spacing: 12) { Text("Close"); keycap(FeedbackShortcut.discardLabel) }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.primary.opacity(0.13)))
+            }.buttonStyle(.plain).disabled(controller.isSaving)
+            Spacer()
             if controller.hasLessons {
                 Button { controller.saveAndClose() } label: {
-                    HStack(spacing: 7) { Text("Save lessons"); keycap(FeedbackShortcut.saveLabel) }
-                }
-                .buttonStyle(FeedbackSaveButtonStyle())
-                .disabled(controller.isSaving || !controller.storageReady)
-                .help("Save the corrections and alternatives for later practice. Your inserted text stays unchanged.")
+                    HStack(spacing: 16) { Text(controller.isSaving ? "Saving…" : "Save"); keycap(FeedbackShortcut.saveLabel) }
+                }.buttonStyle(FeedbackSaveButtonStyle())
+                    .disabled(controller.isSaving || !controller.storageReady)
+                    .help("Save these patterns for later practice.")
             }
-        }.controlSize(.regular).font(.system(size: 12))
-    }
-
-    @ViewBuilder private var practiceAction: some View {
-        let choices = controller.reviewPracticeTargets
-        if let only = choices.first, choices.count == 1 {
-            Button { controller.practise(only.lesson, alternative: only.alternative) } label: {
-                Label("Practice this", systemImage: "mic")
-            }.buttonStyle(.bordered).disabled(controller.isSaving)
-                .help("Try this pattern now. Return here afterward to save the lesson.")
-        } else if choices.count > 1 {
-            Menu {
-                if !controller.corrections.isEmpty {
-                    Section("Corrections") {
-                        ForEach(controller.corrections) { item in
-                            practiceChoice(PracticeTarget(lesson: item, alternative: false))
-                        }
-                    }
-                }
-                let alternatives = choices.dropFirst(controller.corrections.count)
-                if !alternatives.isEmpty {
-                    Section("Alternative phrasing") {
-                        ForEach(Array(alternatives.enumerated()), id: \.offset) { _, target in
-                            practiceChoice(target)
-                        }
-                    }
-                }
-            } label: { Label("Practice this", systemImage: "mic") }
-                .menuStyle(.borderedButton).fixedSize().disabled(controller.isSaving)
-                .help("Choose a correction or alternative to practice.")
-        }
-    }
-
-    private func practiceChoice(_ target: PracticeTarget) -> some View {
-        Button(String(target.wording.prefix(80)) + (target.wording.count > 80 ? "…" : "")) {
-            controller.practise(target.lesson, alternative: target.alternative)
-        }.accessibilityLabel(target.wording).help(target.wording)
+        }.font(.system(size: 12))
     }
 
     private var summary: String {
@@ -349,20 +452,8 @@ struct FeedbackReviewView: View {
         return parts.isEmpty ? "A quick look at your dictation" : parts.joined(separator: " · ")
     }
 
-    private var score: some View {
-        let profile = controller.progress.expressionProfile
-        return Label(profile.ready ? "≈ " + profile.label : "Learning your level", systemImage: "chart.bar")
-            .font(.system(size: profile.ready ? 13 : 11, weight: .medium, design: .rounded))
-            .fixedSize(horizontal: true, vertical: false)
-            .foregroundStyle(.secondary).padding(.horizontal, 9).padding(.vertical, 6)
-            .background(.primary.opacity(0.04), in: Capsule())
-            .help((profile.ready ? profile.coverage : profile.guidance) + " " + ExpressionProfile.limitation)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("English expression across dictations: \(profile.label). \(profile.coverage). \(ExpressionProfile.limitation)")
-    }
-
     private func keycap(_ key: String) -> some View {
-        Text(key).font(.system(size: 10, weight: .medium, design: .monospaced)).opacity(0.7)
+        Text(key).font(.system(size: 11)).opacity(0.65)
     }
 }
 
@@ -379,7 +470,7 @@ final class FeedbackPanelController {
         let pointer = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) } ?? NSScreen.main
         let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 800)
-        let content = FeedbackReviewView(controller: controller, maximumHeight: frame.height - 90)
+        let content = FeedbackReviewView(controller: controller, maximumHeight: frame.height - 110)
         let hosting = NSHostingView(rootView: content)
         self.hosting = hosting; availableFrame = frame
         panel.contentView = hosting
@@ -399,8 +490,8 @@ final class FeedbackPanelController {
 
     private func resize() {
         guard let panel, let hosting, let frame = availableFrame else { return }
-        let height = min(hosting.fittingSize.height, frame.height - 90)
-        panel.setFrame(NSRect(x: round(frame.midX - FeedbackReviewView.width / 2), y: frame.minY + 56,
+        let height = min(hosting.fittingSize.height, frame.height - 110)
+        panel.setFrame(NSRect(x: round(frame.midX - FeedbackReviewView.width / 2), y: frame.minY + 80,
                              width: FeedbackReviewView.width, height: height), display: true)
     }
 
@@ -476,7 +567,7 @@ private struct SavedLessonsView: View {
                     Image(systemName: "bookmark").font(.system(size: 32, weight: .light)).foregroundStyle(FeedbackPalette.accent)
                     Text(controller.isSaving ? "Opening your lessons…" : "Keep the lessons that click.")
                         .font(.system(size: 18, weight: .medium))
-                    Text("Choose Save lessons after a dictation.\nThen come here to try it in a new sentence.")
+                    Text("Choose Save after a dictation.\nThen come here to try it in a new sentence.")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {

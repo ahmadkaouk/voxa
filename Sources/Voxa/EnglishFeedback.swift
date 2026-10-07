@@ -123,6 +123,112 @@ enum EnglishText {
     }
 }
 
+/// Separate edits keep distant corrections scannable without marking unchanged words.
+struct FeedbackWordDiff {
+    struct Change: Equatable {
+        let range: NSRange
+        let original: String
+        let suggestion: String
+    }
+    let changes: [Change]
+    private static let tokenPattern = try! NSRegularExpression(pattern: #"\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]"#)
+
+    init(original: String, suggestion: String) {
+        func tokens(_ text: String) -> [String] {
+            Self.tokenPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).map {
+                (text as NSString).substring(with: $0.range)
+            }
+        }
+        let before = tokens(original), after = tokens(suggestion)
+        let difference = after.difference(from: before)
+        var removals = Set<Int>(), insertions = Set<Int>()
+        for change in difference {
+            switch change {
+            case .remove(let offset, _, _): removals.insert(offset)
+            case .insert(let offset, _, _): insertions.insert(offset)
+            }
+        }
+        var result: [Change] = [], i = 0, j = 0, location = 0
+        while i < before.count || j < after.count {
+            let start = location
+            var removed = "", added = ""
+            while i < before.count, removals.contains(i) {
+                removed += before[i]; location += (before[i] as NSString).length; i += 1
+            }
+            while j < after.count, insertions.contains(j) { added += after[j]; j += 1 }
+            if !removed.isEmpty || !added.isEmpty {
+                result.append(Change(range: NSRange(location: start, length: location - start), original: removed, suggestion: added))
+            }
+            if i < before.count, j < after.count {
+                location += (before[i] as NSString).length; i += 1; j += 1
+            }
+        }
+        changes = result
+    }
+}
+
+/// Expand excerpts to their full sentences and combine only compatible edits.
+/// If model findings conflict, show their individual comparisons instead of inventing a rewrite.
+struct FeedbackSentence: Equatable {
+    let original: String
+    let suggestion: String
+
+    static func comparisons(transcript: String, findings: [EnglishFeedback]) -> [Self] {
+        let source = transcript as NSString
+        var sentences: [NSRange] = []
+        transcript.enumerateSubstrings(in: transcript.startIndex..., options: .bySentences) { _, range, _, _ in
+            sentences.append(NSRange(range, in: transcript))
+        }
+        struct Entry {
+            let excerpt: NSRange
+            let sentence: NSRange
+            let finding: EnglishFeedback
+        }
+        let entries = findings.compactMap { finding -> Entry? in
+            let excerpt = source.range(of: finding.original)
+            guard excerpt.location != NSNotFound else { return nil }
+            let sentence = sentences.filter { NSIntersectionRange($0, excerpt).length > 0 }.reduce(excerpt, NSUnionRange)
+            return Entry(excerpt: excerpt, sentence: sentence, finding: finding)
+        }
+        var groups: [[Entry]] = []
+        for entry in entries.sorted(by: { $0.sentence.location < $1.sentence.location }) {
+            if let last = groups.last, last.contains(where: { NSIntersectionRange($0.sentence, entry.sentence).length > 0 }) {
+                groups[groups.count - 1].append(entry)
+            } else { groups.append([entry]) }
+        }
+        return groups.flatMap { group -> [Self] in
+            let range = group.dropFirst().reduce(group[0].sentence) { NSUnionRange($0, $1.sentence) }
+            let original = source.substring(with: range)
+            var edits: [FeedbackWordDiff.Change] = []
+            var conflict = false
+            for entry in group {
+                for change in FeedbackWordDiff(original: entry.finding.original, suggestion: entry.finding.suggestion).changes {
+                    let edit = FeedbackWordDiff.Change(
+                        range: NSRange(location: entry.excerpt.location - range.location + change.range.location, length: change.range.length),
+                        original: change.original, suggestion: change.suggestion)
+                    if edits.contains(edit) { continue }
+                    if edits.contains(where: { NSIntersectionRange($0.range, edit.range).length > 0 || $0.range.location == edit.range.location
+                        || ($0.range.length == 0 && NSLocationInRange($0.range.location, edit.range))
+                        || (edit.range.length == 0 && NSLocationInRange(edit.range.location, $0.range)) }) { conflict = true }
+                    edits.append(edit)
+                }
+            }
+            if conflict {
+                return group.map { entry in
+                    let sentence = source.substring(with: entry.sentence) as NSString
+                    let local = NSRange(location: entry.excerpt.location - entry.sentence.location, length: entry.excerpt.length)
+                    return Self(original: sentence as String, suggestion: sentence.replacingCharacters(in: local, with: entry.finding.suggestion))
+                }
+            }
+            let corrected = NSMutableString(string: original)
+            for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
+                corrected.replaceCharacters(in: edit.range, with: edit.suggestion)
+            }
+            return [Self(original: original, suggestion: corrected as String)]
+        }
+    }
+}
+
 /// One replacement phrase keeps an inline review readable when a rewrite changes
 /// several words. Token boundaries preserve source whitespace and punctuation.
 struct FeedbackComparison {

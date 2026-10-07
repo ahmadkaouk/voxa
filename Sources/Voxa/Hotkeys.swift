@@ -475,9 +475,10 @@ struct FinishAndSubmitShortcut {
 
 /// A contextual shortcut: consume the full press only when the visible review accepts it.
 struct FeedbackShortcut {
-    static let saveLabel = "S"
-    static let discardLabel = "D"
+    static let saveLabel = "⌘S"
+    static let discardLabel = "Esc"
     var keyCode: UInt16 = KeyCode.s
+    var modifiers: HotkeyModifiers = .command
     private var consumed = false
 
     mutating func consume(keyCode: UInt16, isDown: Bool, flags: HotkeyModifiers,
@@ -487,7 +488,7 @@ struct FeedbackShortcut {
             if !isDown { consumed = false }
             return true
         }
-        guard isDown, !isRepeat, flags.isEmpty, activate() else { return false }
+        guard isDown, !isRepeat, flags == modifiers, activate() else { return false }
         consumed = true
         return true
     }

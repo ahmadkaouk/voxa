@@ -151,16 +151,17 @@ See [feedback validation](english-feedback.md) for coaching quality checks.
 `FeedbackController` owns the findings array, request generation, presentation,
 and persistence. Delivery and recording IDs prevent premature or stale panels.
 New transcripts cancel earlier analysis; disabling and shutdown invalidate it.
-S saves all lessons in one atomic write, excluding recognition issues; D clears
-the review without saving lesson excerpts. Automatic progress is independent of S/D. Failed writes retain the review, and
+⌘S saves all lessons in one atomic write, excluding recognition issues; Esc clears
+the review without saving lesson excerpts. Automatic progress is independent of ⌘S/Esc. Failed writes retain the review, and
 a late save cannot dismiss a newer generation. Neither path changes inserted text.
 
-`FeedbackLessonView` shares the same inline comparison, explanation and optional
-pattern layout between live reviews and saved lessons. `FeedbackComparison`
-isolates a replacement phrase with shared surrounding words; the native text field
-wraps and highlights it. Actual fixes strike through the old wording, while optional
-alternatives leave it unstruck. Paired alternatives compare against the corrected
-sentence. Recognition issues use the same layout with a transcription-check label.
+Live reviews use `FeedbackWordDiff` to lead with individual changes and reusable rules.
+`FeedbackSentence` expands excerpts to full sentences and combines compatible edits;
+conflicting edits remain separate comparisons. The current transcript stays in memory
+for this presentation and never enters saved lessons. Optional wording is always expanded.
+`FeedbackLessonView` retains inline comparisons in saved details and recognition checks.
+One neutral background covers the review; only Save is blue. A five-second presentation
+timer pauses on hover or pin, is cancelled during saving, and cannot hide a newer review.
 
 `CorrectionStore` is an actor that stores a versioned JSON file in Application
 Support/Voxa. A failed load blocks mutations to protect unreadable data. Only
@@ -187,7 +188,7 @@ sentence, then produce a new example. Short reviews start directly at the new-ex
 step, using up to three due saved patterns. It has no transcript-output dependency.
 `AppController` shares one `AudioRecorder` between dictation and practice, prevents
 opening practice until dictation/clipboard cleanup completes, suspends feedback panels
-and normal dictation shortcuts while practice is open, and restores the idle overlay
+and normal dictation shortcuts while practice is open, and leaves the recording overlay hidden
 only after microphone cleanup. Window close, sleep and quit cancel practice; generation
 checks discard late permission, transcription and evaluator completions. Capture is
 capped at 40 seconds. Typed practice bypasses microphone permission and transcription.

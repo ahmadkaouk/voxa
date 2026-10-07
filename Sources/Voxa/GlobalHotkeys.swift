@@ -8,7 +8,8 @@ final class GlobalHotkeyBridge {
     var onSaveFeedback: (() -> Bool)?
     private var saveShortcut = FeedbackShortcut()
     var onDiscardFeedback: (() -> Bool)?
-    private var discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
+    var onCancelDictation: (() -> Bool)?
+    private var discardShortcut = FeedbackShortcut(keyCode: KeyCode.escape, modifiers: [])
 
     var onToggleActivated: (() -> Void)?
 
@@ -67,7 +68,7 @@ final class GlobalHotkeyBridge {
         }
         submitShortcut = FinishAndSubmitShortcut(hotkey: submitShortcut.hotkey)
         saveShortcut = FeedbackShortcut()
-        discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
+        discardShortcut = FeedbackShortcut(keyCode: KeyCode.escape, modifiers: [])
         queue.sync {
             self.resetState()
         }
@@ -81,7 +82,7 @@ final class GlobalHotkeyBridge {
     func resetForSystemInterruption() {
         submitShortcut = FinishAndSubmitShortcut(hotkey: submitShortcut.hotkey)
         saveShortcut = FeedbackShortcut()
-        discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
+        discardShortcut = FeedbackShortcut(keyCode: KeyCode.escape, modifiers: [])
         queue.async { [weak self] in
             self?.resetState()
         }
@@ -190,7 +191,7 @@ final class GlobalHotkeyBridge {
     // keys, so these actions are available globally only with an event tap.
     private func consumeContextualShortcut(keyCode: UInt16, isDown: Bool, flags: HotkeyModifiers, isRepeat: Bool) -> Bool {
         if discardShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat, activate: {
-            queue.sync(execute: { isEnabled }) && onDiscardFeedback?() == true
+            queue.sync(execute: { isEnabled }) && (onCancelDictation?() == true || onDiscardFeedback?() == true)
         }) { return true }
         if saveShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat, activate: {
             queue.sync(execute: { isEnabled }) && onSaveFeedback?() == true

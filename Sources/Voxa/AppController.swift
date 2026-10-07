@@ -33,6 +33,7 @@ final class AppController: ObservableObject {
     private var keyTask: Task<Void, Never>?
     private var completionPresentation: Task<Void, Never>?
     private var showingPasteCompletion = false
+    private var overlayCancelled = false
     private var closing = false
     private var capturingHotkey = false
 
@@ -97,6 +98,15 @@ final class AppController: ObservableObject {
             guard let self, self.isReady, !self.closing, !self.capturingHotkey else { return false }
             return self.feedback.discardReview()
         }
+        hotkeys.onCancelDictation = { [weak self] in
+            guard let self, self.isReady, !self.closing, !self.capturingHotkey else { return false }
+            // Hide immediately, including while the recorder releases its device.
+            let wasCancelled = self.overlayCancelled
+            self.overlayCancelled = true
+            guard self.session.cancel() else { self.overlayCancelled = wasCancelled; return false }
+            self.overlay.hide()
+            return true
+        }
         hotkeys.onFinishAndSubmit = { [weak self] in
             guard let self, self.canStart,
                   let target = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
@@ -109,6 +119,7 @@ final class AppController: ObservableObject {
         session.$state.removeDuplicates().scan((DictationState.idle, DictationState.idle)) { ($0.1, $1) }
             .sink { [weak self] previous, next in
                 guard let self else { return }
+                if case .starting = next, previous.context?.id != next.context?.id { self.overlayCancelled = false }
                 self.feedback.updateDictation(next)
                 self.objectWillChange.send() // MenuBarExtra's symbol also observes this controller.
                 if case .recording = next { self.sounds.play(.listeningStarted) }
@@ -320,6 +331,7 @@ final class AppController: ObservableObject {
 
     private func present(_ state: DictationState, level: Double) {
         guard isReady, !closing, !practice.isPresented, !practice.isBusy else { overlay.hide(); return }
+        guard !overlayCancelled, !state.isDiscarding else { overlay.hide(); return }
         // A paste read already started the checkmark. Finishing clipboard cleanup
         // must neither delay it nor restart its display timer.
         if showingPasteCompletion {
@@ -345,17 +357,18 @@ final class AppController: ObservableObject {
                 showCompletion(title: outcome.message)
                 return
             }
-            if isAPIKeySet { show(.idle, title: "Start dictation") } else { overlay.hide() }
+            overlay.hide()
         }
     }
 
     private func showCompletion(title: String) {
+        showingPasteCompletion = true
         show(.outputting, title: title)
         completionPresentation = Task {
             do { try await Task.sleep(nanoseconds: 900_000_000) } catch { return }
             guard !closing else { return }
             switch session.state {
-            case .idle, .restoringClipboard: show(.idle, title: "Start dictation")
+            case .idle, .restoringClipboard: overlay.hide()
             default: break
             }
         }

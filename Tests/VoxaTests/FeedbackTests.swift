@@ -61,7 +61,187 @@ final class MemoryLearningProgress: LearningProgressStoring {
 }
 
 @MainActor
+private final class FeedbackTimerFixture {
+    var delays: [Duration] = []
+    private var gates: [PipelineGate] = []
+    private var completed: Set<Int> = []
+
+    func pause(_ delay: Duration) async {
+        let index = gates.count, gate = PipelineGate()
+        delays.append(delay); gates.append(gate)
+        await gate.wait() // Ignore cancellation to exercise stale timer completions.
+        completed.insert(index)
+    }
+
+    func fire(_ index: Int) async throws {
+        gates[index].open()
+        try await eventually { self.completed.contains(index) }
+        for _ in 0..<10 { await Task.yield() }
+    }
+}
+
+@MainActor
 enum FeedbackChecks {
+    static func readingPausesDismissal() async throws {
+        let timer = FeedbackTimerFixture()
+        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
+        controller.setEnabled(true)
+        let id = UUID()
+        start(controller, id: id); finish(controller, id: id)
+        try await eventually { timer.delays.count == 1 }
+        controller.setReading(true)
+        try await timer.fire(0)
+        try unitExpect(controller.panelVisible && controller.dismissalDeadline == nil)
+        controller.togglePinned()
+        controller.setReading(false)
+        for _ in 0..<10 { await Task.yield() }
+        try unitEqual(timer.delays.count, 1)
+        controller.togglePinned()
+        try await eventually { timer.delays.count == 2 }
+        try unitExpect(timer.delays[1] > .zero && timer.delays[1] <= .seconds(5))
+        try await timer.fire(1)
+        try await eventually { !controller.panelVisible }
+        await controller.shutdown()
+    }
+
+    static func granularChangesAndFullSentences() throws {
+        func finding(_ original: String, _ suggestion: String) -> EnglishFeedback {
+            .init(kind: .grammar, original: original, suggestion: suggestion,
+                  explanation: "Use the past tense.", practicePrompt: "Try a new example.")
+        }
+        let before = "Yesterday I go to the café, and Maya explain the plan."
+        let after = "Yesterday I went to the café, and Maya explained the plan."
+        let diff = FeedbackWordDiff(original: before, suggestion: after)
+        try unitEqual(diff.changes.map(\.original), ["go", "explain"])
+        try unitEqual(diff.changes.map(\.suggestion), ["went", "explained"])
+        let result = FeedbackSentence.comparisons(transcript: "Hello. " + before + " Thanks!", findings: [
+            finding("I go", "I went"), finding("Maya explain", "Maya explained")
+        ])
+        try unitEqual(result.count, 1)
+        try unitEqual(result[0].original.trimmingCharacters(in: .whitespaces), before)
+        try unitEqual(result[0].suggestion.trimmingCharacters(in: .whitespaces), after)
+        // Independent changes to the same excerpt must compose, with duplicate edits applied once.
+        let shared = FeedbackSentence.comparisons(transcript: before, findings: [
+            finding(before, before.replacingOccurrences(of: "I go", with: "I went")),
+            finding(before, before.replacingOccurrences(of: "Maya explain", with: "Maya explained")), finding(before, after)
+        ])
+        try unitEqual(shared, [.init(original: before, suggestion: after)])
+        let conflict = FeedbackSentence.comparisons(transcript: before, findings: [
+            finding("I go", "I went"), finding("I go", "I walked")
+        ])
+        try unitEqual(conflict.count, 2)
+        try unitExpect(conflict[0].suggestion.contains("I went") && conflict[1].suggestion.contains("I walked"))
+        for pair in [("We discussed about it.", "We discussed it."), ("I need answer.", "I need an answer."),
+                     ("😊 I go home.", "😊 I went home."), ("a a b", "a b b"), ("", "new"), ("old", "")] {
+            let rebuilt = NSMutableString(string: pair.0)
+            for edit in FeedbackWordDiff(original: pair.0, suggestion: pair.1).changes.reversed() {
+                rebuilt.replaceCharacters(in: edit.range, with: edit.suggestion)
+            }
+            try unitEqual(rebuilt as String, pair.1)
+        }
+    }
+
+    static func automaticDismissalAndReopening() async throws {
+        let timer = FeedbackTimerFixture(), store = MemoryCorrections()
+        let controller = FeedbackController(client: FeedbackFixture(), store: store,
+            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
+        controller.setEnabled(true)
+        let id = UUID()
+        start(controller, id: id)
+        try await eventually { !controller.isAnalyzing }
+        try unitExpect(timer.delays.isEmpty && !controller.panelVisible)
+        controller.deliveryFinished(id: id)
+        try unitExpect(timer.delays.isEmpty && !controller.panelVisible)
+        controller.updateDictation(.idle)
+        try await eventually { timer.delays.count == 1 }
+        try unitEqual(timer.delays, [.seconds(5)])
+
+        // Repeated callbacks must not extend the five-second display period.
+        finish(controller, id: id)
+        for _ in 0..<10 { await Task.yield() }
+        try unitEqual(timer.delays.count, 1)
+        try await timer.fire(0)
+        try await eventually { !controller.panelVisible }
+        try unitExpect(controller.hasReview && store.items.isEmpty)
+        try unitExpect(!controller.saveAndClose() && !controller.discardReview())
+        finish(controller, id: id)
+        try unitExpect(!controller.panelVisible)
+
+        controller.showLatest()
+        try await eventually { timer.delays.count == 2 }
+        try unitExpect(controller.panelVisible)
+        try unitEqual(timer.delays[1], .seconds(5))
+        try await timer.fire(1)
+        try await eventually { !controller.panelVisible }
+        await controller.shutdown()
+    }
+
+    static func dismissalCancellationAndReplacement() async throws {
+        let timer = FeedbackTimerFixture()
+        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
+        controller.setEnabled(true)
+        let first = UUID(), second = UUID()
+        start(controller, id: first); finish(controller, id: first)
+        try await eventually { timer.delays.count == 1 }
+        start(controller, id: second); finish(controller, id: second)
+        try await eventually { timer.delays.count == 2 }
+        try await timer.fire(0)
+        try unitExpect(controller.panelVisible && controller.findings.first?.id == second)
+
+        controller.setPracticeActive(true)
+        try unitExpect(!controller.panelVisible && controller.hasReview)
+        controller.setPracticeActive(false)
+        try await eventually { timer.delays.count == 3 }
+        try await timer.fire(1)
+        try unitExpect(controller.panelVisible)
+        controller.showLatest() // Explicit reopening starts a fresh five seconds.
+        try await eventually { timer.delays.count == 4 }
+        try await timer.fire(2)
+        try unitExpect(controller.panelVisible)
+        try unitExpect(controller.discardReview())
+        try await timer.fire(3)
+        try unitExpect(!controller.panelVisible && !controller.hasReview)
+
+        let third = UUID()
+        start(controller, id: third); finish(controller, id: third)
+        try await eventually { timer.delays.count == 5 }
+        controller.setEnabled(false)
+        try await timer.fire(4)
+        try unitExpect(!controller.panelVisible && !controller.hasReview)
+        controller.setEnabled(true)
+        let last = UUID()
+        start(controller, id: last); finish(controller, id: last)
+        try await eventually { timer.delays.count == 6 }
+        await controller.shutdown()
+        try await timer.fire(5)
+        try unitExpect(!controller.panelVisible && !controller.hasReview)
+    }
+
+    static func savingCancelsDismissal() async throws {
+        let timer = FeedbackTimerFixture(), store = MemoryCorrections(), saving = PipelineGate()
+        let controller = FeedbackController(client: FeedbackFixture(), store: store,
+            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
+        controller.setEnabled(true)
+        let id = UUID()
+        start(controller, id: id); finish(controller, id: id)
+        try await eventually { timer.delays.count == 1 && controller.storageReady }
+        store.saveGate = saving; store.fail = true
+        try unitExpect(controller.saveAndClose())
+        try await eventually { saving.entered }
+        try await timer.fire(0)
+        try unitExpect(controller.panelVisible && controller.isSaving)
+        saving.open()
+        try await eventually { !controller.isSaving }
+        try unitExpect(controller.panelVisible && controller.storageError != nil)
+        store.fail = false
+        try unitExpect(controller.saveAndClose())
+        try await eventually { !controller.isSaving }
+        try unitExpect(!controller.panelVisible && store.items.count == 1)
+        await controller.shutdown()
+    }
+
     static func recognitionOnlyReview() async throws {
         let fixture = FeedbackFixture(), store = MemoryCorrections()
         fixture.findings = [EnglishFeedback(kind: .transcriptionIssue, original: lesson.original,
@@ -677,6 +857,11 @@ enum FeedbackChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("feedback: hover and pin pause dismissal", readingPausesDismissal),
+        ("feedback: granular edits and complete sentence comparisons", granularChangesAndFullSentences),
+        ("feedback: five-second dismissal starts on presentation and allows reopening", automaticDismissalAndReopening),
+        ("feedback: stale dismissal timers cannot hide a newer or reopened review", dismissalCancellationAndReplacement),
+        ("feedback: saving cancels dismissal and failed saves remain visible", savingCancelsDismissal),
         ("feedback: cosmetic noise and duplicate optional alternatives", noiseAndDuplicateFiltering),
         ("feedback: fixed grammar rubric, score consistency and abstention", grammarRubricAndAbstention),
         ("feedback: grounded pattern successes and minimal request context", groundedPatternSuccesses),
@@ -700,6 +885,11 @@ enum FeedbackChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class FeedbackTests: XCTestCase {
+    func testReadingPausesDismissal() async throws { try await FeedbackChecks.readingPausesDismissal() }
+    func testGranularChanges() async throws { try await FeedbackChecks.granularChangesAndFullSentences() }
+    func testAutomaticDismissal() async throws { try await FeedbackChecks.automaticDismissalAndReopening() }
+    func testDismissalCancellation() async throws { try await FeedbackChecks.dismissalCancellationAndReplacement() }
+    func testSavingCancelsDismissal() async throws { try await FeedbackChecks.savingCancelsDismissal() }
     func testNoiseFiltering() async throws { try await FeedbackChecks.noiseAndDuplicateFiltering() }
     func testGrammarRubric() async throws { try await FeedbackChecks.grammarRubricAndAbstention() }
     func testPatternSuccesses() async throws { try await FeedbackChecks.groundedPatternSuccesses() }
