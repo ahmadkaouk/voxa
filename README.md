@@ -21,6 +21,8 @@ coaching helps you learn from what you say while you work.
 
 The recording bar uses native Liquid Glass on macOS 26 and later, with
 translucent material on earlier versions. Audio cues mark recording events.
+Choose **Model**, **Output**, and **Max Recording** directly in the menu bar.
+Changes made during dictation apply to the next recording.
 
 ## Learn from your everyday English
 
@@ -48,12 +50,13 @@ open until you close it, save it, or start a new recording; clicking elsewhere
 leaves it open. **English Learning → Show Latest Feedback** reopens the latest
 available review.
 
-Enable it in **Settings → English Learning → Feedback after dictation**.
+Enable **English Learning → English feedback** in the menu bar.
 
 ## Your Mac workspace
 
-- **Searchable Settings.** A native sidebar organizes General, Shortcuts,
-  English Learning, and API Key. Search for a page or control, then choose it.
+- **Focused Settings.** A searchable native sidebar organizes **Shortcuts**,
+  **Privacy**, and **API Key**. Privacy contains nearby-text app exclusions and
+  data details; everyday dictation and English Learning controls are in the menu bar.
 - **A lesson library.** Open **English Learning → Lessons & Progress…** for a
   sidebar, lesson list, and reading pane. Filter by **All Lessons**,
   **Corrections**, or **Natural Phrasing**, and search wording, explanations,
@@ -65,7 +68,7 @@ Enable it in **Settings → English Learning → Feedback after dictation**.
 <img src="assets/screenshots/english-learning.png" alt="Voxa English Learning with library filters, saved lessons, and a reading pane containing the original sentence, correction, explanation, and practice actions" width="900">
 
 *The lesson library, shown with sample lessons.*
-[See English Learning settings](assets/screenshots/settings.png).
+[See Settings](assets/screenshots/settings.png).
 
 ## Get started
 
@@ -89,8 +92,7 @@ Follow the [installation guide](docs/usage.md#install), then:
 | Discard a recording or close feedback without saving lessons | **Esc** |
 
 Change these in **Settings → Shortcuts**: click a key combination, press your
-replacement, and release the keys to save it. Save feedback and Cancel / Close
-can also be edited in English Learning settings. Feedback displays the configured
+replacement, and release the keys to save it. Feedback displays the configured
 shortcuts.
 
 ## Your data
@@ -100,7 +102,7 @@ when enabled, it also sends your dictated text for feedback, with additional API
 usage. Practice sends the selected lesson and your answer for feedback; spoken
 answers also use transcription. Nearby-text context is off by default. When
 enabled, it sends an excerpt from the active app to help feedback fit your work;
-you can exclude apps in Settings.
+you can exclude apps in **Settings → Privacy**.
 
 Your API key is stored in macOS Keychain. Voxa doesn’t save an audio or full-dictation
 history to disk; saved lessons, learning progress, and review timing are stored

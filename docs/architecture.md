@@ -219,7 +219,10 @@ lessons queues removal of their review records and cancels an affected active ex
 
 ## Settings, credentials, and permissions
 
-`SettingsViews` presents grouped controls inside a native navigation sidebar;
+`SettingsViews` presents Shortcuts, Privacy, and API Key inside a native navigation
+sidebar. Model, output, recording limit, English feedback, and nearby-text switches
+live in the menu bar. `PrivacySettingsView` keeps app exclusions inline beside data
+details; shortcut editing has a single home in Shortcuts. Settings
 page content is bounded to the available space beneath the heading so scrolling
 reaches the final rows at every supported window size.
 `EnglishLearningView` presents library filters, a searchable lesson list and a

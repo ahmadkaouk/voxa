@@ -278,11 +278,11 @@ visible explanations and the floating panel's resizing. The panel stays open dur
 interaction checks until explicitly closed.
 Its Settings preview uses the production shortcut recorder with in-memory bindings.
 Check a new combination, Escape cancellation, reassigning Escape under Cancel / Close,
-the inline Save feedback and Cancel / Close key buttons in English Learning settings,
-and direct typing/pasting in the full-width secure API key field. Saving in the fixture
+the Save feedback shortcut, and direct typing/pasting in the full-width secure API
+key field. In Privacy, add and remove excluded apps directly on the page. Saving in the fixture
 only clears its synthetic input; the Keychain suite uses a separate disposable item.
 Settings uses native grouped forms, neutral action buttons, and system typography;
-compare API Key with General and Shortcuts at the same window size. Feedback's sage
+compare API Key with Privacy and Shortcuts at the same window size. Feedback's sage
 change highlights do not change the neutral styling in Settings or the library.
 Both sidebars share 32-point rows, unboxed outline SF Symbols in 20-point frames,
 native body text, and the same column widths. Icons are neutral gray; selected rows

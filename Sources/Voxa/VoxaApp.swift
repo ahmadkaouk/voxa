@@ -124,11 +124,12 @@ struct VoxaMenuView: View {
                 get: { controller.preferences.englishFeedbackEnabled },
                 set: { controller.setEnglishFeedbackEnabled($0) }))
                 .disabled(!controller.canEditDictationSettings)
+                .help("Corrections, natural phrasing and practice after dictation. Feedback stays open until you close it, save it, or record again. Uses additional API requests.")
             Toggle("Use Nearby Text Automatically", isOn: Binding(
                 get: { controller.preferences.automaticContextEnabled },
                 set: { controller.setAutomaticContextEnabled($0) }))
                 .disabled(!controller.canEditDictationSettings || !controller.preferences.englishFeedbackEnabled)
-                .help("Sends a short text excerpt from the active app to your feedback service. No screenshots; excerpts aren’t saved locally. Manage excluded apps in Settings.")
+                .help("Sends a short text excerpt from the active app to your feedback service. No screenshots; excerpts aren’t saved locally. Manage excluded apps in Settings → Privacy.")
             if controller.feedback.isAnalyzing { Text("Reviewing your English…") }
             if let status = controller.feedback.status { Text(status) }
             Button("Show Latest Feedback") { controller.feedback.showLatest() }

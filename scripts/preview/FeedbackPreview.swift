@@ -224,21 +224,21 @@ private enum FeedbackPreview {
         try await render(FeedbackReviewView(controller: clean), name: "review-clean", scheme: .light)
         await clean.shutdown()
 
-        let contextSettings = SettingsSidebarLayout(selection: .constant(.learning)) {
-            SettingsPage(title: "English Learning", subtitle: "Turn everyday dictation into a little practice.") {
-                EnglishLearningSettingsView(feedbackEnabled: .constant(true), contextEnabled: .constant(true),
-                    excludedApps: [.init(bundleID: "example.private", name: "Private workspace")],
-                    hasAccessibility: true, onExclude: { _ in }, onAllow: { _ in }, onOpenLessons: {})
-            }
+        let privacySettings = SettingsSidebarLayout(selection: .constant(.privacy)) {
+            PrivacySettingsView(excludedApps: [.init(bundleID: "example.private", name: "Private workspace")],
+                onExclude: { _ in }, onAllow: { _ in })
         }.frame(width: 820, height: 620)
-        try await render(contextSettings, name: "context-settings-light", scheme: .light)
-        try await render(contextSettings, name: "context-settings-dark", scheme: .dark)
-        let generalSettings = SettingsSidebarLayout(selection: .constant(.general)) {
-            GeneralSettingsView(model: .constant(.gptTranscribe), output: .constant(.clipboardAutopaste),
-                duration: .constant(300), permissions: .init(microphone: .authorized, accessibility: true, inputMonitoring: true))
+        try await render(privacySettings, name: "settings-privacy-light", scheme: .light)
+        try await render(privacySettings, name: "settings-privacy-dark", scheme: .dark)
+        try await render(SettingsSidebarLayout(selection: .constant(.privacy)) {
+            PrivacySettingsView(excludedApps: [], onExclude: { _ in }, onAllow: { _ in })
+        }.frame(width: 760, height: 560), name: "settings-privacy-small", scheme: .light)
+        let shortcutSettings = SettingsSidebarLayout(selection: .constant(.shortcuts)) {
+            ShortcutsSettingsView(recorder: HotkeyRecorder(), toggle: .defaultToggle,
+                finishAndSubmit: .defaultFinishAndSubmit, saveFeedback: .defaultSaveFeedback, cancel: .defaultCancel)
         }.frame(width: 820, height: 620)
-        try await render(generalSettings, name: "settings-general-light", scheme: .light)
-        try await render(generalSettings, name: "settings-general-dark", scheme: .dark)
+        try await render(shortcutSettings, name: "settings-shortcuts-light", scheme: .light)
+        try await render(shortcutSettings, name: "settings-shortcuts-dark", scheme: .dark)
         try await render(SettingsSidebarLayout(selection: .constant(.apiKey)) {
             APIKeySettingsView(configured: true, source: "keychain", input: .constant(""), onSave: {})
         }.frame(width: 760, height: 560), name: "settings-key-small", scheme: .light)

@@ -195,12 +195,8 @@ private struct WorkspacePreview: App {
 }
 
 private struct WorkspaceSettingsPreview: View {
-    @PreviewState private var selection: SettingsPane? = .general
-    @PreviewState private var model = ModelOption.gptTranscribe
-    @PreviewState private var output = OutputModeOption.clipboardAutopaste
-    @PreviewState private var duration: UInt64 = 300
-    @PreviewState private var feedback = true
-    @PreviewState private var context = true
+    @PreviewState private var selection: SettingsPane? = .shortcuts
+    @PreviewState private var excludedApps: [ContextExcludedApp] = []
     @PreviewState private var key = ""
     @PreviewState private var keyConfigured = true
     @PreviewState private var toggle = HotkeyOption.defaultToggle
@@ -211,18 +207,12 @@ private struct WorkspaceSettingsPreview: View {
 
     var body: some View {
         SettingsSidebarLayout(selection: $selection) {
-            switch selection ?? .general {
-            case .general:
-                GeneralSettingsView(model: $model, output: $output, duration: $duration,
-                    permissions: .init(microphone: .authorized, accessibility: true, inputMonitoring: true))
-            case .learning:
-                SettingsPage(title: "English Learning", subtitle: "Turn everyday dictation into a little practice.") {
-                    EnglishLearningSettingsView(feedbackEnabled: $feedback, contextEnabled: $context,
-                        excludedApps: [], hasAccessibility: true, saveShortcut: save.symbolLabel, cancelShortcut: cancel.symbolLabel,
-                        recordingShortcut: recorder.target, shortcutPreview: recorder.preview?.symbolLabel,
-                        onEditShortcut: editShortcut,
-                        onExclude: { _ in }, onAllow: { _ in }, onOpenLessons: {})
-                }
+            switch selection ?? .shortcuts {
+            case .privacy:
+                PrivacySettingsView(excludedApps: excludedApps,
+                    onExclude: { app in
+                        if !excludedApps.contains(where: { $0.bundleID == app.bundleID }) { excludedApps.append(app) }
+                    }, onAllow: { id in excludedApps.removeAll { $0.bundleID == id } })
             case .apiKey:
                 APIKeySettingsView(configured: keyConfigured, source: "keychain", input: $key,
                     onSave: { key = ""; keyConfigured = true })
@@ -244,18 +234,6 @@ private struct WorkspaceSettingsPreview: View {
         .onChange(of: selection) { _ in recorder.stop(); key = "" }
         .onDisappear { recorder.stop(); key = "" }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in recorder.stop() }
-    }
-
-    private func editShortcut(_ target: HotkeyRecordingTarget) {
-        if recorder.target == target { recorder.stop(); return }
-        let current: HotkeyOption
-        switch target {
-        case .toggle: current = toggle
-        case .finishAndSubmit: current = submit
-        case .saveFeedback: current = save
-        case .cancel: current = cancel
-        }
-        recorder.start(target: target, current: current)
     }
 }
 
