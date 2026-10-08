@@ -14,8 +14,8 @@ struct PracticeView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(controller.isReview ? "A short review" : "Make it yours")
-                        .font(.system(size: 23, weight: .semibold))
-                    Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
+                        .font(VoxaAppearance.pageTitle)
+                    Text(subtitle).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Close") { controller.close() }.keyboardShortcut(.cancelAction)
@@ -34,30 +34,30 @@ struct PracticeView: View {
                         exercise(target)
                         if !controller.answer.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Your answer").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                                Text(controller.answer).font(.system(size: 15)).textSelection(.enabled)
+                                Text("Your answer").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                                Text(controller.answer).font(.body).textSelection(.enabled)
                             }
                         }
                         if let result = controller.result {
                             VStack(alignment: .leading, spacing: 8) {
                                 Label(result.outcome == .success ? "Pattern used well" : "One more try",
                                       systemImage: result.outcome == .success ? "checkmark.circle" : "arrow.counterclockwise")
-                                    .font(.system(size: 14, weight: .medium))
+                                    .font(.headline)
                                     .foregroundStyle(result.outcome == .success ? FeedbackPalette.added : .primary)
-                                Text(result.explanation).font(.system(size: 13)).foregroundStyle(.secondary)
+                                Text(result.explanation).font(.body).foregroundStyle(.secondary)
                                 if let suggestion = result.suggestion {
-                                    Text(suggestion).font(.system(size: 16, weight: .medium))
+                                    Text(suggestion).font(.title3.weight(.medium))
                                 }
                             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
                         }
                         if let error = controller.error {
                             Label(error, systemImage: "exclamationmark.circle")
-                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                                .font(.callout).foregroundStyle(.secondary)
                         }
                         if controller.phase == .ready || controller.phase == .failed {
                             if typing {
-                                TextEditor(text: $draft).font(.system(size: 15)).padding(8).frame(height: 100)
+                                TextEditor(text: $draft).font(.body).padding(8).frame(height: 100)
                                     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15)))
                                     .accessibilityLabel("Your practice sentence")
                                     .onChange(of: draft) { value in
@@ -105,9 +105,9 @@ struct PracticeView: View {
                 } else { Spacer() }
             }
             Text("Your answer is checked with your configured AI service. Audio and answers aren’t saved on this Mac or pasted into your work. Practice doesn’t change your level estimate.")
-                .font(.system(size: 10)).foregroundStyle(.secondary).lineSpacing(2)
+                .font(.caption).foregroundStyle(.secondary).lineSpacing(2)
         }
-        .padding(28).frame(minWidth: 480, idealWidth: 540, minHeight: 520, idealHeight: 590)
+        .padding(VoxaAppearance.contentPadding).frame(minWidth: 480, idealWidth: 540, minHeight: 520, idealHeight: 590)
         .onChange(of: controller.index) { _ in typing = false; draft = ""; reveal = false }
         .onChange(of: controller.isPresented) { _ in typing = false; draft = ""; reveal = false }
     }
@@ -121,19 +121,19 @@ struct PracticeView: View {
     private func exercise(_ target: PracticeTarget) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             if let focus = target.focus {
-                Text(focus.label).font(.system(size: 11, weight: .medium)).foregroundStyle(FeedbackPalette.accent)
+                Text(focus.label).font(.caption.weight(.medium)).foregroundStyle(FeedbackPalette.accent)
             }
             if controller.step == .repeatSentence {
-                Text(target.wording).font(.system(size: 22, weight: .medium)).fixedSize(horizontal: false, vertical: true)
-                Text(target.explanation).font(.system(size: 13)).foregroundStyle(.secondary)
+                Text(target.wording).font(.title.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+                Text(target.explanation).font(.body).foregroundStyle(.secondary)
                 Text("Say this once, then try the pattern in your own sentence.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.secondary)
             } else {
-                Text(target.prompt).font(.system(size: 21, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+                Text(target.prompt).font(.title.weight(.medium)).fixedSize(horizontal: false, vertical: true)
                 Button(reveal ? "Hide example" : "Show example") { reveal.toggle() }.buttonStyle(.link)
                 if reveal {
-                    Text(target.wording).font(.system(size: 16, weight: .medium))
-                    Text(target.explanation).font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(target.wording).font(.title3.weight(.medium))
+                    Text(target.explanation).font(.callout).foregroundStyle(.secondary)
                 }
             }
         }
@@ -144,7 +144,7 @@ struct PracticeView: View {
             if controller.phase == .recording {
                 Image(systemName: "mic.fill").foregroundStyle(FeedbackPalette.accent)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Listening · \(controller.seconds)s / 40s").font(.system(size: 13, weight: .medium))
+                    Text("Listening · \(controller.seconds)s / 40s").font(.body.weight(.medium))
                     ProgressView(value: min(1, max(0, controller.level))).frame(width: 130)
                         .accessibilityLabel("Microphone level")
                 }
@@ -155,19 +155,19 @@ struct PracticeView: View {
                 Text(controller.phase == .starting ? "Preparing microphone…" :
                         controller.phase == .finishing ? "Finishing recording…" :
                         controller.phase == .transcribing ? "Transcribing your answer…" : "Checking this pattern…")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
         }.padding(.vertical, 8)
     }
 
     private var completion: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Image(systemName: "checkmark.circle").font(.system(size: 30, weight: .light)).foregroundStyle(FeedbackPalette.accent)
+            Image(systemName: "checkmark.circle").font(.largeTitle.weight(.light)).foregroundStyle(FeedbackPalette.accent)
             Text(controller.targets.isEmpty ? "Nothing due right now." : "That’s your short review.")
-                .font(.system(size: 22, weight: .medium))
+                .font(.title.weight(.medium))
             Text(controller.targets.isEmpty ? "Save lessons from your dictations to revisit them here. Reviewed patterns return after a little time has passed." :
                     "Your reviewed patterns will return later. You can get back to work whenever you’re ready.")
-                .font(.system(size: 13)).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
             Button("Back to work") { controller.close() }.buttonStyle(.borderedProminent).tint(FeedbackPalette.accent)
         }.padding(.vertical, 30)
     }

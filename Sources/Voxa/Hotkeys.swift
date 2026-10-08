@@ -39,6 +39,11 @@ struct HotkeyModifiers: OptionSet, Hashable {
         Self.definitions.filter { contains($0.modifier) }.map(\.label)
     }
 
+    var symbolParts: [String] {
+        let symbols: [Self: String] = [.control: "⌃", .option: "⌥", .shift: "⇧", .command: "⌘", .function: "Fn"]
+        return Self.definitions.filter { contains($0.modifier) }.compactMap { symbols[$0.modifier] }
+    }
+
     var persistedParts: [String] {
         Self.definitions.filter { contains($0.modifier) }.map(\.name)
     }
@@ -83,6 +88,8 @@ struct HotkeyOption: Identifiable, Equatable {
     )
     static let defaultToggle = optionF
     static let defaultFinishAndSubmit = optionG
+    static let defaultSaveFeedback = HotkeyOption(keyCodes: [KeyCode.s], modifiers: .command)
+    static let defaultCancel = HotkeyOption(keyCodes: [KeyCode.escape], modifiers: [])
     static let functionSpace = HotkeyOption(
         keyCodes: [KeyCode.space],
         modifiers: [.function],
@@ -115,6 +122,10 @@ struct HotkeyOption: Identifiable, Equatable {
         if let label = Self.presets.first(where: { $0.hotkey == self })?.label { return label }
         let parts = modifiers.displayParts + keyDisplays
         return parts.isEmpty ? "Unassigned" : parts.joined(separator: "+")
+    }
+
+    var symbolLabel: String {
+        modifiers.symbolParts.joined() + keyDisplays.joined(separator: " + ")
     }
 
     var persistedValue: String {
@@ -175,6 +186,20 @@ struct HotkeyOption: Identifiable, Equatable {
     /// Submit must be a deliberate chord, never a bare typing key or modifier.
     var isValidForSubmit: Bool {
         keyCodes.count == 1 && !modifiers.isEmpty && !Self.isModifierKeyCode(keyCodes[0])
+    }
+
+    var isValidForCancel: Bool { self == .defaultCancel || isValidForSubmit }
+
+    /// New contextual bindings must preserve previously customized dictation shortcuts.
+    static func migratedContextual(_ preferred: HotkeyOption, avoiding bindings: [HotkeyOption]) -> HotkeyOption {
+        let candidates = [preferred] + (1...15).map {
+            HotkeyOption(keyCodes: preferred.keyCodes, modifiers: HotkeyModifiers(rawValue: $0))
+        } + [KeyCode.period, KeyCode.d, KeyCode.f18].flatMap { keyCode in
+            [HotkeyOption(keyCodes: [keyCode], modifiers: .command)] + (1...15).map {
+                HotkeyOption(keyCodes: [keyCode], modifiers: HotkeyModifiers(rawValue: $0))
+            }
+        }
+        return candidates.first { candidate in !bindings.contains(where: { candidate.overlaps($0) }) } ?? preferred
     }
 
     func overlaps(_ other: HotkeyOption) -> Bool {
@@ -475,10 +500,18 @@ struct FinishAndSubmitShortcut {
 
 /// A contextual shortcut: consume the full press only when the visible review accepts it.
 struct FeedbackShortcut {
-    static let saveLabel = "S"
-    static let discardLabel = "D"
     var keyCode: UInt16 = KeyCode.s
+    var modifiers: HotkeyModifiers = .command
     private var consumed = false
+
+    init(keyCode: UInt16 = KeyCode.s, modifiers: HotkeyModifiers = .command) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+    }
+
+    init(hotkey: HotkeyOption) {
+        self.init(keyCode: hotkey.keyCodes.first ?? KeyCode.s, modifiers: hotkey.modifiers)
+    }
 
     mutating func consume(keyCode: UInt16, isDown: Bool, flags: HotkeyModifiers,
                           isRepeat: Bool, activate: () -> Bool) -> Bool {
@@ -487,7 +520,7 @@ struct FeedbackShortcut {
             if !isDown { consumed = false }
             return true
         }
-        guard isDown, !isRepeat, flags.isEmpty, activate() else { return false }
+        guard isDown, !isRepeat, flags == modifiers, activate() else { return false }
         consumed = true
         return true
     }

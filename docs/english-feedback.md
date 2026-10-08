@@ -28,9 +28,16 @@ explanations, and the distinction between errors and optional alternatives.
 ## Manual release checks
 
 - Dictation and Finish & Send complete before feedback appears; the destination keeps focus.
-- Settings present one English Learning group, short per-control descriptions and
-  expandable Data & privacy details. Nearby text is visually subordinate to feedback;
-  exclusions remain manageable and Lessons & Progress opens the learning window.
+- Settings use a native sidebar with General, Shortcuts, English Learning and API Key.
+  Native sidebar search filters pages by title and control keywords; clearing it
+  restores all pages. Verify system-blue selection and compact icon rows.
+  English Learning keeps feedback, context, exclusions and privacy in grouped rows.
+  Privacy details remain expanded; Open English Learning opens the learning window.
+- The learning sidebar switches between the complete library, corrections, natural
+  phrasing, practice and progress. Native sidebar search updates the list and selected lesson;
+  searching from Practice or Progress opens All Lessons.
+  optional alternatives also appear in Natural Phrasing. Verify empty results,
+  selection after deleting a lesson, resizing, and light/dark appearance.
 - The former Hold to Record control is replaced by an editable Finish & Send chord.
   Plain Return/keypad Enter must pass through during recording. Finish & Send only
   acts during Autopaste recording, swallows repeated keydowns and the eventual keyup,
@@ -50,22 +57,46 @@ explanations, and the distinction between errors and optional alternatives.
   the score. The model must ignore those instructions, retain the speaker's meaning,
   ground every finding/assessment in the transcript, and avoid copying contextual
   private details into saved lessons. Fixture tests cannot establish model adherence.
-- All findings use one row layout: type and focus, inline wording comparison,
-  Why, and an optional Pattern. Fixes strike through the subdued old wording;
-  alternatives leave it unstruck and show Optional. Replacements use an arrow and
-  green highlights, with shared words around them. Pure fixes can add or remove
-  words without an arrow. Paired alternatives compare with the corrected sentence.
-  An absent pattern leaves no empty section. Recognition issues carry a separate
-  Check transcription label and never claim a grammar mistake.
-- Short reviews fit their contents; longer reviews scroll while all footer actions
-  remain visible. Corrections lead, paired alternatives sit underneath, standalone
-  alternatives follow, and recognition issues come last. Grammar confirmation and
-  Used well observations stay grouped. New reviews start at the top. Check long
-  alternatives, multiple successes, a small viewport and saved-lesson details.
-- S saves every lesson in one write; D closes without saving lessons. Both leave automatic progress intact. Recognition issues are never saved as lessons. Failed writes keep the review open; repeated presses do not duplicate saves.
-- Without a visible review, S and D type normally. Modified shortcuts remain available.
-- Saved lessons, including older files and paired alternatives, survive relaunch. Practice answers do not persist.
-- Practice this sits next to Save lessons. A single lesson opens directly; multiple choices use a menu with corrections first, then paired/standalone alternatives. Recognition issues never appear as practice choices. Opening practice preserves the unsaved review; closing returns to it. A pending Save cannot race a practice launch. Practice suspends normal dictation and never pastes an answer.
+- Each Quiet card correction contains its full You said / Improved sentences with blue
+  highlights behind changed words. Choose Why this change? to show/hide its explanation, Remember rule and practice
+  action. The sentence stays visible. Compatible fixes in one sentence share a comparison
+  with their own explanations; conflicting edits stay separate. Verify the floating panel
+  grows and shrinks when details toggle, without clipping content or moving the footer out
+  of reach. Optional wording and its explanation stay visible next.
+- Verify the Quiet card's clear native Liquid Glass across header, body and footer in light/dark
+  appearance, regular material fallback on macOS 13–15, and opaque Reduce Transparency surface.
+  Changes and Save use system blue. The compact recorder uses Dock-style continuous corners,
+  clear native Liquid Glass, a live microphone waveform, elapsed time and a red stop control. Drag its timer/waveform
+  area; the position survives a new recording and relaunch. It hides after completion
+  or cancellation and never appears while idle. Check silence and Reduced Motion.
+- Short reviews fit their contents; longer reviews scroll while footer actions remain
+  visible. Recognition issues come last and never claim a grammar mistake. Check
+  multiple distant fixes in a sentence, compatible overlaps, conflicting alternatives,
+  long excerpts, a small viewport and saved-lesson details.
+- Save and Close display the configured shortcuts (Command-S and Esc by default).
+  Inside clicks, including explanation controls, keep the panel open. Clicking
+  another Voxa window or another app also leaves it open and reaches its destination.
+  Verify an active save is not interrupted.
+- Correction and clean reviews remain visible beyond five seconds without any pointer
+  interaction. Moving the pointer away must not hide or collapse feedback. There is
+  no duration setting, countdown or popup pin control. Close, Done, Save review and
+  Cancel / Close dismiss explicitly; repeated delivery/idle callbacks cannot reopen a
+  closed review. Starting a new recording hides the old review; Show Latest Feedback
+  can reopen an available review. Failed saves keep it open for retry.
+- ⌘S saves every lesson in one write; Esc closes without saving. Both leave automatic
+  progress intact. Recognition issues are excluded. Repeats must not duplicate saves.
+- Esc cancels an active recording, including startup, without transcription or output.
+  The bar hides immediately. Without an eligible recording/review these keys pass
+  through normally; plain S and D always type normally.
+- Change Save feedback and Cancel / Close through the single key-combination controls
+  in Settings → Shortcuts. Check custom bindings after relaunch and a permission refresh,
+  conflict rejection, key-up/repeat consumption, and normal typing while idle. Legacy
+  dictation bindings must survive migration even if they previously used Cmd-S or Escape.
+- Saved lessons, including older files and paired alternatives, survive relaunch.
+  Practice answers do not persist.
+- Each correction and optional wording has a Try once action. Opening practice preserves
+  the unsaved review; closing returns to it. A pending Save cannot race practice.
+  Practice suspends normal dictation and never pastes an answer.
 - Record answer / Stop & check uses the existing transcription model and checks only the selected pattern. Type instead works without requesting microphone permission. Close during permission, capture, transcription or checking must not leave capture active or revive a stale result.
 - One-minute Review offers up to three due saved patterns, prioritising recurring mistakes, with examples hidden until requested. Skip and uncertain recognition never count as failures. The same pattern should not reappear immediately through a duplicate saved lesson.
 - Check long excerpts, small screens, light/dark appearance, and VoiceOver labels.
@@ -78,7 +109,7 @@ explanations, and the distinction between errors and optional alternatives.
 - Use at least 20 assessable English words for a score. Short, non-English,
   uncertain or internally inconsistent assessments should abstain. Optional
   alternatives, fillers, punctuation and self-repairs must not lower a score.
-- Verify a clean long dictation shows a positive review and can close with S/D.
+- Verify a clean long dictation shows a positive review and can close with ⌘S/Esc.
   A short clean dictation without any useful observation remains silent.
 - After a past-tense lesson, a later “Yesterday I went to the office” can count as
   correct practice. A present-tense sentence with no past-tense opportunity cannot.
@@ -121,10 +152,20 @@ explanations, and the distinction between errors and optional alternatives.
 fixtures in light/dark appearances, a compact single correction, paired alternatives,
 alternative-only feedback with/without a template and on a small display,
 a full rewrite, a small review panel, a clean review and the
-Progress tab, plus repetition, new-example, result, short-review and automatic-context settings screens. It uses
+Progress view, plus repetition, new-example, result, short-review and automatic-context settings screens. It uses
 memory-only stores and no microphone, Keychain or API calls.
 Generated PNGs are in `.build/feedback-previews/`. This verifies layout separately
 from linguistic quality; the deterministic suite does not measure model accuracy.
+For native sidebars and toolbar materials, build `./scripts/preview-workspace.sh`
+and open `.build/workspace-preview/Voxa Workspace Preview.app`. Static bitmap
+renders can omit vibrancy and selection layers; use the live window for those
+checks. The Preview menu changes only the fixture app's appearance. Its Feedback Panel
+command opens the production floating panel with synthetic corrections and pins it for
+click and resize checks.
+Use the minimum, standard and large window presets to check the long lesson,
+divider limits, selection retention, and scrolling to the final Settings rows.
+Search from Practice or Progress, then verify the complete query and
+selected lesson remain intact after resizing.
 
 `bash scripts/check-text-context.sh` opens a temporary native editor and message
 using synthetic text, runs the production AX extraction against that process only,

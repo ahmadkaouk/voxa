@@ -40,8 +40,9 @@ After a paste request is sent and its clipboard text is read, `restoringClipboar
 permits another recording while the output worker finishes its 500 ms settling
 interval and restoration. The recorder is released before delivery begins.
 Later pastes and copies remain queued behind cleanup, and its final result only
-updates the session if no newer recording has started. The paste checkmark appears
-on the read signal; restoration does not delay it or restart its display timer.
+updates the session if no newer recording has started. The bar leaves delivery on the
+read signal without a paste confirmation. It stays hidden or shows pending English
+analysis; a ready review opens once clipboard cleanup finishes.
 
 The configurable Finish & Send chord (Option+G by default) requests paste-and-submit
 while recording in Autopaste mode. Plain Enter is never a built-in recording action.
@@ -55,7 +56,7 @@ This pins the
 destination to the app active at the keypress and keeps the session busy until
 Return is sent or skipped. Return follows the settling interval and is skipped
 if delivery is unconfirmed, the clipboard changes, or a different app is active.
-Its completion checkmark follows the submission outcome.
+Submission also finishes without a paste confirmation bar.
 
 The three workers are constructed directly. Small protocols and injected closures
 allow deterministic tests.
@@ -151,16 +152,21 @@ See [feedback validation](english-feedback.md) for coaching quality checks.
 `FeedbackController` owns the findings array, request generation, presentation,
 and persistence. Delivery and recording IDs prevent premature or stale panels.
 New transcripts cancel earlier analysis; disabling and shutdown invalidate it.
-S saves all lessons in one atomic write, excluding recognition issues; D clears
-the review without saving lesson excerpts. Automatic progress is independent of S/D. Failed writes retain the review, and
+⌘S saves all lessons in one atomic write, excluding recognition issues; Esc clears
+the review without saving lesson excerpts. Automatic progress is independent of ⌘S/Esc. Failed writes retain the review, and
 a late save cannot dismiss a newer generation. Neither path changes inserted text.
 
-`FeedbackLessonView` shares the same inline comparison, explanation and optional
-pattern layout between live reviews and saved lessons. `FeedbackComparison`
-isolates a replacement phrase with shared surrounding words; the native text field
-wraps and highlights it. Actual fixes strike through the old wording, while optional
-alternatives leave it unstruck. Paired alternatives compare against the corrected
-sentence. Recognition issues use the same layout with a transcription-check label.
+Live reviews use `FeedbackWordDiff` to lead with individual changes and reusable rules.
+`FeedbackSentence` expands excerpts to full sentences and combines compatible edits;
+conflicting edits remain separate comparisons. The current transcript stays in memory
+for this presentation and never enters saved lessons. Optional wording is always expanded.
+`FeedbackLessonView` retains inline comparisons in saved details and recognition checks.
+One system window background covers the review; Save and text changes use blue.
+Feedback has no automatic dismissal timer and does not close when clicking elsewhere.
+A review stays visible until an explicit Close, Done or Save review action, or a
+recording/practice lifecycle transition. Explicit closing clears the current review
+so later delivery and idle callbacks cannot reopen it. Retired auto-close preference
+keys are ignored when loading and omitted when saving preferences.
 
 `CorrectionStore` is an actor that stores a versioned JSON file in Application
 Support/Voxa. A failed load blocks mutations to protect unreadable data. Only
@@ -187,7 +193,7 @@ sentence, then produce a new example. Short reviews start directly at the new-ex
 step, using up to three due saved patterns. It has no transcript-output dependency.
 `AppController` shares one `AudioRecorder` between dictation and practice, prevents
 opening practice until dictation/clipboard cleanup completes, suspends feedback panels
-and normal dictation shortcuts while practice is open, and restores the idle overlay
+and normal dictation shortcuts while practice is open, and leaves the recording overlay hidden
 only after microphone cleanup. Window close, sleep and quit cancel practice; generation
 checks discard late permission, transcription and evaluator completions. Capture is
 capped at 40 seconds. Typed practice bypasses microphone permission and transcription.
@@ -212,6 +218,16 @@ Practice results never enter `LearningProgress` or the expression profile. Delet
 lessons queues removal of their review records and cancels an affected active exercise.
 
 ## Settings, credentials, and permissions
+
+`SettingsViews` presents grouped controls inside a native navigation sidebar;
+page content is bounded to the available space beneath the heading so scrolling
+reaches the final rows at every supported window size.
+`EnglishLearningView` presents library filters, a searchable lesson list and a
+reading pane, alongside practice and progress destinations. Its detail content
+uses the current native column bounds so nested split views reflow on resize.
+These views use the
+existing controllers and stores; category filters and search never alter history.
+Shortcut capture stops when leaving its settings pane or deactivating the app.
 
 `PreferencesStore` validates and saves one versioned UserDefaults value under
 `nativePreferences.v1`. Existing settings keep the same format and storage key.

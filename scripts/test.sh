@@ -3,17 +3,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 BUILD_DIR="$ROOT_DIR/.build/standalone-checks"
-SUITES=(hotkeys output sounds recorder pipeline)
+SUITES=(hotkeys output sounds recorder pipeline island)
 
 usage() {
-  echo 'Usage: test.sh [all|hotkeys|output|sounds|recorder|pipeline] [--live]'
+  echo 'Usage: test.sh [all|hotkeys|output|sounds|recorder|pipeline|island] [--live]'
   echo 'Runs standalone checks without XCTest. --live is only valid with output.'
 }
 
 SUITE="${1:-all}"
 case "$SUITE" in
   -h|--help) usage; exit 0 ;;
-  all|hotkeys|output|sounds|recorder|pipeline) ;;
+  all|hotkeys|output|sounds|recorder|pipeline|island) ;;
   *) usage >&2; exit 2 ;;
 esac
 if [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && { [ "$SUITE" != output ] || [ "$2" != --live ]; }; }; then
@@ -73,16 +73,23 @@ PLIST
         Sources/Voxa/DictationTiming.swift Sources/Voxa/Hotkeys.swift Sources/Voxa/GlobalHotkeys.swift
         Sources/Voxa/Preferences.swift Sources/Voxa/Keychain.swift Sources/Voxa/CaptureGuard.swift
         Sources/Voxa/TextContext.swift
-        Sources/Voxa/EnglishFeedback.swift Sources/Voxa/FeedbackClient.swift
-        Sources/Voxa/FeedbackController.swift Sources/Voxa/CorrectionStore.swift
+        Sources/Voxa/EnglishFeedback.swift Sources/Voxa/FeedbackEditPresentation.swift Sources/Voxa/FeedbackLessonMapping.swift Sources/Voxa/FeedbackClient.swift
+        Sources/Voxa/FeedbackController.swift Sources/Voxa/CorrectionStore.swift Sources/Voxa/IslandPresentation.swift
         Sources/Voxa/LearningAssessment.swift Sources/Voxa/LearningProgress.swift
         Sources/Voxa/ExpressionAssessment.swift Sources/Voxa/Practice.swift
         Sources/Voxa/PracticeHistory.swift Sources/Voxa/PracticeController.swift
         Tests/VoxaTests/NativeSetupTests.swift Tests/VoxaTests/UnitChecksSupport.swift
         Tests/VoxaTests/NativePipelineChecksSupport.swift Tests/VoxaTests/DictationSessionTests.swift
         Tests/VoxaTests/TranscriptionClientTests.swift Tests/VoxaTests/AsyncTranscriptOutputTests.swift
-        Tests/VoxaTests/FeedbackTests.swift Tests/VoxaTests/LearningFeaturesTests.swift
+        Tests/VoxaTests/FeedbackTests.swift Tests/VoxaTests/FeedbackEditPresentationTests.swift Tests/VoxaTests/IslandPresentationTests.swift Tests/VoxaTests/LearningFeaturesTests.swift
         Tests/VoxaTests/TextContextTests.swift)
+      ;;
+    island)
+      flags+=(-D VOXA_ISLAND_TEST_RUNNER)
+      for source in Sources/Voxa/*.swift; do
+        case "${source##*/}" in VoxaApp.swift) ;; *) files+=("$source") ;; esac
+      done
+      files+=(Tests/VoxaTests/UnitChecksSupport.swift Tests/VoxaTests/DynamicIslandControllerTests.swift)
       ;;
   esac
   echo "Running $suite checks..."
@@ -95,7 +102,8 @@ if [ "$SUITE" = all ]; then
   for test_file in Tests/VoxaTests/*Tests.swift; do
     case "${test_file##*/}" in
       HotkeyOptionTests.swift|TranscriptOutputTests.swift|DictationSoundTests.swift|AudioRecorderTests.swift) ;;
-      DictationSessionTests.swift|TranscriptionClientTests.swift|AsyncTranscriptOutputTests.swift|NativeSetupTests.swift|FeedbackTests.swift|LearningFeaturesTests.swift|TextContextTests.swift) ;;
+      DynamicIslandControllerTests.swift) ;;
+      DictationSessionTests.swift|TranscriptionClientTests.swift|AsyncTranscriptOutputTests.swift|NativeSetupTests.swift|FeedbackTests.swift|FeedbackEditPresentationTests.swift|IslandPresentationTests.swift|LearningFeaturesTests.swift|TextContextTests.swift) ;;
       *) echo "No standalone harness registered for $test_file; use XCTest or add coverage." >&2; exit 1 ;;
     esac
   done

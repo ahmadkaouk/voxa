@@ -28,7 +28,7 @@ and quit Voxa first. The installer preserves a signed backup of the previous app
 
 ### Set up Voxa
 
-1. Open Voxa from the menu bar and choose **Voxa Settings…**. Save your OpenAI API
+1. Open Voxa from the menu bar and choose **Settings… → API Key**. Save your OpenAI API
    key; Voxa stores it in macOS Keychain.
 2. Allow the permissions needed for the features you use:
 
@@ -51,14 +51,41 @@ the relevant System Settings page. Return to Voxa after granting access.
 | Action | Default control |
 | --- | --- |
 | Start / Stop | Press **Option + F** to start; press again to finish and paste |
-| Record with the mouse | Click the floating handle to start, then the checkmark to finish |
+| Record with the mouse | Choose Start Recording in the Voxa menu, then click the stop square on the bar to finish |
 | Finish & Send | Press **Option + G** while recording in Autopaste mode |
-| Discard a recording | Click **×** on the dictation bar while recording |
+| Discard a recording | Press **Esc** while recording (also cancels microphone startup) |
 
-Change shortcuts in **Voxa Settings…**.
-Press **Esc** while capturing a shortcut to cancel without closing Settings.
+Change shortcuts in **Settings… → Shortcuts**. **General** contains the
+transcription model, output mode, recording limit and permission status.
+Click the displayed key combination to record a replacement; release the keys to save.
+Start / Stop, Finish & Send, Save feedback and Cancel / Close are configurable.
+Shortcuts cannot overlap. Save feedback requires a modifier and one key;
+Cancel / Close accepts Escape or a modifier and one key.
+Press **Esc** while capturing a shortcut to cancel without closing Settings,
+or click the same control again. When editing Cancel / Close, Escape assigns Escape.
 **Max Recording** sets the recording limit; the default is five minutes. Transcription begins after
 recording finishes. Discarding a recording skips transcription and output.
+
+The recording bar appears at the bottom center of the screen, above the Dock.
+Listening uses a compact Liquid Glass pill with an adaptive waveform, **×** on the left,
+and a red stop button on the right. Hovering does not expand it. The stop button finishes and inserts the text; **×** discards
+the recording. Transcribing stays visible through text insertion. Once text is pasted or copied,
+the bar goes directly to feedback or disappears, without a completion confirmation. If English
+feedback is still being analysed after delivery, the bar shows **Reviewing…**.
+When ready, the full feedback popup opens above the Dock, aligned with the recording bar's bottom edge.
+
+The recording pill uses clear native Liquid Glass with soft Dock-like corners on macOS 26 and later,
+with translucent material on older systems. Its glass edge has no additional custom border.
+Its controls adapt to the system appearance; Reduce Transparency and Increase Contrast use a solid surface.
+Feedback follows the system appearance:
+white in light mode and charcoal in dark mode, with green accents. Drag the waveform to move the recording bar;
+drag the **English feedback** header to move the popup. Voxa remembers the shared position across recordings and app restarts.
+Feedback grows to
+fit its contents up to a screen-safe height; longer content remains scrollable without
+visible scroll indicators. Compact explanations appear below the sentence list after
+clicking a correction or **Why?**. The popup grows upward from its bottom edge as you
+open an explanation. Reduced Motion removes continuous
+waveform motion. Increased Contrast strengthens the outline and secondary text.
 
 Model, output, and recording-limit menus remain available during dictation.
 Changes made while recording or processing are saved for the next recording.
@@ -87,28 +114,50 @@ you replace it with another dictation or quit Voxa.
 
 ### English learning
 
-Enable **Voxa Settings → English Learning → Feedback after dictation** for
+Enable **Settings → English Learning → Feedback after dictation** for
 background English coaching. Dictation is inserted normally and never rewritten;
 feedback failures do not interrupt it.
 
-The review puts actual grammar and construction errors first. Old and new words appear
-together in the same sentence: originals are subdued and struck through, and replacements
-are highlighted in green. There is no separate comparison line. A clearly
-labeled explanation stays visible, and recurring patterns appear beside the lesson
-category. Short reviews fit their content; longer reviews scroll above the action bar.
-Useful alternatives appear directly below the related correction, then
-standalone alternatives follow. Each has a distinct **Another way to say it** card:
-the suggested sentence leads, with labeled **Pattern to reuse** and **Why it works**
-sections. Standalone alternatives also keep **You said** in a separate reference area.
-The grammar confirmation and successful patterns are grouped in one quiet summary.
-Each alternative can teach a reusable expression, such as
-**Could we + action?** Alternatives may cover any useful phrase or sentence across
-the dictation, including correct sentences; they are never collapsed or forced
-onto every sentence. The coach preserves meaning, tone, uncertainty and technical
-terms, and ignores fillers and clear self-corrections.
+The feedback card puts the change and its explanation together. Small corrections stay
+inside one sentence: corrected wording sits in a padded, rounded sage highlight.
+Click a highlight or **Why?** in the section header to open its explanation;
+click again or use its close button to hide it. Keyboard activation works too. Hovering
+does not open an explanation. The original
+wording appears in the explanation's title. A missing word is highlighted;
+an extra word is crossed out. Larger rewrites use a **You said / Say this** comparison,
+with the improved sentence in larger type on a softly shaded surface.
+
+All notes appear in one review. Explanations and **Remember** patterns open one at a
+time in a compact panel beneath the sentence. There is no empty explanation card;
+an open explanation fits its text, with scrolling for longer details. Its arrows browse the sentence's lessons;
+the close button hides the explanation. Independent corrections stay together, with a
+teaching point for each change. Conflicting suggestions remain separate. **Another way
+to say it** offers optional phrasing, including alternatives paired with a correction.
+Transcription uncertainties have their own section and ask you to check what you said.
+When there is one lesson, **Practice** is beside Save review. When there are several,
+the microphone beside each explanation starts practice for that specific wording.
+Closing practice returns to that part of the review with the same explanation open.
+
+Reviews with no corrections show **Looking good** (or **You're all set**) and the
+original dictation. They do not show a **Used well** list. Recognised patterns still
+contribute to learning progress in the background.
+
+Short reviews fit their content; longer reviews grow before scrolling above the fixed **Save review**
+action. **Save review** saves every correction and alternative
+in the review, including notes below the visible area. Correction reviews are 480 points wide;
+clean confirmations use a compact 400-point surface. Both use the system light or dark appearance
+and green accents, with a stronger outline and
+secondary text when Increase Contrast is enabled. The close control stays in the header. Save review shows
+your configured save shortcut (Command-S by default); the close control uses Cancel /
+Close (Esc by default). Reviews with no lessons have a **Done** button.
+Clicking outside the feedback panel leaves it open.
+An in-progress save finishes before the review can be dismissed.
+Grammar confirmation stays in a quiet summary; recognised patterns contribute to progress in the background. The coach
+preserves meaning, tone, uncertainty and technical terms, and ignores fillers and
+clear self-corrections.
 
 An **English-expression estimate** develops across dictations, covering accuracy,
-vocabulary, natural phrasing, sentence range and clarity. The header shows a
+vocabulary, natural phrasing, sentence range and clarity. Lessons & Progress shows a
 provisional CEFR-style band once there are at least six qualifying samples,
 300 words and two kinds of speech (such as requests and explanations). Individual
 samples need at least 40 assessable English words and evidence for all five dimensions.
@@ -120,21 +169,30 @@ pronunciation or conversational fluency. A clean dictation can still show a brie
 positive review. Old grammar-only observations stay saved but cannot be converted
 into a broader level without their original text.
 
-The panel appears after delivery without taking focus or disappearing on a timer.
-A new recording hides it; **English Learning → Show Latest Feedback** reopens the
-latest review until another transcript replaces it.
+The panel appears after delivery without taking focus and stays open until you close
+or save it. It has no countdown and does not disappear when you move the pointer or
+click elsewhere. Starting a new recording hides the current review; **English Learning →
+Show Latest Feedback** reopens an available review until another transcript replaces it.
+A failed save keeps the review open for retry.
 
-- **Save lessons / S:** save all corrections and alternatives, then close.
-  Recognition issues are excluded. S also closes a review with no lessons.
-- **Close / D:** close without saving lessons. Local progress remains available.
+- **Save review / ⌘S:** save all corrections and alternatives, then close.
+  Recognition issues are excluded. ⌘S also closes a review with no lessons.
+- **Close / Esc:** close without saving lessons. Local progress remains available.
+
+These are the default shortcuts. Customize both in Settings → Shortcuts; the
+feedback buttons and English Learning settings show your current combinations.
+The Save feedback and Cancel / Close key buttons in English Learning settings can
+also be edited directly. Click a combination, press the new keys, and release them
+to save. Escape can be assigned to Cancel / Close.
+
 - **English Learning → Lessons & Progress…:** review, practise, or delete saved
   lessons, and view or clear progress separately.
-- **Practice this:** next to Save lessons, say the improved version,
+- **Practice** on a feedback note, or **Try once** in a saved lesson: say the improved version,
   then try the pattern in a new sentence. Use **Record answer → Stop & check**, or
   **Type instead**. Recording stops automatically at 40 seconds. Each answer gets
   one short response about the target pattern. Practice never pastes or changes
-  the last dictation. If there is more than one lesson, the button offers a menu of
-  corrections and alternatives. Close practice to return to the review and save it
+  the last dictation. Each correction and alternative has its own practice action.
+  Close practice to return to the review and save it
   if useful. Saved-lesson details also have individual practice links.
 - **English Learning → One-minute Review…:** revisit up to three due patterns
   from saved lessons, with recurring grammar errors first. Examples stay hidden until
@@ -150,12 +208,26 @@ Progress tracks up to 200 recent reviews automatically while feedback is enabled
 Repeated mistakes are counted by rule, and correct use of previously encountered
 patterns is recognised in later dictations, including those with no corrections.
 Absence of an error does not count as a success; an actual source example is
-required. Counts are per review, not a mastery percentage. The Progress tab shows
+required. Counts are per review, not a mastery percentage. **Progress** in the sidebar shows
 the broader expression profile, its coverage, and patterns to practise.
 
-A failed save keeps the review open. While feedback is visible, S and D act on it
-instead of typing in the focused app; modified shortcuts such as Command+S still
-work. Global shortcuts require Accessibility access.
+The English Learning window uses a Notes-style sidebar, lesson list and reading
+pane. **All Lessons**, **Corrections**, and **Natural Phrasing** filter the library;
+lessons with an optional alternative also appear under Natural Phrasing. The native
+search field at the top of the sidebar matches the wording, explanation and pattern
+within the selected category. Searching from Practice or Progress opens All Lessons.
+The reading pane keeps the full
+original and corrected sentences available. **Practice** shows the next short
+review, and **Progress** shows your expression profile. Resize the window or drag
+the divider beside the lesson list to give the text more room.
+
+Settings also has a sidebar search. Search for a page or a control, such as
+“microphone”, “shortcuts” or “Keychain”, then choose the matching page.
+
+A failed save keeps the review open. While feedback is visible, ⌘S saves it and
+Esc closes it. During recording, Esc discards the recording before transcription
+and output. Outside these contexts, the shortcuts pass through normally. Plain
+S and D always type normally. Global shortcuts require Accessibility access.
 
 Feedback is off by default. Enabling it sends transcript text in an additional
 OpenAI request using the same API key, with additional usage cost. It uses
@@ -179,7 +251,7 @@ unsaved findings; saved lessons and existing progress remain until deleted.
 
 ### Automatic text context
 
-Enable **Voxa Settings → English Learning → Use nearby text automatically** once
+Enable **Settings → English Learning → Use nearby text automatically** once
 to give English feedback more background while you work. It is off by default,
 including after upgrading. English feedback must also be enabled. A menu toggle
 is available under **English Learning**.
@@ -209,7 +281,8 @@ already sent cannot be recalled. Practice never captures context.
 
 Settings group feedback and its optional context together. Short descriptions sit
 beside the controls; **Data & privacy** contains the detailed sending, storage and
-practice information. **Lessons & Progress…** opens saved lessons and your profile.
+practice information without a disclosure control. **Open English Learning** opens
+the library, practice and progress sidebar.
 
 ### Dictation data
 

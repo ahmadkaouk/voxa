@@ -3,6 +3,8 @@ import Foundation
 struct Preferences: Codable, Equatable {
     var toggleHotkey = HotkeyOption.defaultToggle.persistedValue
     var finishAndSubmitHotkey = HotkeyOption.defaultFinishAndSubmit.persistedValue
+    var saveFeedbackHotkey = HotkeyOption.defaultSaveFeedback.persistedValue
+    var cancelHotkey = HotkeyOption.defaultCancel.persistedValue
     var model = ModelOption.gptTranscribe.rawValue
     var outputMode = OutputModeOption.clipboardAutopaste.rawValue
     var maxRecordingSeconds: UInt64 = 300
@@ -16,6 +18,7 @@ struct Preferences: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case toggleHotkey, finishAndSubmitHotkey, model, outputMode, maxRecordingSeconds, apiKeySource, englishFeedbackEnabled
         case automaticContextEnabled, contextExcludedApps
+        case saveFeedbackHotkey, cancelHotkey
     }
     private enum LegacyKeys: String, CodingKey { case holdHotkey }
 
@@ -29,6 +32,14 @@ struct Preferences: Codable, Equatable {
             finishAndSubmitHotkey = HotkeyOption.migratedSubmit(legacy: legacy.flatMap(HotkeyOption.fromRaw),
                 toggle: HotkeyOption.fromRawOrDefault(toggleHotkey)).persistedValue
         }
+        let existing = [HotkeyOption.fromRawOrDefault(toggleHotkey),
+                        HotkeyOption.fromRawOrDefault(finishAndSubmitHotkey, fallback: .defaultFinishAndSubmit)]
+        let savedSave = try values.decodeIfPresent(String.self, forKey: .saveFeedbackHotkey)
+        cancelHotkey = try values.decodeIfPresent(String.self, forKey: .cancelHotkey)
+            ?? HotkeyOption.migratedContextual(.defaultCancel,
+                avoiding: existing + [savedSave.flatMap(HotkeyOption.fromRaw)].compactMap { $0 }).persistedValue
+        saveFeedbackHotkey = savedSave ?? HotkeyOption.migratedContextual(.defaultSaveFeedback,
+            avoiding: existing + [HotkeyOption.fromRaw(cancelHotkey)].compactMap { $0 }).persistedValue
         model = try values.decode(String.self, forKey: .model)
         outputMode = try values.decode(String.self, forKey: .outputMode)
         maxRecordingSeconds = try values.decode(UInt64.self, forKey: .maxRecordingSeconds)
@@ -42,6 +53,10 @@ struct Preferences: Codable, Equatable {
     func validated() throws -> Preferences {
         guard let toggle = HotkeyOption.fromRaw(toggleHotkey),
               let submit = HotkeyOption.fromRaw(finishAndSubmitHotkey), submit.isValidForSubmit, !toggle.overlaps(submit),
+              let save = HotkeyOption.fromRaw(saveFeedbackHotkey), save.isValidForSubmit,
+              let cancel = HotkeyOption.fromRaw(cancelHotkey), cancel.isValidForCancel,
+              !save.overlaps(cancel), !save.overlaps(toggle), !save.overlaps(submit),
+              !cancel.overlaps(toggle), !cancel.overlaps(submit),
               ModelOption(rawValue: model) != nil, OutputModeOption(rawValue: outputMode) != nil,
               (1...3600).contains(maxRecordingSeconds), ["env", "keychain"].contains(apiKeySource),
               contextExcludedApps.count <= 100,

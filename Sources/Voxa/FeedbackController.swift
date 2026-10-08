@@ -15,9 +15,16 @@ final class FeedbackController: ObservableObject {
     @Published private(set) var assessment: GrammarAssessment?
     @Published private(set) var successfulPatterns: [LearningFocus] = []
     @Published private(set) var contextAppName: String?
+    @Published private(set) var transcript = ""
+    @Published private(set) var saveHotkey = HotkeyOption.defaultSaveFeedback
+    @Published private(set) var cancelHotkey = HotkeyOption.defaultCancel
     let progress: LearningProgress
     var onPractice: ((PracticeTarget) -> Void)?
     var onLessonsDeleted: ((Set<UUID>) -> Void)?
+    // Keep the current note when practice temporarily recreates the floating panel.
+    // This is presentation state only and is never written to saved lessons or progress.
+    var selectedReviewNoteID: String?
+    var selectedReviewExplanationID: String?
 
     private let client: any FeedbackAnalyzing
     private let store: any CorrectionStoring
@@ -49,18 +56,23 @@ final class FeedbackController: ObservableObject {
         if !value {
             generation = UUID()
             request?.cancel(); request = nil
-            findings = []; currentRequest = nil; delivered = nil
+            findings = []; selectedReviewNoteID = nil; selectedReviewExplanationID = nil; currentRequest = nil; delivered = nil
             assessment = nil; successfulPatterns = []; learningRecord = nil
-            contextAppName = nil
-            panelVisible = false; isAnalyzing = false; status = nil
+            contextAppName = nil; transcript = ""
+            hidePanel(); isAnalyzing = false; status = nil
         }
+    }
+
+    func updateShortcuts(save: HotkeyOption, cancel: HotkeyOption) {
+        saveHotkey = save
+        cancelHotkey = cancel
     }
 
     func updateDictation(_ state: DictationState) {
         if case .starting(let context, _) = state { latestRecording = context.id }
         // Includes clipboard restoration: feedback must never interfere with paste-and-submit.
         busy = state.context != nil
-        if busy { panelVisible = false }
+        if busy { hidePanel() }
         else { presentIfReady() }
     }
 
@@ -70,9 +82,11 @@ final class FeedbackController: ObservableObject {
         let token = UUID()
         generation = token
         currentRequest = id; delivered = nil
-        findings = []; panelVisible = false; status = nil; isAnalyzing = true
+        hidePanel()
+        findings = []; selectedReviewNoteID = nil; selectedReviewExplanationID = nil; status = nil; isAnalyzing = true
         assessment = nil; successfulPatterns = []; learningRecord = nil
         contextAppName = context?.appName
+        self.transcript = transcript
         let client = client
         let knownPatterns = progress.knownPatterns.union(saved.flatMap { item in
             [item.feedback.focus, item.feedback.alternative?.focus].compactMap { $0 }
@@ -96,7 +110,7 @@ final class FeedbackController: ObservableObject {
             } catch {
                 guard let self, !self.closed, self.generation == token, !Task.isCancelled else { return }
                 self.isAnalyzing = false
-                self.request = nil; self.contextAppName = nil
+                self.request = nil; self.contextAppName = nil; self.transcript = ""
                 // Shown only when opening the menu; no error sound, alert, or dictation failure.
                 self.status = (error as? FeedbackError)?.localizedDescription ?? FeedbackError.network.localizedDescription
             }
@@ -127,17 +141,21 @@ final class FeedbackController: ObservableObject {
     }
 
     private func presentIfReady() {
-        guard enabled, !closed, !busy, !practiceActive, hasReview, let currentRequest,
+        guard enabled, !closed, !busy, !practiceActive, !panelVisible, hasReview, let currentRequest,
               delivered == currentRequest, latestRecording == currentRequest else { return }
-        panelVisible = true
+        showPanel()
     }
 
     func showLatest() {
         guard enabled, !closed, !busy, !practiceActive, hasReview, let currentRequest, delivered == currentRequest else { return }
-        panelVisible = true
+        showPanel()
     }
 
-    func dismiss() { findings = []; assessment = nil; successfulPatterns = []; panelVisible = false; contextAppName = nil }
+    // Reviews stay visible until an explicit action or a dictation/practice lifecycle change.
+    private func showPanel() { panelVisible = true }
+    private func hidePanel() { panelVisible = false }
+
+    func dismiss() { hidePanel(); findings = []; selectedReviewNoteID = nil; selectedReviewExplanationID = nil; assessment = nil; successfulPatterns = []; contextAppName = nil; transcript = "" }
 
     /// Revoking context or excluding an app clears any context-bearing pending review.
     func contextPreferencesChanged() {
@@ -149,7 +167,7 @@ final class FeedbackController: ObservableObject {
 
     func setPracticeActive(_ active: Bool) {
         practiceActive = active
-        if active { panelVisible = false }
+        if active { hidePanel() }
         else { presentIfReady() }
     }
 
@@ -181,7 +199,9 @@ final class FeedbackController: ObservableObject {
         let existingIDs = Set(saved.map(\.id))
         let additions = lessons.filter { !existingIDs.contains($0.id) }
         if additions.isEmpty { dismiss() }
-        else { persist(additions + saved, dismissGeneration: generation) }
+        else {
+            persist(additions + saved, dismissGeneration: generation)
+        }
         return true
     }
 
@@ -234,9 +254,10 @@ final class FeedbackController: ObservableObject {
     func shutdown() async {
         closed = true; generation = UUID()
         request?.cancel(); request = nil
-        findings = []; panelVisible = false; status = nil; isAnalyzing = false
+        hidePanel()
+        findings = []; selectedReviewNoteID = nil; selectedReviewExplanationID = nil; status = nil; isAnalyzing = false
         assessment = nil; successfulPatterns = []; learningRecord = nil
-        contextAppName = nil
+        contextAppName = nil; transcript = ""
         // Explicit saves finish, but a stalled feedback API cannot delay Quit.
         await persistence?.value
         await progress.finishPendingWrites()

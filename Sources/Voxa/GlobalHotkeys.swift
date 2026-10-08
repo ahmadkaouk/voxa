@@ -8,7 +8,8 @@ final class GlobalHotkeyBridge {
     var onSaveFeedback: (() -> Bool)?
     private var saveShortcut = FeedbackShortcut()
     var onDiscardFeedback: (() -> Bool)?
-    private var discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
+    var onCancelDictation: (() -> Bool)?
+    private var discardShortcut = FeedbackShortcut(keyCode: KeyCode.escape, modifiers: [])
 
     var onToggleActivated: (() -> Void)?
 
@@ -66,8 +67,7 @@ final class GlobalHotkeyBridge {
             self.eventTap = nil
         }
         submitShortcut = FinishAndSubmitShortcut(hotkey: submitShortcut.hotkey)
-        saveShortcut = FeedbackShortcut()
-        discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
+        resetContextualShortcuts()
         queue.sync {
             self.resetState()
         }
@@ -80,15 +80,22 @@ final class GlobalHotkeyBridge {
 
     func resetForSystemInterruption() {
         submitShortcut = FinishAndSubmitShortcut(hotkey: submitShortcut.hotkey)
-        saveShortcut = FeedbackShortcut()
-        discardShortcut = FeedbackShortcut(keyCode: KeyCode.d)
+        resetContextualShortcuts()
         queue.async { [weak self] in
             self?.resetState()
         }
     }
 
-    func updateBindings(toggle: HotkeyOption, finishAndSubmit: HotkeyOption) {
+    private func resetContextualShortcuts() {
+        saveShortcut = FeedbackShortcut(keyCode: saveShortcut.keyCode, modifiers: saveShortcut.modifiers)
+        discardShortcut = FeedbackShortcut(keyCode: discardShortcut.keyCode, modifiers: discardShortcut.modifiers)
+    }
+
+    func updateBindings(toggle: HotkeyOption, finishAndSubmit: HotkeyOption,
+                        saveFeedback: HotkeyOption = .defaultSaveFeedback, cancel: HotkeyOption = .defaultCancel) {
         submitShortcut = FinishAndSubmitShortcut(hotkey: finishAndSubmit)
+        saveShortcut = FeedbackShortcut(hotkey: saveFeedback)
+        discardShortcut = FeedbackShortcut(hotkey: cancel)
         queue.async { [weak self] in
             guard let self else { return }
             self.toggleHotkey = toggle
@@ -190,7 +197,7 @@ final class GlobalHotkeyBridge {
     // keys, so these actions are available globally only with an event tap.
     private func consumeContextualShortcut(keyCode: UInt16, isDown: Bool, flags: HotkeyModifiers, isRepeat: Bool) -> Bool {
         if discardShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat, activate: {
-            queue.sync(execute: { isEnabled }) && onDiscardFeedback?() == true
+            queue.sync(execute: { isEnabled }) && (onCancelDictation?() == true || onDiscardFeedback?() == true)
         }) { return true }
         if saveShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat, activate: {
             queue.sync(execute: { isEnabled }) && onSaveFeedback?() == true

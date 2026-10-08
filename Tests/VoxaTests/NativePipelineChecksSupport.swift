@@ -33,7 +33,9 @@ private enum NativePipelineChecksRunner {
             do {
                 let checks = DictationSessionChecks.all + TranscriptionClientChecks.all + AsyncTranscriptOutputChecks.all + NativeSetupChecks.all + FeedbackChecks.all + LearningFeaturesChecks.all + TextContextChecks.all
                 for (name, check) in checks { try await check(); print("PASS: \(name)") }
-                print("All \(checks.count) native pipeline checks passed (fixtures; no microphone or external API)")
+                let presentationChecks = FeedbackEditPresentationChecks.all + IslandPresentationChecks.all
+                for (name, check) in presentationChecks { try check(); print("PASS: \(name)") }
+                print("All \(checks.count + presentationChecks.count) native pipeline checks passed (fixtures; no microphone or external API)")
                 exit(0)
             } catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
         }

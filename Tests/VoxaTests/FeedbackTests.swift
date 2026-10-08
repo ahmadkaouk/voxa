@@ -62,6 +62,205 @@ final class MemoryLearningProgress: LearningProgressStoring {
 
 @MainActor
 enum FeedbackChecks {
+    static func reviewsStayOpenUntilExplicitlyClosed() async throws {
+        let corrections = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress())
+        let cleanFixture = FeedbackFixture()
+        cleanFixture.findings = []
+        cleanFixture.assessment = .init(status: .assessed, band: .accurate)
+        let clean = FeedbackController(client: cleanFixture, store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress())
+        corrections.setEnabled(true); clean.setEnabled(true)
+        let correctionID = UUID(), cleanID = UUID()
+        start(corrections, id: correctionID); finish(corrections, id: correctionID)
+        clean.updateDictation(.starting(.init(id: cleanID, origin: .manual, settings: .init()), requested: nil))
+        clean.analyze(id: cleanID, transcript: longTranscript.replacingOccurrences(of: lesson.original, with: lesson.suggestion),
+                      apiKey: "fixture")
+        finish(clean, id: cleanID)
+        try await eventually { corrections.panelVisible && clean.panelVisible && corrections.storageReady && clean.storageReady }
+        let findings = corrections.findings
+        // Exercise the old five-second deadline once for both correction and clean reviews.
+        // No hover, pin, or timer configuration is needed to keep either review open.
+        try await Task.sleep(for: .seconds(6))
+        try unitExpect(corrections.panelVisible && clean.panelVisible)
+        try unitEqual(corrections.findings, findings)
+        try unitExpect(clean.findings.isEmpty && clean.assessment?.band == .accurate)
+        try unitExpect(corrections.saved.isEmpty && clean.saved.isEmpty)
+
+        try unitExpect(corrections.discardReview())
+        try unitExpect(clean.discardReview())
+        for (controller, id) in [(corrections, correctionID), (clean, cleanID)] {
+            // Neither duplicate delivery/idle events nor practice return can recreate
+            // a review that the user explicitly closed.
+            finish(controller, id: id)
+            controller.setPracticeActive(true); controller.setPracticeActive(false)
+            controller.showLatest()
+            try unitExpect(!controller.panelVisible && !controller.hasReview && controller.transcript.isEmpty)
+            try unitExpect(!controller.saveAndClose() && !controller.discardReview())
+            await controller.shutdown()
+        }
+    }
+
+    static func unrelatedPersistenceKeepsTheReviewOpen() async throws {
+        let store = MemoryCorrections(), savedID = UUID(), gate = PipelineGate()
+        store.items = [SavedCorrection(id: savedID, date: Date(), feedback: lesson)]
+        let controller = FeedbackController(client: FeedbackFixture(), store: store,
+            progressStore: MemoryLearningProgress())
+        controller.setEnabled(true)
+        let id = UUID()
+        start(controller, id: id); finish(controller, id: id)
+        try await eventually { controller.panelVisible && controller.storageReady }
+        let findings = controller.findings
+        controller.selectedReviewNoteID = "retained-note"
+        store.saveGate = gate
+        controller.delete(savedID)
+        try await eventually { gate.entered }
+        try unitExpect(controller.panelVisible && controller.isSaving)
+        gate.open()
+        try await eventually { !controller.isSaving }
+        try unitExpect(controller.panelVisible && store.items.isEmpty)
+        try unitEqual(controller.findings, findings)
+        try unitEqual(controller.selectedReviewNoteID, "retained-note")
+
+        controller.reloadSaved()
+        try await eventually { !controller.isSaving }
+        try unitExpect(controller.panelVisible)
+        try unitEqual(controller.findings, findings)
+        await controller.shutdown()
+    }
+
+    static func lifecycleHidesPreserveAvailableReviews() async throws {
+        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress())
+        controller.setEnabled(true)
+        let first = UUID()
+        start(controller, id: first); finish(controller, id: first)
+        try await eventually { controller.panelVisible && controller.storageReady }
+        controller.selectedReviewNoteID = "selected-note"
+        controller.selectedReviewExplanationID = "selected-explanation"
+        controller.setPracticeActive(true)
+        controller.showLatest()
+        try unitExpect(!controller.panelVisible && controller.hasReview)
+        controller.setPracticeActive(false)
+        try unitExpect(controller.panelVisible && controller.findings.first?.id == first)
+        try unitEqual(controller.selectedReviewNoteID, "selected-note")
+        try unitEqual(controller.selectedReviewExplanationID, "selected-explanation")
+
+        // A new recording hides the old review. Cancelling that recording must
+        // not reopen stale feedback automatically, but Show Latest still may.
+        let next = UUID()
+        controller.updateDictation(.starting(.init(id: next, origin: .manual, settings: .init()), requested: nil))
+        controller.showLatest()
+        try unitExpect(!controller.panelVisible && controller.hasReview)
+        controller.updateDictation(.idle)
+        try unitExpect(!controller.panelVisible)
+        controller.showLatest()
+        try unitExpect(controller.panelVisible && controller.findings.first?.id == first)
+        try unitExpect(controller.discardReview())
+        controller.showLatest()
+        try unitExpect(!controller.panelVisible && !controller.hasReview)
+
+        let replacement = UUID()
+        start(controller, id: replacement); finish(controller, id: replacement)
+        try await eventually { controller.panelVisible && controller.findings.first?.id == replacement }
+        controller.setEnabled(false)
+        try unitExpect(!controller.panelVisible && !controller.hasReview)
+        controller.setEnabled(true)
+        let last = UUID()
+        start(controller, id: last); finish(controller, id: last)
+        try await eventually { controller.panelVisible }
+        await controller.shutdown()
+        controller.setPracticeActive(false); controller.showLatest(); finish(controller, id: last)
+        try unitExpect(!controller.panelVisible && !controller.hasReview)
+    }
+
+    static func savingClosesOnlyAfterSuccessfulPersistence() async throws {
+        let store = MemoryCorrections(), saving = PipelineGate()
+        let controller = FeedbackController(client: FeedbackFixture(), store: store,
+            progressStore: MemoryLearningProgress())
+        controller.setEnabled(true)
+        let id = UUID()
+        start(controller, id: id); finish(controller, id: id)
+        try await eventually { controller.panelVisible && controller.storageReady }
+        let findings = controller.findings
+        store.saveGate = saving; store.fail = true
+        try unitExpect(controller.saveAndClose())
+        try await eventually { saving.entered }
+        try unitExpect(controller.discardReview()) // An accepted save must finish before closing.
+        try unitExpect(controller.panelVisible && controller.isSaving)
+        try unitEqual(controller.findings, findings)
+        saving.open()
+        try await eventually { !controller.isSaving }
+        try unitExpect(controller.panelVisible && controller.storageError != nil && store.items.isEmpty)
+        try unitEqual(controller.findings, findings)
+        store.fail = false
+        try unitExpect(controller.saveAndClose())
+        try await eventually { !controller.isSaving }
+        try unitExpect(!controller.panelVisible && !controller.hasReview && store.items.count == 1)
+        finish(controller, id: id); controller.showLatest()
+        try unitExpect(!controller.panelVisible)
+        await controller.shutdown()
+    }
+
+    static func granularChangesAndFullSentences() throws {
+        func finding(_ original: String, _ suggestion: String) -> EnglishFeedback {
+            .init(kind: .grammar, original: original, suggestion: suggestion,
+                  explanation: "Use the past tense.", practicePrompt: "Try a new example.")
+        }
+        let before = "Yesterday I go to the café, and Maya explain the plan."
+        let after = "Yesterday I went to the café, and Maya explained the plan."
+        let diff = FeedbackWordDiff(original: before, suggestion: after)
+        try unitEqual(diff.changes.map(\.original), ["go", "explain"])
+        try unitEqual(diff.changes.map(\.suggestion), ["went", "explained"])
+        let result = FeedbackSentence.comparisons(transcript: "Hello. " + before + " Thanks!", findings: [
+            finding("I go", "I went"), finding("Maya explain", "Maya explained")
+        ])
+        try unitEqual(result.count, 1)
+        try unitEqual(result[0].original.trimmingCharacters(in: .whitespaces), before)
+        try unitEqual(result[0].suggestion.trimmingCharacters(in: .whitespaces), after)
+        // Independent changes to the same excerpt must compose, with duplicate edits applied once.
+        let shared = FeedbackSentence.comparisons(transcript: before, findings: [
+            finding(before, before.replacingOccurrences(of: "I go", with: "I went")),
+            finding(before, before.replacingOccurrences(of: "Maya explain", with: "Maya explained")), finding(before, after)
+        ])
+        try unitEqual(shared, [.init(original: before, suggestion: after)])
+        let conflict = FeedbackSentence.comparisons(transcript: before, findings: [
+            finding("I go", "I went"), finding("I go", "I walked")
+        ])
+        try unitEqual(conflict.count, 2)
+        try unitExpect(conflict[0].suggestion.contains("I went") && conflict[1].suggestion.contains("I walked"))
+        // Sentence groups must retain the exact explanations, even when input order differs.
+        let context = "There's a list of application and time. A chart I was thinking about are the following."
+        let contextual = FeedbackSentence.groups(transcript: context, findings: [
+            finding("are", "is"), finding("application", "applications")
+        ])
+        try unitEqual(contextual.map(\.findingIndices), [[1], [0]])
+        try unitEqual(contextual[0].sentence.suggestion.trimmingCharacters(in: .whitespaces),
+                      "There's a list of applications and time.")
+        try unitEqual(contextual[1].sentence.suggestion.trimmingCharacters(in: .whitespaces),
+                      "A chart I was thinking about is the following.")
+        let grouped = FeedbackSentence.groups(transcript: before, findings: [
+            finding("I go", "I went"), finding("Maya explain", "Maya explained")
+        ])
+        try unitEqual(grouped.map(\.findingIndices), [[0, 1]])
+        try unitEqual(grouped.map(\.sentence), [.init(original: before, suggestion: after)])
+        let conflicting = FeedbackSentence.groups(transcript: before, findings: [
+            finding("I go", "I went"), finding("I go", "I walked")
+        ])
+        try unitEqual(conflicting.map(\.findingIndices), [[0], [1]])
+        let unavailable = FeedbackSentence.groups(transcript: "", findings: [finding("She ready.", "She is ready.")])
+        try unitEqual(unavailable.map(\.findingIndices), [[0]])
+        try unitEqual(unavailable[0].sentence, .init(original: "She ready.", suggestion: "She is ready."))
+        for pair in [("We discussed about it.", "We discussed it."), ("I need answer.", "I need an answer."),
+                     ("😊 I go home.", "😊 I went home."), ("a a b", "a b b"), ("", "new"), ("old", "")] {
+            let rebuilt = NSMutableString(string: pair.0)
+            for edit in FeedbackWordDiff(original: pair.0, suggestion: pair.1).changes.reversed() {
+                rebuilt.replaceCharacters(in: edit.range, with: edit.suggestion)
+            }
+            try unitEqual(rebuilt as String, pair.1)
+        }
+    }
+
     static func recognitionOnlyReview() async throws {
         let fixture = FeedbackFixture(), store = MemoryCorrections()
         fixture.findings = [EnglishFeedback(kind: .transcriptionIssue, original: lesson.original,
@@ -638,11 +837,16 @@ enum FeedbackChecks {
         var selected: [PracticeTarget] = []
         controller.onPractice = { selected.append($0); controller.setPracticeActive(true) }
         for target in targets {
+            let noteID = (target.alternative || target.lesson.feedback.kind == .phrasing ? "alternative-" : "")
+                + target.lesson.id.uuidString
+            controller.selectedReviewNoteID = noteID
             controller.practise(target.lesson, alternative: target.alternative)
             try unitEqual(selected.last, target)
             try unitExpect(!controller.panelVisible && store.items.isEmpty)
+            try unitEqual(controller.selectedReviewNoteID, noteID)
             controller.setPracticeActive(false)
             try unitExpect(controller.panelVisible && controller.reviewPracticeTargets == targets)
+            try unitEqual(controller.selectedReviewNoteID, noteID) // Recreated panels return to the practised note.
         }
         let saveGate = PipelineGate()
         store.saveGate = saveGate
@@ -654,7 +858,24 @@ enum FeedbackChecks {
         try await eventually { !controller.isSaving }
         controller.setPracticeActive(false)
         try unitExpect(!controller.panelVisible && controller.reviewPracticeTargets.isEmpty)
+        try unitExpect(controller.selectedReviewNoteID == nil)
         try unitEqual(store.items.count, 2) // Recognition issues remain excluded.
+
+        let next = UUID()
+        controller.updateDictation(.starting(.init(id: next, origin: .manual, settings: .init()), requested: nil))
+        controller.analyze(id: next, transcript: fixture.findings.map(\.original).joined(separator: " "), apiKey: "fixture")
+        finish(controller, id: next)
+        try await eventually { controller.panelVisible }
+        controller.selectedReviewNoteID = "alternative-" + controller.alternatives[0].id.uuidString
+        let replacement = UUID()
+        controller.updateDictation(.starting(.init(id: replacement, origin: .manual, settings: .init()), requested: nil))
+        controller.analyze(id: replacement, transcript: fixture.findings.map(\.original).joined(separator: " "), apiKey: "fixture")
+        try unitExpect(controller.selectedReviewNoteID == nil) // A new review must start at its first note.
+        finish(controller, id: replacement)
+        try await eventually { controller.panelVisible }
+        controller.selectedReviewNoteID = "alternative-" + controller.alternatives[0].id.uuidString
+        try unitExpect(controller.discardReview())
+        try unitExpect(controller.selectedReviewNoteID == nil)
         await controller.shutdown()
     }
 
@@ -677,6 +898,11 @@ enum FeedbackChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
+        ("feedback: correction and clean reviews stay open until explicitly closed", reviewsStayOpenUntilExplicitlyClosed),
+        ("feedback: unrelated persistence preserves the visible review", unrelatedPersistenceKeepsTheReviewOpen),
+        ("feedback: lifecycle hides preserve only available reviews", lifecycleHidesPreserveAvailableReviews),
+        ("feedback: saving closes only after successful persistence", savingClosesOnlyAfterSuccessfulPersistence),
+        ("feedback: granular edits and complete sentence comparisons", granularChangesAndFullSentences),
         ("feedback: cosmetic noise and duplicate optional alternatives", noiseAndDuplicateFiltering),
         ("feedback: fixed grammar rubric, score consistency and abstention", grammarRubricAndAbstention),
         ("feedback: grounded pattern successes and minimal request context", groundedPatternSuccesses),
@@ -700,6 +926,11 @@ enum FeedbackChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class FeedbackTests: XCTestCase {
+    func testReviewsStayOpenUntilExplicitClose() async throws { try await FeedbackChecks.reviewsStayOpenUntilExplicitlyClosed() }
+    func testUnrelatedPersistencePreservesReview() async throws { try await FeedbackChecks.unrelatedPersistenceKeepsTheReviewOpen() }
+    func testLifecycleHidesPreserveReviews() async throws { try await FeedbackChecks.lifecycleHidesPreserveAvailableReviews() }
+    func testSaveClosesAfterPersistence() async throws { try await FeedbackChecks.savingClosesOnlyAfterSuccessfulPersistence() }
+    func testGranularChanges() async throws { try await FeedbackChecks.granularChangesAndFullSentences() }
     func testNoiseFiltering() async throws { try await FeedbackChecks.noiseAndDuplicateFiltering() }
     func testGrammarRubric() async throws { try await FeedbackChecks.grammarRubricAndAbstention() }
     func testPatternSuccesses() async throws { try await FeedbackChecks.groundedPatternSuccesses() }

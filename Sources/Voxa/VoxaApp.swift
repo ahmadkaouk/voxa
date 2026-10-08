@@ -18,15 +18,19 @@ struct VoxaApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Window("Voxa Settings", id: "settings") {
+        Window("Settings", id: "settings") {
             VoxaSettingsView(controller: appDelegate.controller)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 820, height: 620)
+        .windowResizability(.contentMinSize)
+        .windowToolbarStyle(.unified)
 
         Window("English Learning", id: "english-lessons") {
-            SavedCorrectionsView(controller: appDelegate.controller.feedback,
-                                 onShortReview: { appDelegate.controller.startShortReview() })
+            VoxaLearningView(controller: appDelegate.controller)
         }
+        .defaultSize(width: 1060, height: 680)
+        .windowResizability(.contentMinSize)
+        .windowToolbarStyle(.unified)
     }
 }
 
@@ -124,7 +128,7 @@ struct VoxaMenuView: View {
                 get: { controller.preferences.automaticContextEnabled },
                 set: { controller.setAutomaticContextEnabled($0) }))
                 .disabled(!controller.canEditDictationSettings || !controller.preferences.englishFeedbackEnabled)
-                .help("Sends a short text excerpt from the active app to your feedback service. No screenshots; excerpts aren’t saved locally. Manage excluded apps in Voxa Settings.")
+                .help("Sends a short text excerpt from the active app to your feedback service. No screenshots; excerpts aren’t saved locally. Manage excluded apps in Settings.")
             if controller.feedback.isAnalyzing { Text("Reviewing your English…") }
             if let status = controller.feedback.status { Text(status) }
             Button("Show Latest Feedback") { controller.feedback.showLatest() }
@@ -154,7 +158,7 @@ struct VoxaMenuView: View {
             Button("Enable Input Monitoring…") { Permissions.openSettings("ListenEvent") }
         }
         Button { showSettings() } label: {
-            Label("Voxa Settings…", systemImage: "gearshape")
+            Label("Settings…", systemImage: "gearshape")
         }
         .keyboardShortcut(",")
         Button("Quit Voxa") { controller.quit() }
@@ -261,272 +265,5 @@ struct VoxaMenuView: View {
         }
 
         return "\(seconds)s"
-    }
-}
-
-@MainActor
-struct VoxaSettingsView: View {
-    @ObservedObject var controller: AppController
-    @StateObject private var hotkeyRecorder = HotkeyRecorder()
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section("Hotkeys") {
-                    hotkeyRow("Start / Stop", detail: "Press again to finish and paste.",
-                              current: controller.toggleHotkey, target: .toggle)
-                    hotkeyRow("Finish & Send", detail: "While recording, paste and press Return.",
-                              current: controller.finishAndSubmitHotkey, target: .finishAndSubmit)
-                    if controller.outputMode != .clipboardAutopaste {
-                        Label("Finish & Send requires Autopaste.", systemImage: "info.circle")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
-                    }
-                    if hotkeyRecorder.target != nil {
-                        Text("Hold the full combination, then release it to save. Press Esc to cancel.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .disabled(controller.isBusy || !controller.isReady)
-
-                Section("English Learning") {
-                    EnglishLearningSettingsView(feedbackEnabled: Binding(
-                        get: { controller.preferences.englishFeedbackEnabled },
-                        set: { controller.setEnglishFeedbackEnabled($0) }), contextEnabled: Binding(
-                        get: { controller.preferences.automaticContextEnabled },
-                        set: { controller.setAutomaticContextEnabled($0) }),
-                        excludedApps: controller.preferences.contextExcludedApps,
-                        hasAccessibility: controller.permissions.accessibility,
-                        canEdit: controller.canEditDictationSettings,
-                        onExclude: controller.excludeContextApp,
-                        onAllow: controller.allowContextApp,
-                        onOpenLessons: { openWindow(id: "english-lessons") })
-                }
-
-                Section("OpenAI API Key") {
-                    LabeledContent("API key") {
-                        if controller.isAPIKeySet {
-                            Text("••••••••")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(.primary)
-                                .accessibilityLabel("API key configured")
-                        } else {
-                            Text("Not configured")
-                        }
-                    }
-                    LabeledContent("Storage", value: controller.apiKeySource.replacingOccurrences(of: "_", with: " ").capitalized)
-                    SecureField(controller.isAPIKeySet ? "Replace API key" : "API key", text: $controller.apiKeyInput)
-                        .disabled(controller.isBusy)
-                        .accessibilityLabel("OpenAI API key")
-                        .accessibilityHint(controller.isAPIKeySet ? "A key is saved. Enter a new key to replace it." : "Enter your API key.")
-                    if let error = controller.apiKeyError, !error.isEmpty {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Button(controller.isSavingKey ? "Saving…" : (controller.isAPIKeySet ? "Replace Key" : "Save Key")) {
-                        controller.saveAPIKey()
-                    }
-                        .disabled(controller.isBusy || controller.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                if let error = controller.errorMessage, !error.isEmpty {
-                    Section {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("Try Again") { controller.retrySetup() }
-                            .disabled(controller.isBusy)
-                    }
-                }
-            }
-            .formStyle(.grouped)
-
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
-            }
-            .padding([.horizontal, .bottom])
-        }
-        .frame(width: 480, height: 700)
-        .onExitCommand {
-            if hotkeyRecorder.target != nil {
-                hotkeyRecorder.stop()
-            } else {
-                dismiss()
-            }
-        }
-        .onAppear { configureHotkeyRecorder() }
-        .onDisappear {
-            hotkeyRecorder.stop()
-            controller.apiKeyInput = ""
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-            hotkeyRecorder.stop()
-        }
-    }
-
-    private func hotkeyRow(_ title: String, detail: String, current: HotkeyOption, target: HotkeyRecordingTarget) -> some View {
-        SettingsShortcutRow(title: title, detail: detail,
-            shortcut: hotkeyRecorder.target == target ? (hotkeyRecorder.preview?.label ?? "Press keys") : current.label,
-            recording: hotkeyRecorder.target == target,
-            onRecord: { hotkeyRecorder.start(target: target, current: current) },
-            onCancel: { hotkeyRecorder.stop() })
-    }
-
-    private func configureHotkeyRecorder() {
-        hotkeyRecorder.onCommit = { target, hotkey in
-            switch target {
-            case .toggle: controller.setToggleHotkey(hotkey)
-            case .finishAndSubmit: controller.setFinishAndSubmitHotkey(hotkey)
-            }
-        }
-        hotkeyRecorder.onCaptureStateChanged = { controller.setHotkeyCaptureEnabled($0) }
-    }
-}
-
-private enum HotkeyRecordingTarget: Equatable {
-    case toggle
-    case finishAndSubmit
-}
-
-private final class HotkeyRecorder: ObservableObject {
-    @Published private(set) var target: HotkeyRecordingTarget?
-    @Published private(set) var preview: HotkeyOption?
-
-    var onCommit: ((HotkeyRecordingTarget, HotkeyOption) -> Void)?
-    var onCaptureStateChanged: ((Bool) -> Void)?
-
-    private var localMonitor: Any?
-    private var recordedModifiers: HotkeyModifiers = []
-    private var recordedKeyCodes: Set<UInt16> = []
-    private var keyDisplayOverrides: [UInt16: String] = [:]
-    private var pendingHotkey: HotkeyOption?
-
-    func start(target: HotkeyRecordingTarget, current: HotkeyOption) {
-        stop()
-
-        self.target = target
-        preview = current
-        onCaptureStateChanged?(true)
-
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
-            guard let self else { return event }
-            // A nil result consumes the event, including Escape; don't forward it
-            // to the Settings window's cancel action or its focused text field.
-            return self.handle(event)
-        }
-    }
-
-    func stop() {
-        if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
-            self.localMonitor = nil
-        }
-
-        let wasRecording = target != nil
-        target = nil
-        preview = nil
-        recordedModifiers = []
-        recordedKeyCodes.removeAll()
-        keyDisplayOverrides.removeAll()
-        pendingHotkey = nil
-
-        if wasRecording {
-            onCaptureStateChanged?(false)
-        }
-    }
-
-    private func handle(_ event: NSEvent) -> NSEvent? {
-        guard target != nil else {
-            return event
-        }
-
-        switch event.type {
-        case .keyDown:
-            if event.keyCode == KeyCode.escape {
-                stop()
-                return nil
-            }
-
-            guard !event.isARepeat, !HotkeyOption.isModifierKeyCode(event.keyCode) else {
-                return nil
-            }
-
-            recordedModifiers = HotkeyModifiers(eventFlags: event.modifierFlags)
-            recordedKeyCodes.insert(event.keyCode)
-            keyDisplayOverrides[event.keyCode] = HotkeyOption.displayName(
-                forKeyCode: event.keyCode,
-                characters: event.charactersIgnoringModifiers
-            )
-            updatePendingHotkey()
-            return nil
-
-        case .keyUp:
-            guard !HotkeyOption.isModifierKeyCode(event.keyCode) else {
-                return nil
-            }
-
-            recordedModifiers = HotkeyModifiers(eventFlags: event.modifierFlags)
-            recordedKeyCodes.remove(event.keyCode)
-            if recordedKeyCodes.isEmpty && recordedModifiers.isEmpty {
-                commitPendingHotkey()
-            }
-            return nil
-
-        case .flagsChanged:
-            recordedModifiers = HotkeyModifiers(eventFlags: event.modifierFlags)
-            if recordedKeyCodes.isEmpty && recordedModifiers.isEmpty {
-                commitPendingHotkey()
-            } else {
-                updatePendingHotkey()
-            }
-            return nil
-
-        default:
-            return event
-        }
-    }
-
-    private func updatePendingHotkey() {
-        let sortedKeyCodes = recordedKeyCodes.sorted()
-        if sortedKeyCodes.isEmpty {
-            if let modifierOnly = HotkeyOption.modifierOnly(recordedModifiers) {
-                preview = modifierOnly
-                pendingHotkey = modifierOnly
-            }
-            return
-        }
-
-        let keyDisplays = sortedKeyCodes.map { keyCode in
-            keyDisplayOverrides[keyCode] ?? HotkeyOption.displayName(forKeyCode: keyCode, characters: nil)
-        }
-
-        let hotkey = HotkeyOption(
-            keyCodes: sortedKeyCodes,
-            modifiers: recordedModifiers,
-            keyDisplays: keyDisplays
-        )
-        preview = hotkey
-        pendingHotkey = hotkey
-    }
-
-    private func commitPendingHotkey() {
-        guard let pendingHotkey else {
-            stop()
-            return
-        }
-
-        commit(pendingHotkey)
-    }
-
-    private func commit(_ hotkey: HotkeyOption) {
-        guard let target else {
-            return
-        }
-
-        stop()
-        onCommit?(target, hotkey)
     }
 }
