@@ -55,8 +55,13 @@ the relevant System Settings page. Return to Voxa after granting access.
 | Finish & Send | Press **Option + G** while recording in Autopaste mode |
 | Discard a recording | Press **Esc** while recording (also cancels microphone startup) |
 
-Change shortcuts in **Settings… → Shortcuts**. **General** contains the
-transcription model, output mode, recording limit and permission status.
+Choose the transcription model, output mode, and recording limit directly from
+the menu bar's **Model**, **Output**, and **Max Recording** menus. Feedback and
+nearby-text switches are under **English Learning**. Missing permissions have
+**Enable…** actions in the menu bar that open macOS System Settings.
+
+Settings contains **Shortcuts**, **Privacy**, and **API Key**.
+Change shortcuts in **Settings… → Shortcuts**.
 Click the displayed key combination to record a replacement; release the keys to save.
 Start / Stop, Finish & Send, Save feedback and Cancel / Close are configurable.
 Shortcuts cannot overlap. Save feedback requires a modifier and one key;
@@ -114,7 +119,7 @@ you replace it with another dictation or quit Voxa.
 
 ### English learning
 
-Enable **Settings → English Learning → Feedback after dictation** for
+Enable **English Learning → English feedback** in the menu bar for
 background English coaching. Dictation is inserted normally and never rewritten;
 feedback failures do not interrupt it.
 
@@ -179,11 +184,9 @@ A failed save keeps the review open for retry.
   Recognition issues are excluded. ⌘S also closes a review with no lessons.
 - **Close / Esc:** close without saving lessons. Local progress remains available.
 
-These are the default shortcuts. Customize both in Settings → Shortcuts; the
-feedback buttons and English Learning settings show your current combinations.
-The Save feedback and Cancel / Close key buttons in English Learning settings can
-also be edited directly. Click a combination, press the new keys, and release them
-to save. Escape can be assigned to Cancel / Close.
+These are the default shortcuts. Customize both in **Settings → Shortcuts**;
+the feedback buttons show your current combinations. Click a combination, press
+the new keys, and release them to save. Escape can be assigned to Cancel / Close.
 
 - **English Learning → Lessons & Progress…:** review, practise, or delete saved
   lessons, and view or clear progress separately.
@@ -222,7 +225,7 @@ review, and **Progress** shows your expression profile. Resize the window or dra
 the divider beside the lesson list to give the text more room.
 
 Settings also has a sidebar search. Search for a page or a control, such as
-“microphone”, “shortcuts” or “Keychain”, then choose the matching page.
+“excluded apps”, “shortcuts” or “Keychain”, then choose the matching page.
 
 A failed save keeps the review open. While feedback is visible, ⌘S saves it and
 Esc closes it. During recording, Esc discards the recording before transcription
@@ -251,10 +254,9 @@ unsaved findings; saved lessons and existing progress remain until deleted.
 
 ### Automatic text context
 
-Enable **Settings → English Learning → Use nearby text automatically** once
+Enable **English Learning → Use Nearby Text Automatically** in the menu bar
 to give English feedback more background while you work. It is off by default,
-including after upgrading. English feedback must also be enabled. A menu toggle
-is available under **English Learning**.
+including after upgrading. English feedback must also be enabled.
 
 At recording start, VOXA reads text around the cursor through macOS Accessibility.
 For an empty or short multiline editor, it also looks for visible text immediately
@@ -267,8 +269,10 @@ chat integration. It does not scroll or select text.
 Capture runs alongside recording with a 450 ms budget and short per-read timeouts.
 Dictation never waits for it. Missing Accessibility access, unsupported apps, a
 changed app/window/focus, or a slow read simply means feedback proceeds without
-context. Protected password/search fields are skipped. **Manage exclusions… → Add App…** lets
-you disable capture for any app, including an entire browser.
+context. Protected password/search fields are skipped. **Settings → Privacy →
+Add App…** lets you disable capture for any app, including an entire browser.
+Excluded apps appear directly on that page; remove an app with its minus button
+to allow context again.
 
 Only text is sent, in the existing feedback request: no screenshots, OCR, extra
 model call, or change to the audio transcription/pasted output. The excerpt is
@@ -279,10 +283,9 @@ retention still applies. Turning context off or changing exclusions clears an
 in-progress capture and cancels pending feedback that used context; a request
 already sent cannot be recalled. Practice never captures context.
 
-Settings group feedback and its optional context together. Short descriptions sit
-beside the controls; **Data & privacy** contains the detailed sending, storage and
-practice information without a disclosure control. **Open English Learning** opens
-the library, practice and progress sidebar.
+The **Privacy** page keeps app exclusions and sending, storage, and practice
+details together. Open **English Learning → Lessons & Progress…** in the menu
+bar for the library, practice, and progress sidebar.
 
 ### Dictation data
 

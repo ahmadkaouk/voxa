@@ -4,21 +4,19 @@ import SwiftUI
 private typealias SettingsState<Value> = SwiftUI.State<Value>
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, shortcuts, learning, apiKey
+    case shortcuts, privacy, apiKey
     var id: Self { self }
     var title: String {
         switch self {
-        case .general: return "General"
         case .shortcuts: return "Shortcuts"
-        case .learning: return "English Learning"
+        case .privacy: return "Privacy"
         case .apiKey: return "API Key"
         }
     }
     var symbol: String {
         switch self {
-        case .general: return "gear"
         case .shortcuts: return "keyboard"
-        case .learning: return "globe"
+        case .privacy: return "hand.raised"
         case .apiKey: return "key.horizontal"
         }
     }
@@ -27,9 +25,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let keywords: String
         switch self {
-        case .general: keywords = "dictation transcription model output recording limit microphone accessibility input monitoring permissions"
         case .shortcuts: keywords = "keyboard start stop finish send save feedback cancel close escape"
-        case .learning: keywords = "English feedback lessons corrections practice context excluded apps"
+        case .privacy: keywords = "English feedback practice nearby text context excluded apps data storage retention"
         case .apiKey: keywords = "OpenAI API key connection credentials storage Keychain"
         }
         return query.isEmpty || (title + " " + keywords).localizedStandardContains(query)
@@ -44,7 +41,7 @@ struct SettingsSidebarLayout<Content: View>: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                sidebarSection("Settings", panes: [.general, .shortcuts, .learning])
+                sidebarSection("Settings", panes: [.shortcuts, .privacy])
                 sidebarSection("Connection", panes: [.apiKey])
             }
             .voxaSidebarStyle()
@@ -60,7 +57,7 @@ struct SettingsSidebarLayout<Content: View>: View {
                 content.frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             }
             .background(Color(nsColor: .windowBackgroundColor))
-            .navigationTitle((selection ?? .general).title)
+            .navigationTitle((selection ?? .shortcuts).title)
         }
         .navigationSplitViewStyle(.balanced)
         .searchable(text: $search, placement: .sidebar, prompt: "Search")
@@ -75,7 +72,7 @@ struct SettingsSidebarLayout<Content: View>: View {
             Section(title) {
                 ForEach(matching) { pane in
                     VoxaSidebarLabel(title: pane.title, symbol: pane.symbol,
-                                     isSelected: (selection ?? .general) == pane).tag(pane)
+                                     isSelected: (selection ?? .shortcuts) == pane).tag(pane)
                 }
             }
         }
@@ -101,56 +98,34 @@ struct SettingsPage<Content: View>: View {
     }
 }
 
-struct GeneralSettingsView: View {
-    @Binding var model: ModelOption
-    @Binding var output: OutputModeOption
-    @Binding var duration: UInt64
-    let permissions: Permissions
-    var canEdit = true
+struct SettingsShortcutRow: View {
+    let title: String
+    let detail: String
+    let shortcut: String
+    var recording = false
+    var onRecord: () -> Void
+    var onCancel: () -> Void
 
     var body: some View {
-        SettingsPage(title: "General", subtitle: "Choose how Voxa records and delivers your words.") {
-            Form {
-                Section("Dictation") {
-                    Picker("Transcription model", selection: $model) {
-                        ForEach(ModelOption.allCases) { Text($0.label).tag($0) }
-                    }.tint(.primary)
-                    Picker("Output", selection: $output) {
-                        ForEach(OutputModeOption.allCases) { Text($0.label).tag($0) }
-                    }.tint(.primary)
-                    Picker("Recording limit", selection: $duration) {
-                        ForEach(Array(Set([30, 60, 120, 300, 600, 1800, 3600, duration])).sorted(), id: \.self) { seconds in
-                            Text(seconds % 60 == 0 ? "\(seconds / 60) min" : "\(seconds) sec").tag(seconds)
-                        }
-                    }.tint(.primary)
-                }.disabled(!canEdit)
-                Section {
-                    permission("Microphone", detail: "Record your voice.",
-                               enabled: permissions.microphone == .authorized, pane: "Microphone")
-                    permission("Accessibility", detail: "Paste into apps and read optional context.",
-                               enabled: permissions.accessibility, pane: "Accessibility")
-                    permission("Input Monitoring", detail: "Use dictation shortcuts in any app.",
-                               enabled: permissions.inputMonitoring, pane: "ListenEvent")
-                } header: { Text("Permissions") } footer: {
-                    Text("Manage access in macOS System Settings. Recording changes apply to your next dictation.")
-                }
-            }.voxaSettingsFormStyle()
-        }
-    }
-
-    private func permission(_ title: String, detail: String, enabled: Bool, pane: String) -> some View {
-        HStack {
-            SettingsControlLabel(title: title, detail: detail)
-            Spacer(minLength: 12)
-            if enabled {
-                Label("Allowed", systemImage: "checkmark.circle")
-                    .font(.callout).foregroundStyle(Color(nsColor: .systemGreen))
-                    .frame(width: 100, alignment: .leading).padding(.trailing, 8)
-            } else {
-                Button("Open Settings…") { Permissions.openSettings(pane) }
-                    .accessibilityLabel("Allow \(title) in System Settings")
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.body).foregroundStyle(.primary)
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+                    .lineSpacing(2).fixedSize(horizontal: false, vertical: true)
             }
-        }.padding(.vertical, 3)
+            Spacer(minLength: 4)
+            Button(action: recording ? onCancel : onRecord) {
+                Text(shortcut).font(.body)
+                    .frame(minWidth: 74)
+                    .fixedSize()
+            }.buttonStyle(.bordered).foregroundStyle(.primary)
+                .overlay(RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(recording ? Color.accentColor : Color.clear, lineWidth: 2))
+                .accessibilityLabel("\(title) shortcut")
+                .accessibilityValue(recording ? "Recording shortcut" : shortcut)
+                .accessibilityHint(recording ? "Press your new shortcut, or click to cancel." : "Click to change this shortcut.")
+                .help(recording ? "Press your new shortcut. Click here to cancel." : "Click the key combination to change it")
+        }.padding(.vertical, 3).accessibilityElement(children: .contain)
     }
 }
 
@@ -230,7 +205,7 @@ struct ShortcutsSettingsView: View {
                 }
                 Section("Recording and feedback") {
                     row("Cancel / Close", detail: "Discard dictation or close feedback.", current: cancel, target: .cancel)
-                    row("Save feedback", detail: "Save the visible corrections and close feedback.", current: saveFeedback, target: .saveFeedback)
+                    row("Save feedback", detail: "Save every lesson in the review and close feedback.", current: saveFeedback, target: .saveFeedback)
                 }
                 if let target = recorder.target {
                     Text(target == .cancel
@@ -254,9 +229,8 @@ struct ShortcutsSettingsView: View {
 struct VoxaSettingsView: View {
     @ObservedObject var controller: AppController
     @StateObject private var hotkeyRecorder = HotkeyRecorder()
-    @SettingsState private var selection: SettingsPane? = .general
+    @SettingsState private var selection: SettingsPane? = .shortcuts
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         SettingsSidebarLayout(selection: $selection) {
@@ -288,49 +262,21 @@ struct VoxaSettingsView: View {
     }
 
     @ViewBuilder private var page: some View {
-        switch selection ?? .general {
-        case .general:
-            GeneralSettingsView(model: Binding(get: { controller.model }, set: { controller.setModel($0) }),
-                output: Binding(get: { controller.outputMode }, set: { controller.setOutputMode($0) }),
-                duration: Binding(get: { controller.maxRecordingSeconds }, set: { controller.setMaxRecordingSeconds($0) }),
-                permissions: controller.permissions, canEdit: controller.canEditDictationSettings)
+        switch selection ?? .shortcuts {
         case .shortcuts:
             ShortcutsSettingsView(recorder: hotkeyRecorder, toggle: controller.toggleHotkey,
                 finishAndSubmit: controller.finishAndSubmitHotkey, saveFeedback: controller.saveFeedbackHotkey,
                 cancel: controller.cancelHotkey, canEdit: !controller.isBusy && controller.isReady,
                 canSubmit: controller.outputMode == .clipboardAutopaste)
-        case .learning:
-            SettingsPage(title: "English Learning", subtitle: "Turn everyday dictation into a little practice.") {
-                EnglishLearningSettingsView(feedbackEnabled: Binding(
-                    get: { controller.preferences.englishFeedbackEnabled }, set: { controller.setEnglishFeedbackEnabled($0) }),
-                    contextEnabled: Binding(get: { controller.preferences.automaticContextEnabled },
-                                            set: { controller.setAutomaticContextEnabled($0) }),
-                    excludedApps: controller.preferences.contextExcludedApps,
-                    hasAccessibility: controller.permissions.accessibility,
-                    saveShortcut: controller.saveFeedbackHotkey.symbolLabel, cancelShortcut: controller.cancelHotkey.symbolLabel,
-                    canEdit: controller.canEditDictationSettings,
-                    recordingShortcut: hotkeyRecorder.target, shortcutPreview: hotkeyRecorder.preview?.symbolLabel,
-                    onEditShortcut: editShortcut,
-                    onExclude: controller.excludeContextApp, onAllow: controller.allowContextApp,
-                    onOpenLessons: { openWindow(id: "english-lessons") })
-            }
+        case .privacy:
+            PrivacySettingsView(excludedApps: controller.preferences.contextExcludedApps,
+                canEdit: controller.canEditDictationSettings,
+                onExclude: controller.excludeContextApp, onAllow: controller.allowContextApp)
         case .apiKey:
             APIKeySettingsView(configured: controller.isAPIKeySet, source: controller.apiKeySource,
                 input: $controller.apiKeyInput, busy: controller.isBusy, saving: controller.isSavingKey,
                 error: controller.apiKeyError, onSave: controller.saveAPIKey)
         }
-    }
-
-    private func editShortcut(_ target: HotkeyRecordingTarget) {
-        if hotkeyRecorder.target == target { hotkeyRecorder.stop(); return }
-        let current: HotkeyOption
-        switch target {
-        case .toggle: current = controller.toggleHotkey
-        case .finishAndSubmit: current = controller.finishAndSubmitHotkey
-        case .saveFeedback: current = controller.saveFeedbackHotkey
-        case .cancel: current = controller.cancelHotkey
-        }
-        hotkeyRecorder.start(target: target, current: current)
     }
 
     private func configureHotkeyRecorder() {

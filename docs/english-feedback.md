@@ -28,11 +28,12 @@ explanations, and the distinction between errors and optional alternatives.
 ## Manual release checks
 
 - Dictation and Finish & Send complete before feedback appears; the destination keeps focus.
-- Settings use a native sidebar with General, Shortcuts, English Learning and API Key.
+- Settings use a native sidebar with Shortcuts, Privacy and API Key.
   Native sidebar search filters pages by title and control keywords; clearing it
-  restores all pages. Verify system-blue selection and compact icon rows.
-  English Learning keeps feedback, context, exclusions and privacy in grouped rows.
-  Privacy details remain expanded; Open English Learning opens the learning window.
+  restores all pages. Verify charcoal selection and compact icon rows.
+  Privacy keeps app exclusions inline and data details expanded. Model, output,
+  recording limit, feedback and nearby-text switches are available in the menu bar.
+  English Learning → Lessons & Progress opens the learning window.
 - The learning sidebar switches between the complete library, corrections, natural
   phrasing, practice and progress. Native sidebar search updates the list and selected lesson;
   searching from Practice or Progress opens All Lessons.
@@ -152,7 +153,7 @@ explanations, and the distinction between errors and optional alternatives.
 fixtures in light/dark appearances, a compact single correction, paired alternatives,
 alternative-only feedback with/without a template and on a small display,
 a full rewrite, a small review panel, a clean review and the
-Progress view, plus repetition, new-example, result, short-review and automatic-context settings screens. It uses
+Progress view, plus repetition, new-example, result, short-review, Privacy and Shortcuts screens. It uses
 memory-only stores and no microphone, Keychain or API calls.
 Generated PNGs are in `.build/feedback-previews/`. This verifies layout separately
 from linguistic quality; the deterministic suite does not measure model accuracy.
