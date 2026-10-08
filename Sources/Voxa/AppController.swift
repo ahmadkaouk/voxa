@@ -23,8 +23,7 @@ final class AppController: ObservableObject {
     private let store: PreferencesStore
     private let keychain: Keychain
     private let hotkeys = GlobalHotkeyBridge()
-    private let overlay = ActivityOverlayController()
-    private let feedbackPanel = FeedbackPanelController()
+    private lazy var overlay = DynamicIslandController(feedback: feedback)
     private let practiceWindow = PracticeWindowController()
     private let sounds = DictationSoundController()
     private var subscriptions = Set<AnyCancellable>()
@@ -32,7 +31,7 @@ final class AppController: ObservableObject {
     private var setupTask: Task<Void, Never>?
     private var keyTask: Task<Void, Never>?
     private var completionPresentation: Task<Void, Never>?
-    private var showingPasteCompletion = false
+    private var showingOutputCompletion = false
     private var overlayCancelled = false
     private var closing = false
     private var capturingHotkey = false
@@ -67,7 +66,7 @@ final class AppController: ObservableObject {
             guard let self else { return }
             self.feedback.setPracticeActive(visible)
             if visible {
-                self.completionPresentation?.cancel(); self.overlay.hide()
+                self.completionPresentation?.cancel(); self.overlay.hideAll()
                 self.practiceWindow.show(self.practice)
             } else { self.practiceWindow.hide() }
             self.objectWillChange.send()
@@ -84,11 +83,7 @@ final class AppController: ObservableObject {
             self?.feedback.analyze(id: id, transcript: text, apiKey: key, context: context)
         }
         session.onDeliveryFinished = { [weak self] id in self?.feedback.deliveryFinished(id: id) }
-        feedback.$panelVisible.removeDuplicates().sink { [weak self] visible in
-            guard let self else { return }
-            if visible { self.feedbackPanel.show(self.feedback) }
-            else { self.feedbackPanel.hide() }
-        }.store(in: &subscriptions)
+        _ = overlay // Start observing feedback before any analysis can finish.
         feedback.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         hotkeys.onSaveFeedback = { [weak self] in
             guard let self, self.isReady, !self.closing, !self.capturingHotkey else { return false }
@@ -166,7 +161,6 @@ final class AppController: ObservableObject {
     var model: ModelOption { session.settings.model }
     var outputMode: OutputModeOption { session.settings.outputMode }
     var maxRecordingSeconds: UInt64 { preferences.maxRecordingSeconds }
-    var feedbackAutoCloseSeconds: UInt64 { preferences.feedbackAutoCloseSeconds }
     var apiKeySource: String { preferences.apiKeySource }
     var errorMessage: String? {
         if case .failed(_, let message) = session.state { return message }
@@ -192,7 +186,6 @@ final class AppController: ObservableObject {
                 let loaded = try store.load()
                 preferences = loaded
                 feedback.setEnabled(loaded.englishFeedbackEnabled)
-                feedback.setAutoCloseSeconds(loaded.feedbackAutoCloseSeconds)
                 _ = session.updateSettings(loaded.dictation)
                 try CaptureGuard.check()
                 let key = try await keychain.value(source: loaded.apiKeySource)
@@ -206,7 +199,7 @@ final class AppController: ObservableObject {
             } catch {
                 guard !closing else { return }
                 setupError = error.localizedDescription
-                overlay.hide()
+                overlay.hideAll()
             }
         }
     }
@@ -252,7 +245,6 @@ final class AppController: ObservableObject {
             }
             preferences = next
             feedback.setEnabled(next.englishFeedbackEnabled)
-            feedback.setAutoCloseSeconds(next.feedbackAutoCloseSeconds)
             settingsError = nil
             // Non-shortcut edits leave physical key tracking alone.
             if hotkeysChanged {
@@ -305,7 +297,6 @@ final class AppController: ObservableObject {
     func setOutputMode(_ value: OutputModeOption) { update(duringDictation: true) { $0.outputMode = value.rawValue } }
     func setMaxRecordingSeconds(_ value: UInt64) { update(duringDictation: true) { $0.maxRecordingSeconds = value } }
     func setEnglishFeedbackEnabled(_ value: Bool) { update(duringDictation: true) { $0.englishFeedbackEnabled = value } }
-    func setFeedbackAutoCloseSeconds(_ value: UInt64) { update(duringDictation: true) { $0.feedbackAutoCloseSeconds = value } }
     func setAutomaticContextEnabled(_ value: Bool) { update(duringDictation: true) { $0.automaticContextEnabled = value } }
     func excludeContextApp(_ app: ContextExcludedApp) {
         update(duringDictation: true) {
@@ -363,39 +354,44 @@ final class AppController: ObservableObject {
     }
 
     private func present(_ state: DictationState, level: Double) {
-        guard isReady, !closing, !practice.isPresented, !practice.isBusy else { overlay.hide(); return }
+        guard isReady, !closing, !practice.isPresented, !practice.isBusy else { overlay.hideAll(); return }
+        overlay.resume()
         guard !overlayCancelled, !state.isDiscarding else { overlay.hide(); return }
-        // A paste read already started the checkmark. Finishing clipboard cleanup
-        // must neither delay it nor restart its display timer.
-        if showingPasteCompletion {
-            if case .restoringClipboard = state { return }
-            if case .idle = state, session.lastOutcome?.showsSuccess == true { return }
+        // Repeated idle updates must not restart the output-disabled notice.
+        if showingOutputCompletion {
+            if case .idle = state, session.lastOutcome?.showsCompletion == true { return }
         }
         completionPresentation?.cancel()
-        showingPasteCompletion = false
+        showingOutputCompletion = false
         switch state {
         case .starting(_, let requested):
             if requested == nil { show(.listening, title: "Preparing microphone…") }
             else { show(.transcribing, title: "Finishing recording…") }
         case .recording: show(.listening, title: "Listening", level: level)
         case .finishing: show(.transcribing, title: "Finishing recording…")
-        case .transcribing: show(.transcribing, title: "Transcribing")
-        case .delivering: show(.transcribing, title: "Delivering transcript…")
+        case .transcribing, .delivering: show(.transcribing, title: "Transcribing")
         case .restoringClipboard:
-            showingPasteCompletion = true
-            showCompletion(title: "Transcript pasted")
+            overlay.finishDelivery()
         case .failed: overlay.hide()
         case .idle:
-            if let outcome = session.lastOutcome, outcome.showsSuccess {
-                showCompletion(title: outcome.message)
-                return
+            if let outcome = session.lastOutcome {
+                switch outcome {
+                case .paste, .copied:
+                    overlay.finishDelivery()
+                    return
+                default: break
+                }
+                if outcome.showsCompletion {
+                    showCompletion(title: outcome.message)
+                    return
+                }
             }
             overlay.hide()
         }
     }
 
     private func showCompletion(title: String) {
-        showingPasteCompletion = true
+        showingOutputCompletion = true
         show(.outputting, title: title)
         completionPresentation = Task {
             do { try await Task.sleep(nanoseconds: 900_000_000) } catch { return }
@@ -414,8 +410,7 @@ final class AppController: ObservableObject {
         for (center, token) in observers { center.removeObserver(token) }
         observers.removeAll()
         completionPresentation?.cancel(); setupTask?.cancel(); keyTask?.cancel()
-        overlay.hide()
-        feedbackPanel.hide()
+        overlay.shutdown()
         practiceWindow.hide()
         await practice.shutdown()
         await feedback.shutdown()

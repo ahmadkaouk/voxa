@@ -123,7 +123,6 @@ private struct FeedbackConcept: View {
     let style: FeedbackStyle
     let sample: Sample
     @DesignState private var expanded = false
-    @DesignState private var pinned = false
     @DesignState private var page = 0
     @DesignState private var saved = false
     @DesignState private var closed = false
@@ -182,12 +181,6 @@ private struct FeedbackConcept: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
-            Button { pinned.toggle() } label: {
-                Image(systemName: pinned ? "pin.fill" : "pin")
-                    .font(.system(size: 12)).frame(width: 26, height: 26)
-            }.buttonStyle(.plain).foregroundStyle(pinned ? Color(nsColor: .systemBlue) : Color.secondary)
-                .help(pinned ? "Unpin feedback" : "Keep feedback open")
-                .accessibilityLabel(pinned ? "Unpin feedback" : "Keep feedback open")
             Button { closed = true } label: {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                     .frame(width: 26, height: 26).background(.primary.opacity(0.065), in: Circle())
@@ -273,7 +266,7 @@ private struct FeedbackConcept: View {
     private var footer: some View {
         HStack(spacing: 8) {
             if style == .quiet {
-                Text(pinned ? "Pinned" : "Timer pauses while reading")
+                Text("Close or save when you’re ready")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             } else {
                 Button { practising = true } label: { Label("Try once", systemImage: "mic") }

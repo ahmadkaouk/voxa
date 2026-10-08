@@ -232,30 +232,38 @@ enum NativeSetupChecks {
             try unitEqual(value.maxRecordingSeconds, 120)
             try unitEqual(value.apiKeySource, "env")
             try unitExpect(!value.englishFeedbackEnabled)
-            try unitEqual(value.feedbackAutoCloseSeconds, 5)
             try unitEqual(defaults.data(forKey: PreferencesStore.storageKey), original)
             value.maxRecordingSeconds = 60
             value.englishFeedbackEnabled = true
-            value.feedbackAutoCloseSeconds = 30
             try store.save(value)
             try unitEqual(try PreferencesStore(defaults: defaults).load(), value)
         }
     }
 
-    static func autoCloseSettingsPersist() throws {
+    static func legacyFeedbackTimerIsIgnored() throws {
         try withStore { defaults in
+            var legacy = savedPreferences
+            legacy["englishFeedbackEnabled"] = true
+            legacy["automaticContextEnabled"] = true
+            legacy["contextExcludedApps"] = [["bundleID": "example.private", "name": "Private workspace"]]
+            let expected = try JSONDecoder().decode(Preferences.self,
+                from: JSONSerialization.data(withJSONObject: legacy)).validated()
             let store = PreferencesStore(defaults: defaults)
-            var preferences = try store.load()
-            try unitEqual(preferences.feedbackAutoCloseSeconds, 5)
-            for seconds: UInt64 in [0, 1, 17, 60, 300] {
-                preferences.feedbackAutoCloseSeconds = seconds
-                try store.save(preferences)
-                try unitEqual(try PreferencesStore(defaults: defaults).load(), preferences)
+            // The retired field is ignored regardless of its old duration or representation.
+            for retiredValue: Any in [0, 5, 30, 300, -1, "retired", NSNull()] {
+                legacy["feedbackAutoCloseSeconds"] = retiredValue
+                let original = try JSONSerialization.data(withJSONObject: ["version": 1, "preferences": legacy])
+                defaults.set(original, forKey: PreferencesStore.storageKey)
+                let loaded = try store.load()
+                try unitEqual(loaded, expected)
+                try unitEqual(defaults.data(forKey: PreferencesStore.storageKey), original)
+                try store.save(loaded)
+                let upgraded = try JSONSerialization.jsonObject(with: defaults.data(forKey: PreferencesStore.storageKey)!) as? [String: Any]
+                let upgradedPreferences = upgraded?["preferences"] as? [String: Any]
+                try unitExpect(upgradedPreferences != nil)
+                try unitExpect(upgradedPreferences?["feedbackAutoCloseSeconds"] == nil)
+                try unitEqual(try PreferencesStore(defaults: defaults).load(), expected)
             }
-            var invalid = preferences
-            invalid.feedbackAutoCloseSeconds = 301
-            try rejected { try store.save(invalid) }
-            try unitEqual(try store.load(), preferences)
         }
     }
 
@@ -273,8 +281,6 @@ enum NativeSetupChecks {
                                  ("finishAndSubmitHotkey", HotkeyOption(keyCodes: [KeyCode.returnKey], modifiers: []).persistedValue),
                                  ("model", "unknown"), ("outputMode", "unknown"), ("apiKeySource", "unknown"),
                                  ("maxRecordingSeconds", 0), ("maxRecordingSeconds", 3601),
-                                 ("feedbackAutoCloseSeconds", -1), ("feedbackAutoCloseSeconds", 301),
-                                 ("feedbackAutoCloseSeconds", "30"), ("feedbackAutoCloseSeconds", 1.5),
                                  ("maxRecordingSeconds", "60")] as [(String, Any)] {
                 var invalid = savedPreferences
                 invalid[key] = value
@@ -359,7 +365,7 @@ enum NativeSetupChecks {
         ("setup: duplicate app protection before and after prompts", duplicateAppProtection),
         ("setup: invalid saved configuration rejected without overwriting it", rejectsInvalidSettings),
         ("setup: existing v1 settings and relaunch preserved", savedSettingsSurviveRelaunch),
-        ("setup: auto-close settings persist and reject invalid durations", autoCloseSettingsPersist),
+        ("setup: legacy feedback timer is ignored and omitted on save", legacyFeedbackTimerIsIgnored),
         ("setup: retired hold shortcut migrates without losing enabled features", submitShortcutMigration),
         ("shortcuts: plain Enter passes through and Finish & Send is contextual", globalShortcutRouting),
         ("shortcuts: custom feedback bindings route, persist, and migrate without conflicts", configurableFeedbackShortcuts),
@@ -374,7 +380,7 @@ final class NativeSetupTests: XCTestCase {
     func testDuplicateAppProtection() async throws { try await NativeSetupChecks.duplicateAppProtection() }
     func testRejectsInvalidSettings() async throws { try await NativeSetupChecks.rejectsInvalidSettings() }
     func testSavedSettingsSurviveRelaunch() async throws { try await NativeSetupChecks.savedSettingsSurviveRelaunch() }
-    func testAutoCloseSettingsPersist() async throws { try await NativeSetupChecks.autoCloseSettingsPersist() }
+    func testLegacyFeedbackTimerIsIgnored() async throws { try await NativeSetupChecks.legacyFeedbackTimerIsIgnored() }
     func testSubmitShortcutMigration() async throws { try await NativeSetupChecks.submitShortcutMigration() }
     func testGlobalShortcutRouting() async throws { try await NativeSetupChecks.globalShortcutRouting() }
     func testConfigurableFeedbackShortcuts() async throws { try await NativeSetupChecks.configurableFeedbackShortcuts() }

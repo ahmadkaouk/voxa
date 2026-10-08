@@ -72,11 +72,6 @@ private final class WorkspaceFixtures: ObservableObject {
             guard let self else { return }
             if visible {
                 if !self.useCardWindow { self.reviewPanel.show(self.review) }
-                // Hold this synthetic panel open while checking its disclosure controls.
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.review.panelVisible, !self.review.isPinned else { return }
-                    self.review.togglePinned()
-                }
             }
             else { self.reviewPanel.hide() }
         }
@@ -206,7 +201,6 @@ private struct WorkspaceSettingsPreview: View {
     @PreviewState private var duration: UInt64 = 300
     @PreviewState private var feedback = true
     @PreviewState private var context = true
-    @PreviewState private var autoCloseSeconds: UInt64 = 5
     @PreviewState private var key = ""
     @PreviewState private var keyConfigured = true
     @PreviewState private var toggle = HotkeyOption.defaultToggle
@@ -224,7 +218,6 @@ private struct WorkspaceSettingsPreview: View {
             case .learning:
                 SettingsPage(title: "English Learning", subtitle: "Turn everyday dictation into a little practice.") {
                     EnglishLearningSettingsView(feedbackEnabled: $feedback, contextEnabled: $context,
-                        autoCloseSeconds: $autoCloseSeconds,
                         excludedApps: [], hasAccessibility: true, saveShortcut: save.symbolLabel, cancelShortcut: cancel.symbolLabel,
                         recordingShortcut: recorder.target, shortcutPreview: recorder.preview?.symbolLabel,
                         onEditShortcut: editShortcut,
@@ -270,16 +263,74 @@ private struct WorkspaceSettingsPreview: View {
 private struct FeedbackCardPreview: View {
     @ObservedObject var controller: FeedbackController
     let onReplay: () -> Void
+    @PreviewState private var darkAppearance = false
+    @PreviewState private var backdrop = FeedbackPreviewBackdrop.white
+    @PreviewState private var reduceTransparency = false
+    @PreviewState private var increaseContrast = false
+
     var body: some View {
-        VStack {
-            if controller.panelVisible {
-                FeedbackReviewView(controller: controller, maximumHeight: 600)
-            } else {
-                VStack(spacing: 16) {
-                    Text("Feedback closed").font(.headline)
-                    Button("Replay feedback", action: onReplay)
-                }.frame(width: FeedbackReviewView.width, height: 200)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Appearance", selection: $darkAppearance) {
+                    Text("Light").tag(false)
+                    Text("Dark").tag(true)
+                }.pickerStyle(.segmented)
+                Picker("Backdrop", selection: $backdrop) {
+                    ForEach(FeedbackPreviewBackdrop.allCases) { value in
+                        Text(value.rawValue).tag(value)
+                    }
+                }.pickerStyle(.segmented)
+                HStack {
+                    Toggle("Reduce Transparency", isOn: $reduceTransparency)
+                    Toggle("Increase Contrast", isOn: $increaseContrast)
+                }.toggleStyle(.checkbox).font(.system(size: 11))
+            }.padding(16).background(Color(nsColor: .windowBackgroundColor))
+            Divider()
+            VStack {
+                if controller.panelVisible {
+                    FeedbackReviewView(controller: controller, maximumHeight: 600)
+                } else {
+                    VStack(spacing: 16) {
+                        Text("Feedback closed").font(.headline)
+                        Button("Replay feedback", action: onReplay)
+                    }.frame(width: FeedbackReviewView.width, height: 200)
+                }
             }
-        }.padding(28).background(Color(nsColor: .windowBackgroundColor))
+            // The SDK exposes read-only public getters for these settings and
+            // writable preview keys. Override only this fixture, not macOS preferences.
+            .environment(\._accessibilityReduceTransparency, reduceTransparency)
+            .environment(\._colorSchemeContrast, increaseContrast ? .increased : .standard)
+            .padding(28).background { backdrop.surface }
+        }
+        .frame(width: FeedbackReviewView.width + 56)
+        .preferredColorScheme(darkAppearance ? .dark : .light)
+    }
+}
+
+private enum FeedbackPreviewBackdrop: String, CaseIterable, Identifiable {
+    case white = "White", dark = "Dark", wallpaper = "Wallpaper"
+    var id: Self { self }
+
+    @ViewBuilder var surface: some View {
+        switch self {
+        case .white: Color.white
+        case .dark: Color(white: 0.055)
+        case .wallpaper:
+            LinearGradient(colors: [.cyan, .indigo, .black, .orange, .white],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                .overlay {
+                    Canvas { context, size in
+                        for index in 0..<20 {
+                            let x = CGFloat(index) * 72 - size.height
+                            let stripe = Path { path in
+                                path.move(to: CGPoint(x: x, y: 0))
+                                path.addLine(to: CGPoint(x: x + size.height, y: size.height))
+                            }
+                            context.stroke(stripe, with: .color(index.isMultiple(of: 2)
+                                ? .white.opacity(0.8) : .black.opacity(0.65)), lineWidth: 24)
+                        }
+                    }
+                }
+        }
     }
 }

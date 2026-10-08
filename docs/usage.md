@@ -66,12 +66,26 @@ or click the same control again. When editing Cancel / Close, Escape assigns Esc
 **Max Recording** sets the recording limit; the default is five minutes. Transcription begins after
 recording finishes. Discarding a recording skips transcription and output.
 
-The compact glass bar has a Dock-style rounded rectangular shape and uses clear native Liquid Glass on macOS 26 and later, with a material
-fallback on earlier versions. It shows a red stop control while recording, a spinner
-while processing, then a brief green checkmark and “Text ready” before hiding. Its waveform responds to your microphone level. Drag the timer
-or waveform area to move the bar; Voxa remembers its position across recordings and
-relaunches. The stop button remains clickable. Reduced Motion removes continuous
-waveform movement while keeping the microphone level visible.
+The recording bar appears at the bottom center of the screen, above the Dock.
+Listening uses a compact Liquid Glass pill with an adaptive waveform, **×** on the left,
+and a red stop button on the right. Hovering does not expand it. The stop button finishes and inserts the text; **×** discards
+the recording. Transcribing stays visible through text insertion. Once text is pasted or copied,
+the bar goes directly to feedback or disappears, without a completion confirmation. If English
+feedback is still being analysed after delivery, the bar shows **Reviewing…**.
+When ready, the full feedback popup opens above the Dock, aligned with the recording bar's bottom edge.
+
+The recording pill uses clear native Liquid Glass with soft Dock-like corners on macOS 26 and later,
+with translucent material on older systems. Its glass edge has no additional custom border.
+Its controls adapt to the system appearance; Reduce Transparency and Increase Contrast use a solid surface.
+Feedback follows the system appearance:
+white in light mode and charcoal in dark mode, with green accents. Drag the waveform to move the recording bar;
+drag the **English feedback** header to move the popup. Voxa remembers the shared position across recordings and app restarts.
+Feedback grows to
+fit its contents up to a screen-safe height; longer content remains scrollable without
+visible scroll indicators. Compact explanations appear below the sentence list after
+clicking a correction or **Why?**. The popup grows upward from its bottom edge as you
+open an explanation. Reduced Motion removes continuous
+waveform motion. Increased Contrast strengthens the outline and secondary text.
 
 Model, output, and recording-limit menus remain available during dictation.
 Changes made while recording or processing are saved for the next recording.
@@ -104,23 +118,41 @@ Enable **Settings → English Learning → Feedback after dictation** for
 background English coaching. Dictation is inserted normally and never rewritten;
 feedback failures do not interrupt it.
 
-The compact **Quiet card** shows the full **You said / Improved** sentences, with
-blue highlights behind changed words and a strike through removed wording. Choose
-**Why this change?** to reveal its explanation, **Remember** rule and **Try once** practice
-action. Click again to hide those details; the full sentence stays visible.
-Independent corrections in the same sentence share one comparison and keep their
-explanations together. Conflicting suggestions remain separate comparisons.
+The feedback card puts the change and its explanation together. Small corrections stay
+inside one sentence: corrected wording sits in a padded, rounded sage highlight.
+Click a highlight or **Why?** in the section header to open its explanation;
+click again or use its close button to hide it. Keyboard activation works too. Hovering
+does not open an explanation. The original
+wording appears in the explanation's title. A missing word is highlighted;
+an extra word is crossed out. Larger rewrites use a **You said / Say this** comparison,
+with the improved sentence in larger type on a softly shaded surface.
 
-**Optional wording** stays visible after the corrections, with a short explanation
-and any reusable pattern. Short reviews fit their
-content; longer reviews scroll above the fixed Save action and auto-close status.
-The 380-point-wide panel uses clear native Liquid Glass on macOS 26+, a material fallback
-on older systems, and an opaque background with Reduce Transparency. The pin and
-close controls stay in the header. The footer shows your configured shortcuts next to
-Save and Close (Command-S and Esc by default). Clicking outside the card dismisses it,
-including when pinned or set to Never; choose **Show Latest Feedback** to reopen it.
-An in-progress save finishes before the card can be dismissed.
-Grammar confirmation and successful patterns stay in a quiet summary. The coach
+All notes appear in one review. Explanations and **Remember** patterns open one at a
+time in a compact panel beneath the sentence. There is no empty explanation card;
+an open explanation fits its text, with scrolling for longer details. Its arrows browse the sentence's lessons;
+the close button hides the explanation. Independent corrections stay together, with a
+teaching point for each change. Conflicting suggestions remain separate. **Another way
+to say it** offers optional phrasing, including alternatives paired with a correction.
+Transcription uncertainties have their own section and ask you to check what you said.
+When there is one lesson, **Practice** is beside Save review. When there are several,
+the microphone beside each explanation starts practice for that specific wording.
+Closing practice returns to that part of the review with the same explanation open.
+
+Reviews with no corrections show **Looking good** (or **You're all set**) and the
+original dictation. They do not show a **Used well** list. Recognised patterns still
+contribute to learning progress in the background.
+
+Short reviews fit their content; longer reviews grow before scrolling above the fixed **Save review**
+action. **Save review** saves every correction and alternative
+in the review, including notes below the visible area. Correction reviews are 480 points wide;
+clean confirmations use a compact 400-point surface. Both use the system light or dark appearance
+and green accents, with a stronger outline and
+secondary text when Increase Contrast is enabled. The close control stays in the header. Save review shows
+your configured save shortcut (Command-S by default); the close control uses Cancel /
+Close (Esc by default). Reviews with no lessons have a **Done** button.
+Clicking outside the feedback panel leaves it open.
+An in-progress save finishes before the review can be dismissed.
+Grammar confirmation stays in a quiet summary; recognised patterns contribute to progress in the background. The coach
 preserves meaning, tone, uncertainty and technical terms, and ignores fillers and
 clear self-corrections.
 
@@ -137,16 +169,13 @@ pronunciation or conversational fluency. A clean dictation can still show a brie
 positive review. Old grammar-only observations stay saved but cannot be converted
 into a broader level without their original text.
 
-The panel appears after delivery without taking focus. Choose its duration in
-**Settings → English Learning → Auto-close feedback** (five seconds by default),
-or choose **Never** to keep it open until you close or save it.
-Hovering pauses the countdown; the timer button pins the panel open.
-Leaving the panel or unpinning resumes the remaining time. A new recording also hides it; **English Learning → Show Latest Feedback**
-reopens the latest review with your chosen duration until another transcript replaces it.
-Changing the duration restarts the countdown while preserving hover and pin pauses.
-Saving lessons cancels the timer; a failed save keeps the review open for retry.
+The panel appears after delivery without taking focus and stays open until you close
+or save it. It has no countdown and does not disappear when you move the pointer or
+click elsewhere. Starting a new recording hides the current review; **English Learning →
+Show Latest Feedback** reopens an available review until another transcript replaces it.
+A failed save keeps the review open for retry.
 
-- **Save / ⌘S:** save all corrections and alternatives, then close.
+- **Save review / ⌘S:** save all corrections and alternatives, then close.
   Recognition issues are excluded. ⌘S also closes a review with no lessons.
 - **Close / Esc:** close without saving lessons. Local progress remains available.
 
@@ -158,7 +187,7 @@ to save. Escape can be assigned to Cancel / Close.
 
 - **English Learning → Lessons & Progress…:** review, practise, or delete saved
   lessons, and view or clear progress separately.
-- **Try once:** beside a pattern, say the improved version,
+- **Practice** on a feedback note, or **Try once** in a saved lesson: say the improved version,
   then try the pattern in a new sentence. Use **Record answer → Stop & check**, or
   **Type instead**. Recording stops automatically at 40 seconds. Each answer gets
   one short response about the target pattern. Practice never pastes or changes

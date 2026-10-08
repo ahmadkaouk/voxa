@@ -61,177 +61,144 @@ final class MemoryLearningProgress: LearningProgressStoring {
 }
 
 @MainActor
-private final class FeedbackTimerFixture {
-    var delays: [Duration] = []
-    private var gates: [PipelineGate] = []
-    private var completed: Set<Int> = []
-
-    func pause(_ delay: Duration) async {
-        let index = gates.count, gate = PipelineGate()
-        delays.append(delay); gates.append(gate)
-        await gate.wait() // Ignore cancellation to exercise stale timer completions.
-        completed.insert(index)
-    }
-
-    func fire(_ index: Int) async throws {
-        gates[index].open()
-        try await eventually { self.completed.contains(index) }
-        for _ in 0..<10 { await Task.yield() }
-    }
-}
-
-@MainActor
 enum FeedbackChecks {
-    static func configurableAutoClose() async throws {
-        let timer = FeedbackTimerFixture()
-        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
-            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
-        controller.setEnabled(true)
-        controller.setAutoCloseSeconds(30)
-        let id = UUID()
-        start(controller, id: id); finish(controller, id: id)
-        try await eventually { timer.delays.count == 1 }
-        try unitEqual(timer.delays, [.seconds(30)])
+    static func reviewsStayOpenUntilExplicitlyClosed() async throws {
+        let corrections = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress())
+        let cleanFixture = FeedbackFixture()
+        cleanFixture.findings = []
+        cleanFixture.assessment = .init(status: .assessed, band: .accurate)
+        let clean = FeedbackController(client: cleanFixture, store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress())
+        corrections.setEnabled(true); clean.setEnabled(true)
+        let correctionID = UUID(), cleanID = UUID()
+        start(corrections, id: correctionID); finish(corrections, id: correctionID)
+        clean.updateDictation(.starting(.init(id: cleanID, origin: .manual, settings: .init()), requested: nil))
+        clean.analyze(id: cleanID, transcript: longTranscript.replacingOccurrences(of: lesson.original, with: lesson.suggestion),
+                      apiKey: "fixture")
+        finish(clean, id: cleanID)
+        try await eventually { corrections.panelVisible && clean.panelVisible && corrections.storageReady && clean.storageReady }
+        let findings = corrections.findings
+        // Exercise the old five-second deadline once for both correction and clean reviews.
+        // No hover, pin, or timer configuration is needed to keep either review open.
+        try await Task.sleep(for: .seconds(6))
+        try unitExpect(corrections.panelVisible && clean.panelVisible)
+        try unitEqual(corrections.findings, findings)
+        try unitExpect(clean.findings.isEmpty && clean.assessment?.band == .accurate)
+        try unitExpect(corrections.saved.isEmpty && clean.saved.isEmpty)
 
-        controller.setAutoCloseSeconds(10)
-        try await eventually { timer.delays.count == 2 }
-        try unitEqual(timer.delays[1], .seconds(10))
-        try await timer.fire(0)
-        try unitExpect(controller.panelVisible) // Replaced timers cannot close the current review.
-        let deadline = controller.dismissalDeadline
-        controller.setAutoCloseSeconds(10)
-        controller.setAutoCloseSeconds(301)
-        try unitEqual(controller.dismissalDeadline, deadline)
-        try unitEqual(controller.autoCloseSeconds, 10)
-
-        controller.setAutoCloseSeconds(0)
-        try unitExpect(controller.dismissalDeadline == nil)
-        try await timer.fire(1)
-        try unitExpect(controller.panelVisible)
-        controller.showLatest()
-        for _ in 0..<10 { await Task.yield() }
-        try unitEqual(timer.delays.count, 2)
-        try unitExpect(controller.panelVisible && controller.dismissalDeadline == nil)
-
-        controller.setAutoCloseSeconds(1)
-        try await eventually { timer.delays.count == 3 }
-        try unitEqual(timer.delays[2], .seconds(1))
-        try await timer.fire(2)
-        try await eventually { !controller.panelVisible }
-        controller.setAutoCloseSeconds(60)
-        try unitExpect(!controller.panelVisible) // Editing settings does not reopen a timed-out review.
-        controller.showLatest()
-        try await eventually { timer.delays.count == 4 }
-        try unitEqual(timer.delays[3], .seconds(60))
-        try await timer.fire(3)
-        try await eventually { !controller.panelVisible }
-
-        controller.setAutoCloseSeconds(0)
-        let next = UUID()
-        start(controller, id: next); finish(controller, id: next)
-        try await eventually { controller.panelVisible }
-        try unitExpect(controller.dismissalDeadline == nil)
-        try unitEqual(timer.delays.count, 4)
-        await controller.shutdown()
+        try unitExpect(corrections.discardReview())
+        try unitExpect(clean.discardReview())
+        for (controller, id) in [(corrections, correctionID), (clean, cleanID)] {
+            // Neither duplicate delivery/idle events nor practice return can recreate
+            // a review that the user explicitly closed.
+            finish(controller, id: id)
+            controller.setPracticeActive(true); controller.setPracticeActive(false)
+            controller.showLatest()
+            try unitExpect(!controller.panelVisible && !controller.hasReview && controller.transcript.isEmpty)
+            try unitExpect(!controller.saveAndClose() && !controller.discardReview())
+            await controller.shutdown()
+        }
     }
 
-    static func autoCloseChangesRetainReadingAndPinPauses() async throws {
-        let timer = FeedbackTimerFixture()
-        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
-            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
-        controller.setEnabled(true)
-        let id = UUID()
-        start(controller, id: id); finish(controller, id: id)
-        try await eventually { timer.delays.count == 1 }
-        controller.setReading(true)
-        controller.setAutoCloseSeconds(20)
-        try await timer.fire(0)
-        try unitExpect(controller.panelVisible && controller.isReading && controller.dismissalDeadline == nil)
-        controller.togglePinned()
-        controller.setReading(false)
-        controller.setAutoCloseSeconds(40)
-        for _ in 0..<10 { await Task.yield() }
-        try unitEqual(timer.delays.count, 1)
-        try unitExpect(controller.isPinned && controller.dismissalDeadline == nil)
-        controller.togglePinned()
-        try await eventually { timer.delays.count == 2 }
-        try unitEqual(timer.delays[1], .seconds(40))
-
-        controller.setReading(true)
-        controller.setAutoCloseSeconds(0)
-        controller.setReading(false)
-        controller.togglePinned(); controller.togglePinned()
-        try await timer.fire(1)
-        try unitExpect(controller.panelVisible && controller.dismissalDeadline == nil)
-        try unitEqual(timer.delays.count, 2)
-        controller.setReading(true)
-        controller.setAutoCloseSeconds(300)
-        try unitExpect(controller.dismissalDeadline == nil)
-        controller.setReading(false)
-        try await eventually { timer.delays.count == 3 }
-        try unitEqual(timer.delays[2], .seconds(300))
-        try await timer.fire(2)
-        try await eventually { !controller.panelVisible }
-        await controller.shutdown()
-    }
-
-    static func autoCloseResumesAfterUnrelatedPersistence() async throws {
-        let timer = FeedbackTimerFixture(), store = MemoryCorrections()
-        let first = UUID(), second = UUID()
-        store.items = [first, second].map { SavedCorrection(id: $0, date: Date(), feedback: lesson) }
+    static func unrelatedPersistenceKeepsTheReviewOpen() async throws {
+        let store = MemoryCorrections(), savedID = UUID(), gate = PipelineGate()
+        store.items = [SavedCorrection(id: savedID, date: Date(), feedback: lesson)]
         let controller = FeedbackController(client: FeedbackFixture(), store: store,
-            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
-        controller.setEnabled(true)
-        let review = UUID()
-        start(controller, id: review); finish(controller, id: review)
-        try await eventually { timer.delays.count == 1 && controller.storageReady }
-        let deadline = controller.dismissalDeadline
-        let firstSave = PipelineGate()
-        store.saveGate = firstSave
-        controller.delete(first)
-        try await eventually { firstSave.entered }
-        firstSave.open()
-        try await eventually { !controller.isSaving }
-        try unitEqual(controller.dismissalDeadline, deadline) // Ordinary deletion preserves the running countdown.
-        try unitEqual(timer.delays.count, 1)
-
-        let secondSave = PipelineGate()
-        store.saveGate = secondSave
-        controller.delete(second)
-        try await eventually { secondSave.entered }
-        controller.setAutoCloseSeconds(30)
-        try unitExpect(controller.dismissalDeadline == nil && controller.panelVisible)
-        try await timer.fire(0)
-        try unitExpect(controller.panelVisible)
-        secondSave.open()
-        try await eventually { !controller.isSaving && timer.delays.count == 2 }
-        try unitEqual(timer.delays[1], .seconds(30))
-        try unitExpect(controller.dismissalDeadline != nil)
-        try await timer.fire(1)
-        try await eventually { !controller.panelVisible }
-        await controller.shutdown()
-    }
-
-    static func readingPausesDismissal() async throws {
-        let timer = FeedbackTimerFixture()
-        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
-            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
+            progressStore: MemoryLearningProgress())
         controller.setEnabled(true)
         let id = UUID()
         start(controller, id: id); finish(controller, id: id)
-        try await eventually { timer.delays.count == 1 }
-        controller.setReading(true)
-        try await timer.fire(0)
-        try unitExpect(controller.panelVisible && controller.dismissalDeadline == nil)
-        controller.togglePinned()
-        controller.setReading(false)
-        for _ in 0..<10 { await Task.yield() }
-        try unitEqual(timer.delays.count, 1)
-        controller.togglePinned()
-        try await eventually { timer.delays.count == 2 }
-        try unitExpect(timer.delays[1] > .zero && timer.delays[1] <= .seconds(5))
-        try await timer.fire(1)
-        try await eventually { !controller.panelVisible }
+        try await eventually { controller.panelVisible && controller.storageReady }
+        let findings = controller.findings
+        controller.selectedReviewNoteID = "retained-note"
+        store.saveGate = gate
+        controller.delete(savedID)
+        try await eventually { gate.entered }
+        try unitExpect(controller.panelVisible && controller.isSaving)
+        gate.open()
+        try await eventually { !controller.isSaving }
+        try unitExpect(controller.panelVisible && store.items.isEmpty)
+        try unitEqual(controller.findings, findings)
+        try unitEqual(controller.selectedReviewNoteID, "retained-note")
+
+        controller.reloadSaved()
+        try await eventually { !controller.isSaving }
+        try unitExpect(controller.panelVisible)
+        try unitEqual(controller.findings, findings)
+        await controller.shutdown()
+    }
+
+    static func lifecycleHidesPreserveAvailableReviews() async throws {
+        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
+            progressStore: MemoryLearningProgress())
+        controller.setEnabled(true)
+        let first = UUID()
+        start(controller, id: first); finish(controller, id: first)
+        try await eventually { controller.panelVisible && controller.storageReady }
+        controller.selectedReviewNoteID = "selected-note"
+        controller.selectedReviewExplanationID = "selected-explanation"
+        controller.setPracticeActive(true)
+        controller.showLatest()
+        try unitExpect(!controller.panelVisible && controller.hasReview)
+        controller.setPracticeActive(false)
+        try unitExpect(controller.panelVisible && controller.findings.first?.id == first)
+        try unitEqual(controller.selectedReviewNoteID, "selected-note")
+        try unitEqual(controller.selectedReviewExplanationID, "selected-explanation")
+
+        // A new recording hides the old review. Cancelling that recording must
+        // not reopen stale feedback automatically, but Show Latest still may.
+        let next = UUID()
+        controller.updateDictation(.starting(.init(id: next, origin: .manual, settings: .init()), requested: nil))
+        controller.showLatest()
+        try unitExpect(!controller.panelVisible && controller.hasReview)
+        controller.updateDictation(.idle)
+        try unitExpect(!controller.panelVisible)
+        controller.showLatest()
+        try unitExpect(controller.panelVisible && controller.findings.first?.id == first)
+        try unitExpect(controller.discardReview())
+        controller.showLatest()
+        try unitExpect(!controller.panelVisible && !controller.hasReview)
+
+        let replacement = UUID()
+        start(controller, id: replacement); finish(controller, id: replacement)
+        try await eventually { controller.panelVisible && controller.findings.first?.id == replacement }
+        controller.setEnabled(false)
+        try unitExpect(!controller.panelVisible && !controller.hasReview)
+        controller.setEnabled(true)
+        let last = UUID()
+        start(controller, id: last); finish(controller, id: last)
+        try await eventually { controller.panelVisible }
+        await controller.shutdown()
+        controller.setPracticeActive(false); controller.showLatest(); finish(controller, id: last)
+        try unitExpect(!controller.panelVisible && !controller.hasReview)
+    }
+
+    static func savingClosesOnlyAfterSuccessfulPersistence() async throws {
+        let store = MemoryCorrections(), saving = PipelineGate()
+        let controller = FeedbackController(client: FeedbackFixture(), store: store,
+            progressStore: MemoryLearningProgress())
+        controller.setEnabled(true)
+        let id = UUID()
+        start(controller, id: id); finish(controller, id: id)
+        try await eventually { controller.panelVisible && controller.storageReady }
+        let findings = controller.findings
+        store.saveGate = saving; store.fail = true
+        try unitExpect(controller.saveAndClose())
+        try await eventually { saving.entered }
+        try unitExpect(controller.discardReview()) // An accepted save must finish before closing.
+        try unitExpect(controller.panelVisible && controller.isSaving)
+        try unitEqual(controller.findings, findings)
+        saving.open()
+        try await eventually { !controller.isSaving }
+        try unitExpect(controller.panelVisible && controller.storageError != nil && store.items.isEmpty)
+        try unitEqual(controller.findings, findings)
+        store.fail = false
+        try unitExpect(controller.saveAndClose())
+        try await eventually { !controller.isSaving }
+        try unitExpect(!controller.panelVisible && !controller.hasReview && store.items.count == 1)
+        finish(controller, id: id); controller.showLatest()
+        try unitExpect(!controller.panelVisible)
         await controller.shutdown()
     }
 
@@ -292,147 +259,6 @@ enum FeedbackChecks {
             }
             try unitEqual(rebuilt as String, pair.1)
         }
-    }
-
-    static func automaticDismissalAndReopening() async throws {
-        let timer = FeedbackTimerFixture(), store = MemoryCorrections()
-        let controller = FeedbackController(client: FeedbackFixture(), store: store,
-            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
-        controller.setEnabled(true)
-        let id = UUID()
-        start(controller, id: id)
-        try await eventually { !controller.isAnalyzing }
-        try unitExpect(timer.delays.isEmpty && !controller.panelVisible)
-        controller.deliveryFinished(id: id)
-        try unitExpect(timer.delays.isEmpty && !controller.panelVisible)
-        controller.updateDictation(.idle)
-        try await eventually { timer.delays.count == 1 }
-        try unitEqual(timer.delays, [.seconds(5)])
-
-        // Repeated callbacks must not extend the five-second display period.
-        finish(controller, id: id)
-        for _ in 0..<10 { await Task.yield() }
-        try unitEqual(timer.delays.count, 1)
-        try await timer.fire(0)
-        try await eventually { !controller.panelVisible }
-        try unitExpect(controller.hasReview && store.items.isEmpty)
-        try unitExpect(!controller.saveAndClose() && !controller.discardReview())
-        finish(controller, id: id)
-        try unitExpect(!controller.panelVisible)
-
-        controller.showLatest()
-        try await eventually { timer.delays.count == 2 }
-        try unitExpect(controller.panelVisible)
-        try unitEqual(timer.delays[1], .seconds(5))
-        try await timer.fire(1)
-        try await eventually { !controller.panelVisible }
-        await controller.shutdown()
-    }
-
-    static func outsideClickDismissalAndReopening() async throws {
-        let timer = FeedbackTimerFixture(), store = MemoryCorrections()
-        let controller = FeedbackController(client: FeedbackFixture(), store: store,
-            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
-        controller.setEnabled(true)
-        let id = UUID()
-        start(controller, id: id); finish(controller, id: id)
-        try await eventually { timer.delays.count == 1 && controller.storageReady }
-        controller.setReading(true)
-        controller.togglePinned()
-        controller.dismissAfterOutsideClick()
-        try unitExpect(!controller.panelVisible && controller.hasReview && store.items.isEmpty)
-        try unitExpect(controller.dismissalDeadline == nil)
-        try unitExpect(!controller.saveAndClose()) // A hidden card cannot consume another app's Save.
-        try await timer.fire(0)
-        finish(controller, id: id)
-        controller.setPracticeActive(true); controller.setPracticeActive(false)
-        try unitExpect(!controller.panelVisible) // Idle and delivery callbacks cannot reopen it.
-
-        controller.setAutoCloseSeconds(0)
-        controller.showLatest()
-        try unitExpect(controller.panelVisible && !controller.isPinned && !controller.isReading)
-        try unitEqual(controller.findings.first?.id, id)
-        controller.togglePinned()
-        controller.dismissAfterOutsideClick()
-        try unitExpect(!controller.panelVisible && controller.hasReview)
-        finish(controller, id: id)
-        try unitExpect(!controller.panelVisible) // Never disables the timer, not outside clicks.
-        controller.showLatest()
-        try unitExpect(controller.panelVisible && controller.dismissalDeadline == nil)
-        controller.dismissAfterOutsideClick()
-
-        let next = UUID()
-        start(controller, id: next); finish(controller, id: next)
-        try await eventually { controller.panelVisible && controller.findings.first?.id == next }
-        await controller.shutdown()
-        controller.dismissAfterOutsideClick()
-        try unitExpect(!controller.panelVisible)
-    }
-
-    static func dismissalCancellationAndReplacement() async throws {
-        let timer = FeedbackTimerFixture()
-        let controller = FeedbackController(client: FeedbackFixture(), store: MemoryCorrections(),
-            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
-        controller.setEnabled(true)
-        let first = UUID(), second = UUID()
-        start(controller, id: first); finish(controller, id: first)
-        try await eventually { timer.delays.count == 1 }
-        start(controller, id: second); finish(controller, id: second)
-        try await eventually { timer.delays.count == 2 }
-        try await timer.fire(0)
-        try unitExpect(controller.panelVisible && controller.findings.first?.id == second)
-
-        controller.setPracticeActive(true)
-        try unitExpect(!controller.panelVisible && controller.hasReview)
-        controller.setPracticeActive(false)
-        try await eventually { timer.delays.count == 3 }
-        try await timer.fire(1)
-        try unitExpect(controller.panelVisible)
-        controller.showLatest() // Explicit reopening starts a fresh five seconds.
-        try await eventually { timer.delays.count == 4 }
-        try await timer.fire(2)
-        try unitExpect(controller.panelVisible)
-        try unitExpect(controller.discardReview())
-        try await timer.fire(3)
-        try unitExpect(!controller.panelVisible && !controller.hasReview)
-
-        let third = UUID()
-        start(controller, id: third); finish(controller, id: third)
-        try await eventually { timer.delays.count == 5 }
-        controller.setEnabled(false)
-        try await timer.fire(4)
-        try unitExpect(!controller.panelVisible && !controller.hasReview)
-        controller.setEnabled(true)
-        let last = UUID()
-        start(controller, id: last); finish(controller, id: last)
-        try await eventually { timer.delays.count == 6 }
-        await controller.shutdown()
-        try await timer.fire(5)
-        try unitExpect(!controller.panelVisible && !controller.hasReview)
-    }
-
-    static func savingCancelsDismissal() async throws {
-        let timer = FeedbackTimerFixture(), store = MemoryCorrections(), saving = PipelineGate()
-        let controller = FeedbackController(client: FeedbackFixture(), store: store,
-            progressStore: MemoryLearningProgress(), pause: { await timer.pause($0) })
-        controller.setEnabled(true)
-        let id = UUID()
-        start(controller, id: id); finish(controller, id: id)
-        try await eventually { timer.delays.count == 1 && controller.storageReady }
-        store.saveGate = saving; store.fail = true
-        try unitExpect(controller.saveAndClose())
-        try await eventually { saving.entered }
-        try await timer.fire(0)
-        controller.dismissAfterOutsideClick()
-        try unitExpect(controller.panelVisible && controller.isSaving)
-        saving.open()
-        try await eventually { !controller.isSaving }
-        try unitExpect(controller.panelVisible && controller.storageError != nil)
-        store.fail = false
-        try unitExpect(controller.saveAndClose())
-        try await eventually { !controller.isSaving }
-        try unitExpect(!controller.panelVisible && store.items.count == 1)
-        await controller.shutdown()
     }
 
     static func recognitionOnlyReview() async throws {
@@ -1011,11 +837,16 @@ enum FeedbackChecks {
         var selected: [PracticeTarget] = []
         controller.onPractice = { selected.append($0); controller.setPracticeActive(true) }
         for target in targets {
+            let noteID = (target.alternative || target.lesson.feedback.kind == .phrasing ? "alternative-" : "")
+                + target.lesson.id.uuidString
+            controller.selectedReviewNoteID = noteID
             controller.practise(target.lesson, alternative: target.alternative)
             try unitEqual(selected.last, target)
             try unitExpect(!controller.panelVisible && store.items.isEmpty)
+            try unitEqual(controller.selectedReviewNoteID, noteID)
             controller.setPracticeActive(false)
             try unitExpect(controller.panelVisible && controller.reviewPracticeTargets == targets)
+            try unitEqual(controller.selectedReviewNoteID, noteID) // Recreated panels return to the practised note.
         }
         let saveGate = PipelineGate()
         store.saveGate = saveGate
@@ -1027,7 +858,24 @@ enum FeedbackChecks {
         try await eventually { !controller.isSaving }
         controller.setPracticeActive(false)
         try unitExpect(!controller.panelVisible && controller.reviewPracticeTargets.isEmpty)
+        try unitExpect(controller.selectedReviewNoteID == nil)
         try unitEqual(store.items.count, 2) // Recognition issues remain excluded.
+
+        let next = UUID()
+        controller.updateDictation(.starting(.init(id: next, origin: .manual, settings: .init()), requested: nil))
+        controller.analyze(id: next, transcript: fixture.findings.map(\.original).joined(separator: " "), apiKey: "fixture")
+        finish(controller, id: next)
+        try await eventually { controller.panelVisible }
+        controller.selectedReviewNoteID = "alternative-" + controller.alternatives[0].id.uuidString
+        let replacement = UUID()
+        controller.updateDictation(.starting(.init(id: replacement, origin: .manual, settings: .init()), requested: nil))
+        controller.analyze(id: replacement, transcript: fixture.findings.map(\.original).joined(separator: " "), apiKey: "fixture")
+        try unitExpect(controller.selectedReviewNoteID == nil) // A new review must start at its first note.
+        finish(controller, id: replacement)
+        try await eventually { controller.panelVisible }
+        controller.selectedReviewNoteID = "alternative-" + controller.alternatives[0].id.uuidString
+        try unitExpect(controller.discardReview())
+        try unitExpect(controller.selectedReviewNoteID == nil)
         await controller.shutdown()
     }
 
@@ -1050,15 +898,11 @@ enum FeedbackChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
-        ("feedback: configured auto-close durations, Never, and live changes", configurableAutoClose),
-        ("feedback: auto-close changes retain hover and pin pauses", autoCloseChangesRetainReadingAndPinPauses),
-        ("feedback: auto-close resumes after unrelated persistence", autoCloseResumesAfterUnrelatedPersistence),
-        ("feedback: hover and pin pause dismissal", readingPausesDismissal),
+        ("feedback: correction and clean reviews stay open until explicitly closed", reviewsStayOpenUntilExplicitlyClosed),
+        ("feedback: unrelated persistence preserves the visible review", unrelatedPersistenceKeepsTheReviewOpen),
+        ("feedback: lifecycle hides preserve only available reviews", lifecycleHidesPreserveAvailableReviews),
+        ("feedback: saving closes only after successful persistence", savingClosesOnlyAfterSuccessfulPersistence),
         ("feedback: granular edits and complete sentence comparisons", granularChangesAndFullSentences),
-        ("feedback: five-second dismissal starts on presentation and allows reopening", automaticDismissalAndReopening),
-        ("feedback: outside clicks dismiss pinned and Never reviews without losing them", outsideClickDismissalAndReopening),
-        ("feedback: stale dismissal timers cannot hide a newer or reopened review", dismissalCancellationAndReplacement),
-        ("feedback: saving cancels dismissal and failed saves remain visible", savingCancelsDismissal),
         ("feedback: cosmetic noise and duplicate optional alternatives", noiseAndDuplicateFiltering),
         ("feedback: fixed grammar rubric, score consistency and abstention", grammarRubricAndAbstention),
         ("feedback: grounded pattern successes and minimal request context", groundedPatternSuccesses),
@@ -1082,15 +926,11 @@ enum FeedbackChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class FeedbackTests: XCTestCase {
-    func testConfigurableAutoClose() async throws { try await FeedbackChecks.configurableAutoClose() }
-    func testAutoCloseChangesRetainPauses() async throws { try await FeedbackChecks.autoCloseChangesRetainReadingAndPinPauses() }
-    func testAutoCloseResumesAfterPersistence() async throws { try await FeedbackChecks.autoCloseResumesAfterUnrelatedPersistence() }
-    func testReadingPausesDismissal() async throws { try await FeedbackChecks.readingPausesDismissal() }
+    func testReviewsStayOpenUntilExplicitClose() async throws { try await FeedbackChecks.reviewsStayOpenUntilExplicitlyClosed() }
+    func testUnrelatedPersistencePreservesReview() async throws { try await FeedbackChecks.unrelatedPersistenceKeepsTheReviewOpen() }
+    func testLifecycleHidesPreserveReviews() async throws { try await FeedbackChecks.lifecycleHidesPreserveAvailableReviews() }
+    func testSaveClosesAfterPersistence() async throws { try await FeedbackChecks.savingClosesOnlyAfterSuccessfulPersistence() }
     func testGranularChanges() async throws { try await FeedbackChecks.granularChangesAndFullSentences() }
-    func testAutomaticDismissal() async throws { try await FeedbackChecks.automaticDismissalAndReopening() }
-    func testOutsideClickDismissal() async throws { try await FeedbackChecks.outsideClickDismissalAndReopening() }
-    func testDismissalCancellation() async throws { try await FeedbackChecks.dismissalCancellationAndReplacement() }
-    func testSavingCancelsDismissal() async throws { try await FeedbackChecks.savingCancelsDismissal() }
     func testNoiseFiltering() async throws { try await FeedbackChecks.noiseAndDuplicateFiltering() }
     func testGrammarRubric() async throws { try await FeedbackChecks.grammarRubricAndAbstention() }
     func testPatternSuccesses() async throws { try await FeedbackChecks.groundedPatternSuccesses() }

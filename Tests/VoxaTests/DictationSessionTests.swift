@@ -542,7 +542,7 @@ enum DictationSessionChecks {
         try unitEqual(f.output.copies, ["Recovered"])
         f.output.result = .paste(.manualPaste)
         try await f.record(); f.session.stop(); try await f.wait("idle")
-        try unitExpect(f.session.lastOutcome?.showsSuccess == false)
+        try unitExpect(f.session.lastOutcome?.showsCompletion == false)
         await f.session.shutdown()
     }
 

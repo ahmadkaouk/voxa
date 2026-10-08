@@ -40,8 +40,9 @@ After a paste request is sent and its clipboard text is read, `restoringClipboar
 permits another recording while the output worker finishes its 500 ms settling
 interval and restoration. The recorder is released before delivery begins.
 Later pastes and copies remain queued behind cleanup, and its final result only
-updates the session if no newer recording has started. The paste checkmark appears
-on the read signal; restoration does not delay it or restart its display timer.
+updates the session if no newer recording has started. The bar leaves delivery on the
+read signal without a paste confirmation. It stays hidden or shows pending English
+analysis; a ready review opens once clipboard cleanup finishes.
 
 The configurable Finish & Send chord (Option+G by default) requests paste-and-submit
 while recording in Autopaste mode. Plain Enter is never a built-in recording action.
@@ -55,7 +56,7 @@ This pins the
 destination to the app active at the keypress and keeps the session busy until
 Return is sent or skipped. Return follows the settling interval and is skipped
 if delivery is unconfirmed, the clipboard changes, or a different app is active.
-Its completion checkmark follows the submission outcome.
+Submission also finishes without a paste confirmation bar.
 
 The three workers are constructed directly. Small protocols and injected closures
 allow deterministic tests.
@@ -161,10 +162,11 @@ conflicting edits remain separate comparisons. The current transcript stays in m
 for this presentation and never enters saved lessons. Optional wording is always expanded.
 `FeedbackLessonView` retains inline comparisons in saved details and recognition checks.
 One system window background covers the review; Save and text changes use blue.
-The presentation timer uses `Preferences.feedbackAutoCloseSeconds` (five seconds by
-default; zero disables it), pauses on hover or pin, is cancelled during saving, and
-cannot hide a newer review. Changing its duration resets the remaining time without
-unpinning, clearing hover, or reopening a hidden review.
+Feedback has no automatic dismissal timer and does not close when clicking elsewhere.
+A review stays visible until an explicit Close, Done or Save review action, or a
+recording/practice lifecycle transition. Explicit closing clears the current review
+so later delivery and idle callbacks cannot reopen it. Retired auto-close preference
+keys are ignored when loading and omitted when saving preferences.
 
 `CorrectionStore` is an actor that stores a versioned JSON file in Application
 Support/Voxa. A failed load blocks mutations to protect unreadable data. Only

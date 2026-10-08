@@ -12,10 +12,10 @@ enum TranscriptOutputOutcome: Equatable {
         }
     }
 
-    /// Fallbacks and a newer clipboard are useful outcomes, but must not show a success checkmark.
-    var showsSuccess: Bool {
+    /// Normal paste and copy output need no confirmation bar.
+    var showsCompletion: Bool {
         switch self {
-        case .disabled, .copied, .paste(.restored), .paste(.submitted): return true
+        case .disabled: return true
         default: return false
         }
     }

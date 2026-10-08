@@ -227,7 +227,6 @@ private enum FeedbackPreview {
         let contextSettings = SettingsSidebarLayout(selection: .constant(.learning)) {
             SettingsPage(title: "English Learning", subtitle: "Turn everyday dictation into a little practice.") {
                 EnglishLearningSettingsView(feedbackEnabled: .constant(true), contextEnabled: .constant(true),
-                    autoCloseSeconds: .constant(5),
                     excludedApps: [.init(bundleID: "example.private", name: "Private workspace")],
                     hasAccessibility: true, onExclude: { _ in }, onAllow: { _ in }, onOpenLessons: {})
             }

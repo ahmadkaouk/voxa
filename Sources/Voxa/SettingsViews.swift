@@ -29,7 +29,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: keywords = "dictation transcription model output recording limit microphone accessibility input monitoring permissions"
         case .shortcuts: keywords = "keyboard start stop finish send save feedback cancel close escape"
-        case .learning: keywords = "English feedback lessons corrections practice context excluded apps auto-close delay duration timer seconds never"
+        case .learning: keywords = "English feedback lessons corrections practice context excluded apps"
         case .apiKey: keywords = "OpenAI API key connection credentials storage Keychain"
         }
         return query.isEmpty || (title + " " + keywords).localizedStandardContains(query)
@@ -305,8 +305,6 @@ struct VoxaSettingsView: View {
                     get: { controller.preferences.englishFeedbackEnabled }, set: { controller.setEnglishFeedbackEnabled($0) }),
                     contextEnabled: Binding(get: { controller.preferences.automaticContextEnabled },
                                             set: { controller.setAutomaticContextEnabled($0) }),
-                    autoCloseSeconds: Binding(get: { controller.feedbackAutoCloseSeconds },
-                                              set: { controller.setFeedbackAutoCloseSeconds($0) }),
                     excludedApps: controller.preferences.contextExcludedApps,
                     hasAccessibility: controller.permissions.accessibility,
                     saveShortcut: controller.saveFeedbackHotkey.symbolLabel, cancelShortcut: controller.cancelHotkey.symbolLabel,

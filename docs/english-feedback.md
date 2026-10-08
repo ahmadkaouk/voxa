@@ -74,16 +74,15 @@ explanations, and the distinction between errors and optional alternatives.
   multiple distant fixes in a sentence, compatible overlaps, conflicting alternatives,
   long excerpts, a small viewport and saved-lesson details.
 - Save and Close display the configured shortcuts (Command-S and Esc by default).
-  Inside clicks, including explanation controls, keep the panel open. Outside clicks
-  in another Voxa window or another app dismiss it and still reach their destination.
-  Repeat with pinned feedback and Never auto-close, reopen from Show Latest Feedback,
-  and verify an active save is not interrupted.
-- The panel hides after the duration chosen in Settings → English Learning → Auto-close
-  feedback (five seconds by default); Never disables the timer. Check the selection
-  survives relaunch and changing it restarts an eligible timer without reopening hidden feedback.
-  Hover pauses the remaining time;
-  pin keeps it open. Show Latest Feedback reopens it. Stale timers must not close
-  a newer review. Saving suspends dismissal and failed saves keep the review open.
+  Inside clicks, including explanation controls, keep the panel open. Clicking
+  another Voxa window or another app also leaves it open and reaches its destination.
+  Verify an active save is not interrupted.
+- Correction and clean reviews remain visible beyond five seconds without any pointer
+  interaction. Moving the pointer away must not hide or collapse feedback. There is
+  no duration setting, countdown or popup pin control. Close, Done, Save review and
+  Cancel / Close dismiss explicitly; repeated delivery/idle callbacks cannot reopen a
+  closed review. Starting a new recording hides the old review; Show Latest Feedback
+  can reopen an available review. Failed saves keep it open for retry.
 - ⌘S saves every lesson in one write; Esc closes without saving. Both leave automatic
   progress intact. Recognition issues are excluded. Repeats must not duplicate saves.
 - Esc cancels an active recording, including startup, without transcription or output.

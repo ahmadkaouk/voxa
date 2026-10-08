@@ -68,9 +68,9 @@ enum ClipboardPasteResult: Equatable {
         case .restored:
             return "Transcript pasted; previous clipboard restored"
         case .submitted:
-            return "Transcript pasted; Enter sent"
+            return "Transcript pasted"
         case .submitSkipped:
-            return "Paste requested; Enter not sent—submit manually"
+            return "Transcript pasted; send manually"
         case .manualPaste:
             return "Transcript copied; press ⌘V to paste"
         case .unconfirmed:

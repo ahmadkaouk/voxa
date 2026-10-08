@@ -28,12 +28,14 @@ enum AsyncTranscriptOutputChecks {
         try unitEqual(trace.events, ["copy: hello", "paste: hello"])
         let copying = TranscriptOutput(copy: { text in trace.add("copy: \(text)"); return true })
         try unitEqual(await copying.deliver(" hello\n", mode: .clipboardOnly), .copied)
+        try unitExpect(!TranscriptOutputOutcome.copied.showsCompletion)
+        try unitExpect(TranscriptOutputOutcome.disabled.showsCompletion)
         try unitEqual(trace.events, ["copy: hello", "paste: hello", "copy:  hello\n"])
         for result: ClipboardPasteResult in [.restored, .submitted, .submitSkipped, .manualPaste, .unconfirmed, .clipboardChanged, .snapshotFailed, .writeFailed, .restoreFailed] {
             let output = TranscriptOutput(paste: { _, _, _, _ in result })
             let outcome = await output.deliver("text", mode: .clipboardAutopaste)
             try unitEqual(outcome, .paste(result))
-            try unitEqual(outcome.showsSuccess, [.restored, .submitted].contains(result))
+            try unitExpect(!outcome.showsCompletion)
             try unitEqual(outcome.isFailure, [.snapshotFailed, .writeFailed, .restoreFailed].contains(result))
         }
         await output.drain()
