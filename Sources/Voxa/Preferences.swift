@@ -5,6 +5,7 @@ struct Preferences: Codable, Equatable {
     var finishAndSubmitHotkey = HotkeyOption.defaultFinishAndSubmit.persistedValue
     var saveFeedbackHotkey = HotkeyOption.defaultSaveFeedback.persistedValue
     var cancelHotkey = HotkeyOption.defaultCancel.persistedValue
+    var compareFeedbackHotkey = HotkeyOption.defaultCompareFeedback.persistedValue
     var model = ModelOption.gptTranscribe.rawValue
     var outputMode = OutputModeOption.clipboardAutopaste.rawValue
     var maxRecordingSeconds: UInt64 = 300
@@ -18,7 +19,7 @@ struct Preferences: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case toggleHotkey, finishAndSubmitHotkey, model, outputMode, maxRecordingSeconds, apiKeySource, englishFeedbackEnabled
         case automaticContextEnabled, contextExcludedApps
-        case saveFeedbackHotkey, cancelHotkey
+        case saveFeedbackHotkey, cancelHotkey, compareFeedbackHotkey
     }
     private enum LegacyKeys: String, CodingKey { case holdHotkey }
 
@@ -40,6 +41,9 @@ struct Preferences: Codable, Equatable {
                 avoiding: existing + [savedSave.flatMap(HotkeyOption.fromRaw)].compactMap { $0 }).persistedValue
         saveFeedbackHotkey = savedSave ?? HotkeyOption.migratedContextual(.defaultSaveFeedback,
             avoiding: existing + [HotkeyOption.fromRaw(cancelHotkey)].compactMap { $0 }).persistedValue
+        compareFeedbackHotkey = try values.decodeIfPresent(String.self, forKey: .compareFeedbackHotkey)
+            ?? HotkeyOption.migratedContextual(.defaultCompareFeedback, avoiding: existing
+                + [HotkeyOption.fromRaw(saveFeedbackHotkey), HotkeyOption.fromRaw(cancelHotkey)].compactMap { $0 }).persistedValue
         model = try values.decode(String.self, forKey: .model)
         outputMode = try values.decode(String.self, forKey: .outputMode)
         maxRecordingSeconds = try values.decode(UInt64.self, forKey: .maxRecordingSeconds)
@@ -57,6 +61,8 @@ struct Preferences: Codable, Equatable {
               let cancel = HotkeyOption.fromRaw(cancelHotkey), cancel.isValidForCancel,
               !save.overlaps(cancel), !save.overlaps(toggle), !save.overlaps(submit),
               !cancel.overlaps(toggle), !cancel.overlaps(submit),
+              let compare = HotkeyOption.fromRaw(compareFeedbackHotkey), compare.isValidForSubmit,
+              ![toggle, submit, save, cancel].contains(where: compare.overlaps),
               ModelOption(rawValue: model) != nil, OutputModeOption(rawValue: outputMode) != nil,
               (1...3600).contains(maxRecordingSeconds), ["env", "keychain"].contains(apiKeySource),
               contextExcludedApps.count <= 100,

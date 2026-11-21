@@ -5,6 +5,10 @@ import Foundation
 final class FeedbackController: ObservableObject {
     @Published private(set) var enabled = false
     @Published private(set) var findings: [SavedCorrection] = []
+    /// The whole dictation said more naturally. Shown with the review, never saved.
+    @Published private(set) var natural: [NaturalSentence] = []
+    /// Shows each sentence as said above its natural version, instead of the natural text alone.
+    @Published private(set) var showsComparison = false
     @Published private(set) var panelVisible = false
     @Published private(set) var isAnalyzing = false
     @Published private(set) var status: String?
@@ -12,19 +16,14 @@ final class FeedbackController: ObservableObject {
     @Published private(set) var storageError: String?
     @Published private(set) var storageReady = false
     @Published private(set) var isSaving = false
-    @Published private(set) var assessment: GrammarAssessment?
-    @Published private(set) var successfulPatterns: [LearningFocus] = []
     @Published private(set) var contextAppName: String?
     @Published private(set) var transcript = ""
     @Published private(set) var saveHotkey = HotkeyOption.defaultSaveFeedback
     @Published private(set) var cancelHotkey = HotkeyOption.defaultCancel
+    @Published private(set) var compareHotkey = HotkeyOption.defaultCompareFeedback
     let progress: LearningProgress
     var onPractice: ((PracticeTarget) -> Void)?
     var onLessonsDeleted: ((Set<UUID>) -> Void)?
-    // Keep the current note when practice temporarily recreates the floating panel.
-    // This is presentation state only and is never written to saved lessons or progress.
-    var selectedReviewNoteID: String?
-    var selectedReviewExplanationID: String?
 
     private let client: any FeedbackAnalyzing
     private let store: any CorrectionStoring
@@ -56,16 +55,16 @@ final class FeedbackController: ObservableObject {
         if !value {
             generation = UUID()
             request?.cancel(); request = nil
-            findings = []; selectedReviewNoteID = nil; selectedReviewExplanationID = nil; currentRequest = nil; delivered = nil
-            assessment = nil; successfulPatterns = []; learningRecord = nil
+            findings = []; natural = []; showsComparison = false; currentRequest = nil; delivered = nil; learningRecord = nil
             contextAppName = nil; transcript = ""
             hidePanel(); isAnalyzing = false; status = nil
         }
     }
 
-    func updateShortcuts(save: HotkeyOption, cancel: HotkeyOption) {
+    func updateShortcuts(save: HotkeyOption, cancel: HotkeyOption, compare: HotkeyOption = .defaultCompareFeedback) {
         saveHotkey = save
         cancelHotkey = cancel
+        compareHotkey = compare
     }
 
     func updateDictation(_ state: DictationState) {
@@ -83,13 +82,12 @@ final class FeedbackController: ObservableObject {
         generation = token
         currentRequest = id; delivered = nil
         hidePanel()
-        findings = []; selectedReviewNoteID = nil; selectedReviewExplanationID = nil; status = nil; isAnalyzing = true
-        assessment = nil; successfulPatterns = []; learningRecord = nil
+        findings = []; natural = []; showsComparison = false; status = nil; isAnalyzing = true; learningRecord = nil
         contextAppName = context?.appName
         self.transcript = transcript
         let client = client
         let knownPatterns = progress.knownPatterns.union(saved.flatMap { item in
-            [item.feedback.focus, item.feedback.alternative?.focus].compactMap { $0 }
+            ([item.feedback.focus] + item.feedback.alternatives.map(\.focus)).compactMap { $0 }
         })
         request = Task { [weak self] in
             do {
@@ -97,14 +95,13 @@ final class FeedbackController: ObservableObject {
                 guard let self, !self.closed, self.enabled, self.generation == token, !Task.isCancelled else { return }
                 self.isAnalyzing = false
                 self.request = nil
-                let valid = try result.validated(for: transcript, knownPatterns: knownPatterns)
+                let valid = try result.validated(for: transcript)
                 let date = Date()
                 self.findings = valid.feedback.enumerated().map { index, feedback in
                     SavedCorrection(id: index == 0 ? id : UUID(), date: date, feedback: feedback)
                 }
-                self.assessment = valid.assessment
-                self.successfulPatterns = valid.successfulPatterns.map(\.focus)
-                self.learningRecord = LearningRecord(id: id, date: date, analysis: valid, transcript: transcript)
+                self.natural = valid.natural
+                self.learningRecord = LearningRecord(id: id, date: date, analysis: valid)
                 self.recordProgressIfReady()
                 self.presentIfReady()
             } catch {
@@ -130,10 +127,21 @@ final class FeedbackController: ObservableObject {
         self.learningRecord = nil
     }
 
-    var hasReview: Bool { !findings.isEmpty || assessment?.band != nil || !successfulPatterns.isEmpty }
+    var hasReview: Bool { !findings.isEmpty || hasNaturalChanges }
 
-    var corrections: [SavedCorrection] { findings.filter { $0.feedback.kind == .grammar || $0.feedback.kind == .construction } }
-    var alternatives: [SavedCorrection] { findings.filter { $0.feedback.kind == .phrasing } }
+    /// Even without mistakes, a more natural way to say it is worth showing.
+    var hasNaturalChanges: Bool { natural.contains { $0.natural != $0.said } }
+
+    /// Returns false, so the shortcut passes through, when there is nothing to compare.
+    @discardableResult
+    func toggleComparison() -> Bool {
+        guard enabled, !closed, !busy, panelVisible, hasNaturalChanges else { return false }
+        showsComparison.toggle()
+        return true
+    }
+
+    /// Everything worth saving as a lesson, most important first. Recognition issues are never lessons.
+    var fixes: [SavedCorrection] { findings.filter { $0.feedback.kind != .transcriptionIssue } }
     var transcriptionIssues: [SavedCorrection] { findings.filter { $0.feedback.kind == .transcriptionIssue } }
 
     func previousOccurrences(of focus: LearningFocus) -> Int {
@@ -155,7 +163,7 @@ final class FeedbackController: ObservableObject {
     private func showPanel() { panelVisible = true }
     private func hidePanel() { panelVisible = false }
 
-    func dismiss() { hidePanel(); findings = []; selectedReviewNoteID = nil; selectedReviewExplanationID = nil; assessment = nil; successfulPatterns = []; contextAppName = nil; transcript = "" }
+    func dismiss() { hidePanel(); findings = []; natural = []; showsComparison = false; contextAppName = nil; transcript = "" }
 
     /// Revoking context or excluding an app clears any context-bearing pending review.
     func contextPreferencesChanged() {
@@ -177,15 +185,7 @@ final class FeedbackController: ObservableObject {
         onPractice?(PracticeTarget(lesson: item, alternative: alternative))
     }
 
-    /// Footer choices put actual corrections first and retain every optional
-    /// alternative, including alternatives paired with a correction.
-    var reviewPracticeTargets: [PracticeTarget] {
-        corrections.map { PracticeTarget(lesson: $0, alternative: false) }
-            + corrections.filter { $0.feedback.alternative != nil }.map { PracticeTarget(lesson: $0, alternative: true) }
-            + alternatives.map { PracticeTarget(lesson: $0, alternative: false) }
-    }
-
-    var hasLessons: Bool { findings.contains { $0.feedback.kind != .transcriptionIssue } }
+    var hasLessons: Bool { !fixes.isEmpty }
 
     /// Save the whole review in one atomic write, then close it. Repeated shortcuts
     /// are consumed while saving; a failure keeps the entire review available.
@@ -193,7 +193,7 @@ final class FeedbackController: ObservableObject {
     func saveAndClose() -> Bool {
         guard enabled, !closed, !busy, panelVisible, hasReview else { return false }
         guard !isSaving else { return true }
-        let lessons = findings.filter { $0.feedback.kind != .transcriptionIssue }
+        let lessons = fixes
         guard !lessons.isEmpty else { dismiss(); return true }
         guard storageReady else { return true }
         let existingIDs = Set(saved.map(\.id))
@@ -255,8 +255,7 @@ final class FeedbackController: ObservableObject {
         closed = true; generation = UUID()
         request?.cancel(); request = nil
         hidePanel()
-        findings = []; selectedReviewNoteID = nil; selectedReviewExplanationID = nil; status = nil; isAnalyzing = false
-        assessment = nil; successfulPatterns = []; learningRecord = nil
+        findings = []; natural = []; showsComparison = false; status = nil; isAnalyzing = false; learningRecord = nil
         contextAppName = nil; transcript = ""
         // Explicit saves finish, but a stalled feedback API cannot delay Quit.
         await persistence?.value

@@ -10,6 +10,8 @@ final class GlobalHotkeyBridge {
     var onDiscardFeedback: (() -> Bool)?
     var onCancelDictation: (() -> Bool)?
     private var discardShortcut = FeedbackShortcut(keyCode: KeyCode.escape, modifiers: [])
+    var onCompareFeedback: (() -> Bool)?
+    private var compareShortcut = FeedbackShortcut(hotkey: .defaultCompareFeedback)
 
     var onToggleActivated: (() -> Void)?
 
@@ -89,13 +91,16 @@ final class GlobalHotkeyBridge {
     private func resetContextualShortcuts() {
         saveShortcut = FeedbackShortcut(keyCode: saveShortcut.keyCode, modifiers: saveShortcut.modifiers)
         discardShortcut = FeedbackShortcut(keyCode: discardShortcut.keyCode, modifiers: discardShortcut.modifiers)
+        compareShortcut = FeedbackShortcut(keyCode: compareShortcut.keyCode, modifiers: compareShortcut.modifiers)
     }
 
     func updateBindings(toggle: HotkeyOption, finishAndSubmit: HotkeyOption,
-                        saveFeedback: HotkeyOption = .defaultSaveFeedback, cancel: HotkeyOption = .defaultCancel) {
+                        saveFeedback: HotkeyOption = .defaultSaveFeedback, cancel: HotkeyOption = .defaultCancel,
+                        compareFeedback: HotkeyOption = .defaultCompareFeedback) {
         submitShortcut = FinishAndSubmitShortcut(hotkey: finishAndSubmit)
         saveShortcut = FeedbackShortcut(hotkey: saveFeedback)
         discardShortcut = FeedbackShortcut(hotkey: cancel)
+        compareShortcut = FeedbackShortcut(hotkey: compareFeedback)
         queue.async { [weak self] in
             guard let self else { return }
             self.toggleHotkey = toggle
@@ -201,6 +206,9 @@ final class GlobalHotkeyBridge {
         }) { return true }
         if saveShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat, activate: {
             queue.sync(execute: { isEnabled }) && onSaveFeedback?() == true
+        }) { return true }
+        if compareShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat, activate: {
+            queue.sync(execute: { isEnabled }) && onCompareFeedback?() == true
         }) { return true }
         return submitShortcut.consume(keyCode: keyCode, isDown: isDown, flags: flags, isRepeat: isRepeat) {
             queue.sync(execute: { isEnabled }) && onFinishAndSubmit?() == true

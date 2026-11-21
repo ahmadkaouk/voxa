@@ -4,10 +4,11 @@ struct PracticeTarget: Identifiable, Equatable, Sendable {
     let lesson: SavedCorrection
     let alternative: Bool
     var id: UUID { lesson.id }
-    var wording: String { alternative ? (lesson.feedback.alternative?.wording ?? lesson.feedback.suggestion) : lesson.feedback.suggestion }
-    var explanation: String { alternative ? (lesson.feedback.alternative?.explanation ?? lesson.feedback.explanation) : lesson.feedback.explanation }
-    var pattern: String? { alternative ? lesson.feedback.alternative?.pattern : lesson.feedback.pattern }
-    var focus: LearningFocus? { alternative ? lesson.feedback.alternative?.focus : lesson.feedback.focus }
+    var wording: String { alternative ? (spoken?.wording ?? lesson.feedback.suggestion) : lesson.feedback.suggestion }
+    var explanation: String { alternative ? (spoken?.explanation ?? lesson.feedback.explanation) : lesson.feedback.explanation }
+    var pattern: String? { alternative ? spoken?.pattern : lesson.feedback.pattern }
+    var focus: LearningFocus? { alternative ? spoken?.focus : lesson.feedback.focus }
+    private var spoken: SpokenAlternative? { lesson.feedback.alternatives.first }
     var prompt: String {
         guard alternative else { return lesson.feedback.practicePrompt }
         return "Use \(pattern ?? wording) in a new sentence about something else."

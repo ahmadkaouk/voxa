@@ -188,10 +188,6 @@ private final class ContextReaderFixture: ContextAccessibilityReading {
             try unitEqual(body["store"] as? Bool, false)
             try unitExpect(body["tools"] == nil && !String(describing: body).contains("image_url"))
         }
-        // Even if a model mistakes contextual words for evidence, local validation rejects them.
-        let analysis = FeedbackAnalysis(feedback: [], successfulPatterns: [.init(focus: .pastTense, evidence: hostile)])
-        do { _ = try analysis.validated(for: "My own words.", knownPatterns: [.pastTense]); try unitExpect(false) }
-        catch FeedbackError.invalidResponse { }
     }
 
     static func captureIsOptInAndNeverBlocksDelivery() async throws {

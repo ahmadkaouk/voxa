@@ -195,7 +195,8 @@ private struct WorkspacePreview: App {
 }
 
 private struct WorkspaceSettingsPreview: View {
-    @PreviewState private var selection: SettingsPane? = .shortcuts
+    @PreviewState private var selection: SettingsPane? = .general
+    @PreviewState private var permissions = Permissions(microphone: .notDetermined, accessibility: false, inputMonitoring: false)
     @PreviewState private var excludedApps: [ContextExcludedApp] = []
     @PreviewState private var key = ""
     @PreviewState private var keyConfigured = true
@@ -203,11 +204,23 @@ private struct WorkspaceSettingsPreview: View {
     @PreviewState private var submit = HotkeyOption.defaultFinishAndSubmit
     @PreviewState private var save = HotkeyOption.defaultSaveFeedback
     @PreviewState private var cancel = HotkeyOption.defaultCancel
+    @PreviewState private var compare = HotkeyOption.defaultCompareFeedback
     @StateObject private var recorder = HotkeyRecorder()
 
     var body: some View {
         SettingsSidebarLayout(selection: $selection) {
-            switch selection ?? .shortcuts {
+            switch selection ?? .general {
+            case .general:
+                GeneralSettingsView(permissions: permissions,
+                    onRequestMicrophone: { permissions.microphone = .authorized },
+                    onOpenSettings: { pane in
+                        switch pane {
+                        case "Microphone": permissions.microphone = .authorized
+                        case "Accessibility": permissions.accessibility = true
+                        case "ListenEvent": permissions.inputMonitoring = true
+                        default: break
+                        }
+                    })
             case .privacy:
                 PrivacySettingsView(excludedApps: excludedApps,
                     onExclude: { app in
@@ -218,7 +231,7 @@ private struct WorkspaceSettingsPreview: View {
                     onSave: { key = ""; keyConfigured = true })
             case .shortcuts:
                 ShortcutsSettingsView(recorder: recorder, toggle: toggle, finishAndSubmit: submit,
-                    saveFeedback: save, cancel: cancel)
+                    saveFeedback: save, cancel: cancel, compareFeedback: compare)
             }
         }
         .onAppear {
@@ -228,6 +241,7 @@ private struct WorkspaceSettingsPreview: View {
                 case .finishAndSubmit: submit = shortcut
                 case .saveFeedback: save = shortcut
                 case .cancel: cancel = shortcut
+                case .compareFeedback: compare = shortcut
                 }
             }
         }

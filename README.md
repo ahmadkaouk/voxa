@@ -17,7 +17,7 @@ coaching helps you learn from what you say while you work.
   same app—handy for sending a message.
 - **Stay in your flow.** One floating panel takes you from the live waveform
   through transcription to English feedback. It appears above the Dock; drag
-  the waveform or feedback header to move it. Voxa remembers its position.
+  the orb or feedback header to move it. Voxa remembers its position.
 
 The recording bar uses native Liquid Glass on macOS 26 and later, with
 translucent material on earlier versions. Audio cues mark recording events.
@@ -29,18 +29,16 @@ Changes made during dictation apply to the next recording.
 Turn on **English coaching** to get feedback after dictation. Your words are
 pasted as dictated; suggestions appear separately for you to review.
 
-- **Understand corrections.** See changes together in their full sentence.
-  Click a highlighted correction or **Why?** to open its explanation. Larger
-  rewrites show separate original and suggested sentences.
-- **Find natural ways to say it.** Explore alternatives and reusable expressions,
-  even when your grammar is already correct.
-- **Make it stick.** **Save review** keeps every correction and alternative.
-  Practise a specific lesson by speaking or typing, then return to the review,
-  or revisit saved patterns in a one-minute review.
-- **Follow your progress.** Notice recurring patterns and see how your English
-  expression develops over time. Level estimates are experimental.
+- **See what's wrong at a glance.** Each fix shows what you said next to a better
+  way to say it, with only the changed words marked. Mistakes you repeat are flagged,
+  and words that speech recognition misheard aren't counted against you.
+- **Hear it said naturally.** Read your whole dictation rewritten the way a fluent
+  speaker would say it, compare it sentence by sentence with ⌘D, or listen to it.
+- **Make it stick.** **Got it** (⌘S) saves the fixes as lessons. Practise a saved
+  lesson by speaking or typing, or revisit patterns in a one-minute review.
+- **Follow your progress.** See which mistakes you keep repeating.
 
-<img src="assets/screenshots/english-feedback.png" alt="Voxa English feedback showing an inline past-tense correction, optional phrasing, an open explanation with a practice action, and Save review with its shortcut" width="512">
+<img src="assets/screenshots/english-feedback.png" alt="Voxa English feedback showing four fixes as You said → Better pairs with repeated mistakes flagged, a misheard-word note, and a more natural version of the dictation" width="512">
 
 *Voxa’s feedback panel, shown with sample text.*
 [See a practice example](assets/screenshots/english-practice.png).
@@ -54,20 +52,21 @@ Enable **English Learning → English feedback** in the menu bar.
 
 ## Your Mac workspace
 
-- **Focused Settings.** A searchable native sidebar organizes **Shortcuts**,
-  **Privacy**, and **API Key**. Privacy contains nearby-text app exclusions and
-  data details; everyday dictation and English Learning controls are in the menu bar.
-- **A lesson library.** Open **English Learning → Lessons & Progress…** for a
-  sidebar, lesson list, and reading pane. Filter by **All Lessons**,
-  **Corrections**, or **Natural Phrasing**, and search wording, explanations,
-  and patterns. **Practice** and **Progress** have their own sidebar pages.
-- **Fits your screen.** Resize the workspace and adjust the lesson-list divider.
-  The floating review grows with its contents and scrolls when needed. Views
-  follow the system light or dark appearance and accessibility preferences.
+- **Focused Settings.** A searchable native sidebar organizes **General**, **Shortcuts**,
+  **Privacy**, and **API Key**. General manages Mac permissions. Privacy contains
+  nearby-text app exclusions and data details; everyday dictation and English
+  Learning controls are in the menu bar.
+- **What you keep getting wrong.** Open **English Learning → Lessons & Progress…**
+  to see your repeated mistakes, each with your latest saved example as a You said →
+  Better pair. **Saved fixes** lists everything you kept, with search, and **Practice**
+  runs the one-minute review.
+- **Fits your screen.** The learning window resizes, and the floating review grows
+  with its contents and scrolls when needed. Views follow the system light or dark
+  appearance and accessibility preferences.
 
-<img src="assets/screenshots/english-learning.png" alt="Voxa English Learning with library filters, saved lessons, and a reading pane containing the original sentence, correction, explanation, and practice actions" width="900">
+<img src="assets/screenshots/english-learning.png" alt="Voxa English Learning listing repeated mistakes as You said → Better pairs with how often each happened" width="900">
 
-*The lesson library, shown with sample lessons.*
+*The learning window, shown with sample fixes.*
 [See Settings](assets/screenshots/settings.png).
 
 ## Get started
@@ -79,7 +78,7 @@ Voxa currently installs from source and requires Swift 6.0+ developer tools.
 Follow the [installation guide](docs/usage.md#install), then:
 
 1. Open **Settings… → API Key** from the menu bar and save your OpenAI API key.
-2. Allow **Microphone**, **Accessibility**, and **Input Monitoring** when prompted.
+2. Open **Settings → General** to allow **Microphone**, **Accessibility**, and **Input Monitoring**.
 3. Focus a text field, press **Option + F**, speak, and press it again to paste.
 
 ### Default shortcuts

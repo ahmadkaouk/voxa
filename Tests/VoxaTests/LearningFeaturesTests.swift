@@ -91,7 +91,6 @@ private final class PracticeFixture {
 
 @MainActor
 enum LearningFeaturesChecks {
-    static let text = "Yesterday I visited the office because we needed to discuss the next release with the team. We considered several options and agreed that a smaller change would be easier to test. Although the deadline is close, I think we can finish on time if we focus on the most important problems and ask for help when we need it."
     static let lesson = SavedCorrection(id: UUID(), date: Date().addingTimeInterval(-100), feedback:
         EnglishFeedback(kind: .grammar, original: "Yesterday I go to the office.", suggestion: "Yesterday I went to the office.",
             explanation: "Use the past tense with yesterday.", practicePrompt: "Say something you did yesterday.",
@@ -99,78 +98,12 @@ enum LearningFeaturesChecks {
                                pattern: "I was at + place + time", focus: .pastTense), focus: .pastTense))
     static var target: PracticeTarget { .init(lesson: lesson, alternative: false) }
 
-    static func expression(level: ExpressionLevel = .b2, purpose: ExpressionPurpose = .explanation,
-                           evidence: String = "Yesterday I visited the office") -> ExpressionAssessment {
-        .init(status: .assessed, purpose: purpose, dimensions: ExpressionDimension.allCases.map {
-            .init(dimension: $0, level: level, evidence: evidence)
-        })
-    }
-    static func record(_ index: Int, now: Date, level: ExpressionLevel = .b2,
-                       purpose: ExpressionPurpose? = nil) -> LearningRecord {
-        .init(id: UUID(), date: now.addingTimeInterval(Double(-index)),
-              analysis: .init(feedback: [], assessment: .init(status: .assessed, band: .accurate),
-                              expression: expression(level: level, purpose: purpose ?? (index % 2 == 0 ? .explanation : .narrative))), transcript: text)
-    }
     static func rejects(_ operation: () throws -> Void) throws {
         do { try operation(); try unitExpect(false) }
         catch FeedbackError.invalidResponse { }
     }
 
-    static func expressionGroundingAndAbstention() throws {
-        let good = FeedbackAnalysis(feedback: [], assessment: .init(status: .assessed, band: .accurate), expression: expression())
-        try unitEqual(try good.validated(for: text).expression?.status, .assessed)
-        let short = "Yesterday I visited the office"
-        try unitEqual(try good.validated(for: short).expression?.status, .tooShort)
-        let uncertain = FeedbackAnalysis(feedback: [], assessment: .uncertain, expression: expression())
-        try unitEqual(try uncertain.validated(for: text).expression?.status, .uncertain)
-        let bad = FeedbackAnalysis(feedback: [], expression: expression(evidence: "Invented source wording"))
-        try rejects { _ = try bad.validated(for: text) }
-        let duplicated = ExpressionAssessment(status: .assessed, purpose: .request,
-            dimensions: Array(repeating: expression().dimensions[0], count: 5))
-        try rejects { _ = try FeedbackAnalysis(feedback: [], expression: duplicated).validated(for: text) }
-        let limited = ExpressionAssessment(status: .limited, purpose: nil, dimensions: [])
-        try unitEqual(try FeedbackAnalysis(feedback: [], expression: limited).validated(for: text).expression, limited)
-        try unitExpect(limited.sample(transcript: text) == nil)
-    }
-
-    static func rollingLevelCoverageAndStability() throws {
-        let now = Date()
-        let records = (0..<6).map { record($0, now: now) }
-        let profile = ExpressionProfile(records: records, now: now)
-        try unitExpect(profile.ready)
-        try unitEqual(profile.label, "B2")
-        try unitEqual(profile.purposes, 2)
-        try unitExpect(!ExpressionProfile(records: Array(records.prefix(5)), now: now).ready)
-        try unitExpect(!ExpressionProfile(records: (0..<8).map { record($0, now: now, purpose: .request) }, now: now).ready)
-        let old = record(91 * 86_400, now: now, level: .a1)
-        let grammarOnly = LearningRecord(id: UUID(), date: now, analysis: .init(feedback: [], assessment: .init(status: .assessed, band: .difficult)))
-        let stable = ExpressionProfile(records: records + [old, grammarOnly, record(7, now: now, level: .a1)], now: now)
-        try unitEqual(stable.label, "B2") // One outlier and old/grammar-only data cannot redefine the level.
-        try unitEqual(stable.samples.count, 7)
-        try unitEqual(ExpressionProfile(records: (0..<40).map { record($0, now: now) }, now: now).samples.count, 30)
-        let rising = (0..<12).map { record($0, now: now, level: $0 < 6 ? .b2 : .b1) }
-        try unitExpect(ExpressionProfile(records: rising, now: now).trend.contains("broader"))
-    }
-
-    static func expressionStorageAndMigration() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("expression-\(UUID()).json")
-        defer { try? FileManager.default.removeItem(at: url) }
-        let store = LearningProgressStore(url: url), value = record(0, now: Date())
-        try await store.save([value])
-        try unitEqual(try await store.load(), [value])
-        let data = try Data(contentsOf: url), encoded = String(decoding: data, as: UTF8.self)
-        for forbidden in ["visited", "evidence", "transcript", "apiKey", "wording"] { try unitExpect(!encoded.contains(forbidden)) }
-        var object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        var records = object["records"] as! [[String: Any]]
-        records[0].removeValue(forKey: "expression"); object["records"] = records
-        try JSONSerialization.data(withJSONObject: object).write(to: url)
-        let old = try await store.load()
-        try unitExpect(old.first?.expression == nil)
-        try unitEqual(old.first?.score, .accurate)
-    }
-
     static func responseContracts() throws {
-        let analysis = FeedbackAnalysis(feedback: [], assessment: .init(status: .assessed, band: .accurate), expression: expression())
         func envelope<T: Encodable>(_ object: T, finish: String = "stop") throws -> Data {
             var fields = try JSONSerialization.jsonObject(with: JSONEncoder().encode(object)) as! [String: Any]
             if object is PracticeResult {
@@ -180,7 +113,6 @@ enum LearningFeaturesChecks {
             let content = String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
             return try JSONSerialization.data(withJSONObject: ["choices": [["finish_reason": finish, "message": ["content": content]]]])
         }
-        try unitEqual(try FeedbackClient.parse(envelope(analysis), transcript: text).expression?.status, .assessed)
         let answer = "Yesterday I visited a friend."
         let result = PracticeResult(outcome: .success, explanation: "A new idea in the past tense.", suggestion: nil, evidence: answer)
         try unitEqual(try PracticeClient.parse(envelope(result), answer: answer, target: target, step: .newSentence), result)
@@ -356,9 +288,6 @@ enum LearningFeaturesChecks {
     }
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
-        ("learning: expression evidence, short samples and uncertainty", { try expressionGroundingAndAbstention() }),
-        ("learning: rolling level coverage, outliers and trend", { try rollingLevelCoverageAndStability() }),
-        ("learning: expression privacy and grammar-only history migration", expressionStorageAndMigration),
         ("learning: structured response contracts and copied-example rejection", { try responseContracts() }),
         ("learning: typed practice, repetition and independent-use scheduling", typedPracticeAndSpacing),
         ("learning: spoken practice and automatic recording limit", spokenPracticeAndTimeout),
@@ -372,9 +301,6 @@ enum LearningFeaturesChecks {
 
 #if !VOXA_STANDALONE_TESTS
 final class LearningFeaturesTests: XCTestCase {
-    @MainActor func testExpression() throws { try LearningFeaturesChecks.expressionGroundingAndAbstention() }
-    @MainActor func testCoverage() throws { try LearningFeaturesChecks.rollingLevelCoverageAndStability() }
-    @MainActor func testMigration() async throws { try await LearningFeaturesChecks.expressionStorageAndMigration() }
     @MainActor func testContracts() throws { try LearningFeaturesChecks.responseContracts() }
     @MainActor func testTypedPractice() async throws { try await LearningFeaturesChecks.typedPracticeAndSpacing() }
     @MainActor func testSpokenPractice() async throws { try await LearningFeaturesChecks.spokenPracticeAndTimeout() }

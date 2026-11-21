@@ -161,6 +161,15 @@ enum NativeSetupChecks {
             try unitExpect(swallowed(KeyCode.escape, down: false))
         }
         try unitEqual(saves, 2); try unitEqual(cancels, 2)
+        // Compare is consumed only while a review can show the comparison.
+        var compares = 0
+        bridge.onCompareFeedback = { guard review else { return false }; compares += 1; return true }
+        review = true
+        try unitExpect(swallowed(KeyCode.d, flags: .maskCommand))
+        try unitExpect(swallowed(KeyCode.d, down: false))
+        review = false
+        try unitExpect(!swallowed(KeyCode.d, flags: .maskCommand)); _ = swallowed(KeyCode.d, down: false)
+        try unitEqual(compares, 1)
         bridge.setEnabled(false) // Recording a replacement shortcut must pass through to the recorder.
         review = true
         try unitExpect(!swallowed(KeyCode.d, flags: [.maskCommand, .maskShift]))
@@ -172,6 +181,8 @@ enum NativeSetupChecks {
             var preferences = Preferences()
             preferences.saveFeedbackHotkey = save.persistedValue
             preferences.cancelHotkey = cancel.persistedValue
+            let compare = HotkeyOption(keyCodes: [KeyCode.period], modifiers: .command)
+            preferences.compareFeedbackHotkey = compare.persistedValue
             let store = PreferencesStore(defaults: defaults)
             try store.save(preferences)
             try unitEqual(try PreferencesStore(defaults: defaults).load(), preferences)
@@ -180,6 +191,11 @@ enum NativeSetupChecks {
                 changed.saveFeedbackHotkey = invalid.persistedValue
                 try rejected { try store.save(changed) }
                 try unitEqual(try store.load(), preferences)
+            }
+            for invalid in [HotkeyOption(keyCodes: [KeyCode.d], modifiers: []), .defaultToggle, save, cancel] {
+                var changed = preferences
+                changed.compareFeedbackHotkey = invalid.persistedValue
+                try rejected { try store.save(changed) }
             }
             var changed = preferences
             changed.cancelHotkey = HotkeyOption(keyCodes: [KeyCode.d], modifiers: []).persistedValue
@@ -196,7 +212,11 @@ enum NativeSetupChecks {
             try unitEqual(HotkeyOption.fromRaw(migrated.toggleHotkey), existing)
             try unitExpect(!HotkeyOption.fromRaw(migrated.saveFeedbackHotkey)!.overlaps(existing))
             try unitExpect(!HotkeyOption.fromRaw(migrated.cancelHotkey)!.overlaps(existing))
+            try unitExpect(!HotkeyOption.fromRaw(migrated.compareFeedbackHotkey)!.overlaps(existing))
         }
+        // Settings saved before Compare existed get Command-D when it is free.
+        let earlier = try JSONDecoder().decode(Preferences.self, from: JSONSerialization.data(withJSONObject: savedPreferences)).validated()
+        try unitEqual(HotkeyOption.fromRaw(earlier.compareFeedbackHotkey), .defaultCompareFeedback)
     }
 
     private static func withStore(_ run: (UserDefaults) throws -> Void) throws {

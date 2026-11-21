@@ -151,6 +151,13 @@ final class DynamicIslandController {
             model.awaitingFeedback = false
         }
         let panel = ensurePanel()
+        // The system shadow outlines everything drawn in the window, which would put a
+        // dark rim around the orb's voice glow. Only the review uses it; the orb draws its own.
+        let shadowed = state == .feedback
+        if panel.hasShadow != shadowed {
+            panel.hasShadow = shadowed
+            panel.invalidateShadow()
+        }
         // A mounted host does not resize its window when observed content changes.
         // Measure the new presentation before showing it, including after the
         // completion bar has been hidden while feedback is still being analyzed.
@@ -163,11 +170,11 @@ final class DynamicIslandController {
         if let panel { return panel }
         let visible = availableFrame ?? CGRect(x: 0, y: 0, width: 1000, height: 800)
         availableFrame = visible
-        let panel = NSPanel(contentRect: fittedFrame(size: CGSize(width: 144, height: 34), visible: visible),
+        let panel = NSPanel(contentRect: fittedFrame(size: VoxaIslandView.orbWindowSize, visible: visible),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isFloatingPanel = true
         panel.level = .statusBar
-        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isMovable = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]

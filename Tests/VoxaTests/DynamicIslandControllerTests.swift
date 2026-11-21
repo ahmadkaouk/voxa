@@ -23,7 +23,8 @@ private struct IslandTestAnalyzer: FeedbackAnalyzing {
         await gate?.wait()
         return .init(feedback: [.init(kind: .grammar, original: transcript,
             suggestion: "Yesterday I went to the office.", explanation: "Use the past tense after yesterday.",
-            practicePrompt: "Say what you did yesterday.", focus: .pastTense)])
+            practicePrompt: "Say what you did yesterday.", focus: .pastTense)],
+            natural: [.init(said: transcript, natural: "Yesterday I was at the office.")])
     }
 }
 private actor IslandTestLessons: CorrectionStoring {
@@ -89,11 +90,13 @@ enum DynamicIslandControllerChecks {
         show(.listening, on: island)
         try await waitFor { window(for: island)?.isVisible == true }
         guard let panel = window(for: island) else { throw IslandCheckError.missingPanel }
-        try unitEqual(panel.frame.size, CGSize(width: 144, height: 34))
+        try unitEqual(panel.frame.size, VoxaIslandView.orbWindowSize)
         try expectBottomPlacement(panel)
+        // A system shadow would outline the orb's voice glow with a dark rim.
+        try unitExpect(!panel.hasShadow)
 
         show(.transcribing, on: island)
-        try await waitFor { panel.frame.size == CGSize(width: 144, height: 34) }
+        try await waitFor { panel.frame.size == VoxaIslandView.orbWindowSize }
         try expectBottomPlacement(panel)
         analyze(feedback, id: context.id)
         try await waitFor { !feedback.isAnalyzing && feedback.hasReview }
@@ -102,9 +105,10 @@ enum DynamicIslandControllerChecks {
         feedback.updateDictation(.idle)
         island.finishDelivery()
         try unitEqual(island.model.phase, .idle)
-        try await waitFor { panel.isVisible && panel.frame.width == 480 && panel.frame.height > 100 }
+        try await waitFor { panel.isVisible && panel.frame.width == FeedbackReviewView.width(for: feedback) && panel.frame.height > 100 }
         try unitExpect(feedback.panelVisible)
         try expectBottomPlacement(panel)
+        try unitExpect(panel.hasShadow)
         let reviewFrame = panel.frame
         island.hide() // Repeated idle cleanup preserves an already-visible review.
         try await Task.sleep(for: .milliseconds(100))
@@ -132,10 +136,10 @@ enum DynamicIslandControllerChecks {
         island.finishDelivery()
         try unitEqual(island.model.phase, .idle)
         try unitExpect(island.model.awaitingFeedback)
-        try await waitFor { panel.isVisible && panel.frame.size == CGSize(width: 144, height: 34) }
+        try await waitFor { panel.isVisible && panel.frame.size == VoxaIslandView.orbWindowSize }
         try expectBottomPlacement(panel)
         await gate.open()
-        try await waitFor { feedback.panelVisible && panel.isVisible && panel.frame.width == 480 && panel.frame.height > 100 }
+        try await waitFor { feedback.panelVisible && panel.isVisible && panel.frame.width == FeedbackReviewView.width(for: feedback) && panel.frame.height > 100 }
         try expectBottomPlacement(panel)
         feedback.dismiss()
         try await waitFor { !panel.isVisible }
@@ -172,7 +176,7 @@ enum DynamicIslandControllerChecks {
         feedback.updateDictation(.idle)
         try await waitFor {
             guard let panel = window(for: island) else { return false }
-            return panel.isVisible && panel.frame.width == 480 && panel.frame.height > 100
+            return panel.isVisible && panel.frame.width == FeedbackReviewView.width(for: feedback) && panel.frame.height > 100
         }
         guard let panel = window(for: island) else { throw IslandCheckError.missingPanel }
         let reviewFrame = panel.frame
@@ -182,24 +186,57 @@ enum DynamicIslandControllerChecks {
         island.resume()
         try await waitFor { panel.isVisible }
         try unitEqual(panel.frame, reviewFrame)
-        // Practice returns to the same host with a selected explanation. Local
-        // view state must grow the native window rather than clip its footer.
-        feedback.setPracticeActive(true)
-        try await waitFor { !panel.isVisible }
-        panel.contentView?.layoutSubtreeIfNeeded()
-        guard let lesson = feedback.findings.first else { throw IslandCheckError.missingPanel }
-        feedback.selectedReviewExplanationID = lesson.id.uuidString + ":" + lesson.id.uuidString
-        feedback.setPracticeActive(false)
-        try await waitFor { panel.isVisible && panel.frame.height > reviewFrame.height + 20 }
+        // Showing the comparison must grow the native window rather than clip its footer.
+        try unitExpect(feedback.toggleComparison())
+        try await waitFor { panel.isVisible && panel.frame.height > reviewFrame.height + 10 }
         try expectBottomPlacement(panel)
         try unitEqual(panel.frame.minY, reviewFrame.minY)
+        try unitExpect(feedback.toggleComparison())
+        try await waitFor { panel.isVisible && panel.frame == reviewFrame }
+        // Practice returns to the same host and size.
         feedback.setPracticeActive(true)
         try await waitFor { !panel.isVisible }
-        panel.contentView?.layoutSubtreeIfNeeded()
-        feedback.selectedReviewExplanationID = nil
         feedback.setPracticeActive(false)
         try await waitFor { panel.isVisible && panel.frame == reviewFrame }
         try expectBottomPlacement(panel)
+        await feedback.shutdown()
+    }
+
+    private static func click(_ panel: NSWindow, at point: CGPoint) {
+        for (type, number) in [(NSEvent.EventType.leftMouseDown, 1), (.leftMouseUp, 2)] {
+            guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: number, clickCount: 1, pressure: 1) else { continue }
+            panel.sendEvent(event)
+        }
+    }
+
+    /// Opening a fix changes only view-local state, so no controller publication
+    /// announces the taller review.
+    static func expandingAFixGrowsTheWindowUpward() async throws {
+        let feedback = makeFeedback()
+        let island = makeIsland(feedback: feedback)
+        defer { island.shutdown() }
+        let context = DictationContext(id: UUID(), origin: .manual, settings: .init())
+        feedback.updateDictation(.starting(context, requested: nil))
+        analyze(feedback, id: context.id)
+        feedback.deliveryFinished(id: context.id)
+        feedback.updateDictation(.idle)
+        try await waitFor {
+            guard let panel = window(for: island) else { return false }
+            return panel.isVisible && panel.frame.width == FeedbackReviewView.width(for: feedback) && panel.frame.height > 100
+        }
+        guard let panel = window(for: island) else { throw IslandCheckError.missingPanel }
+        try await Task.sleep(for: .milliseconds(100))
+        let reviewFrame = panel.frame
+        try expectBottomPlacement(panel)
+        let fixRow = CGPoint(x: 100, y: reviewFrame.height - 86)
+        click(panel, at: fixRow)
+        try await waitFor { panel.frame.height > reviewFrame.height + 10 }
+        try await Task.sleep(for: .milliseconds(100))
+        try expectBottomPlacement(panel)
+        click(panel, at: CGPoint(x: 100, y: panel.frame.height - 86))
+        try await waitFor { panel.frame == reviewFrame }
         await feedback.shutdown()
     }
 
@@ -231,14 +268,14 @@ enum DynamicIslandControllerChecks {
         try await Task.sleep(for: .milliseconds(50))
         try unitEqual(panel.frame, target)
         show(.transcribing, on: island)
-        try await waitFor { panel.frame.size == CGSize(width: 144, height: 34) }
+        try await waitFor { panel.frame.size == VoxaIslandView.orbWindowSize }
         try unitEqual(panel.frame.midX, target.midX)
         try unitEqual(panel.frame.minY, target.minY)
         analyze(feedback, id: context.id)
         feedback.deliveryFinished(id: context.id)
         feedback.updateDictation(.idle)
         island.hide()
-        try await waitFor { panel.isVisible && panel.frame.width == 480 && panel.frame.height > 100 }
+        try await waitFor { panel.isVisible && panel.frame.width == FeedbackReviewView.width(for: feedback) && panel.frame.height > 100 }
         try unitEqual(panel.frame.midX, target.midX)
         try unitEqual(panel.frame.minY, target.minY)
         island.shutdown()
@@ -248,7 +285,7 @@ enum DynamicIslandControllerChecks {
         show(.listening, on: reopened)
         try await waitFor { window(for: reopened)?.isVisible == true }
         guard let restored = window(for: reopened) else { throw IslandCheckError.missingPanel }
-        try unitEqual(restored.frame.size, CGSize(width: 144, height: 34))
+        try unitEqual(restored.frame.size, VoxaIslandView.orbWindowSize)
         try unitEqual(restored.frame.midX, target.midX)
         try unitEqual(restored.frame.minY, target.minY)
         await feedback.shutdown()
@@ -259,6 +296,7 @@ enum DynamicIslandControllerChecks {
         ("native island: delayed feedback grows from the waiting bar", delayedFeedbackResizesTheWaitingBar),
         ("native island: pasted text hides immediately without feedback", pastedTextWithoutFeedbackHidesTheBar),
         ("native island: feedback creates and reopens its full window", feedbackCreatesAndReopensItsFullWindow),
+        ("native island: expanding a fix grows the window upward", expandingAFixGrowsTheWindowUpward),
         ("native island: dragged position survives feedback and app restart", draggedPositionSurvivesFeedbackAndRestart)
     ]
 }
@@ -291,6 +329,7 @@ final class DynamicIslandControllerTests: XCTestCase {
     func testDelayedFeedbackResizesWaitingBar() async throws { try await DynamicIslandControllerChecks.delayedFeedbackResizesTheWaitingBar() }
     func testPastedTextWithoutFeedbackHidesBar() async throws { try await DynamicIslandControllerChecks.pastedTextWithoutFeedbackHidesTheBar() }
     func testFeedbackCreatesAndReopensWindow() async throws { try await DynamicIslandControllerChecks.feedbackCreatesAndReopensItsFullWindow() }
+    func testExpandingAFixGrowsWindowUpward() async throws { try await DynamicIslandControllerChecks.expandingAFixGrowsTheWindowUpward() }
     func testDraggedPositionSurvivesRestart() async throws { try await DynamicIslandControllerChecks.draggedPositionSurvivesFeedbackAndRestart() }
 }
 #endif

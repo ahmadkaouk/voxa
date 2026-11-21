@@ -90,6 +90,8 @@ struct HotkeyOption: Identifiable, Equatable {
     static let defaultFinishAndSubmit = optionG
     static let defaultSaveFeedback = HotkeyOption(keyCodes: [KeyCode.s], modifiers: .command)
     static let defaultCancel = HotkeyOption(keyCodes: [KeyCode.escape], modifiers: [])
+    /// Shows or hides the sentence-by-sentence comparison while feedback is open.
+    static let defaultCompareFeedback = HotkeyOption(keyCodes: [KeyCode.d], modifiers: .command)
     static let functionSpace = HotkeyOption(
         keyCodes: [KeyCode.space],
         modifiers: [.function],
