@@ -38,7 +38,7 @@ pasted as dictated; suggestions appear separately for you to review.
   lesson by speaking or typing, or revisit patterns in a one-minute review.
 - **Follow your progress.** See which mistakes you keep repeating.
 
-<img src="assets/screenshots/english-feedback.png" alt="Voxa English feedback showing four fixes as You said → Better pairs with repeated mistakes flagged, a misheard-word note, and a more natural version of the dictation" width="512">
+<img src="assets/screenshots/english-feedback.png" alt="Voxa English feedback showing four fixes as You said → Better pairs, two marked as repeated mistakes, a misheard-word note, and the whole dictation said more naturally beside them" width="760">
 
 *Voxa’s feedback panel, shown with sample text.*
 [See a practice example](assets/screenshots/english-practice.png).
@@ -67,7 +67,7 @@ Enable **English Learning → English feedback** in the menu bar.
 <img src="assets/screenshots/english-learning.png" alt="Voxa English Learning listing repeated mistakes as You said → Better pairs with how often each happened" width="900">
 
 *The learning window, shown with sample fixes.*
-[See Settings](assets/screenshots/settings.png).
+[See Settings → General](assets/screenshots/settings.png).
 
 ## Get started
 

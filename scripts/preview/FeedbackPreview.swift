@@ -288,7 +288,8 @@ private enum FeedbackPreview {
         for index in ActivityOverlayMetrics.waveform.indices {
             for level in [0, 0.1, 0.7, 1, -1, Double.nan, Double.infinity] {
                 let height = ActivityOverlayMetrics.barHeight(index: index, level: level, time: 0)
-                guard height.isFinite, (3...26).contains(height) else { throw FeedbackError.invalidResponse }
+                // Bars must fit the waveform's 32-point frame.
+                guard height.isFinite, (3...32).contains(height) else { throw FeedbackError.invalidResponse }
             }
         }
         let quiet = ActivityOverlayMetrics.barHeight(index: 11, level: 0, time: 0)
