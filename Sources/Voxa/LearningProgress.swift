@@ -21,9 +21,12 @@ actor LearningProgressStore: LearningProgressStoring {
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         let document = try JSONDecoder().decode(Document.self, from: Data(contentsOf: url))
         guard document.version == 1, document.records.count <= Self.limit,
-              Set(document.records.map(\.id)).count == document.records.count,
-              document.records.allSatisfy(\.isValid) else { throw FeedbackError.invalidResponse }
-        return document.records
+              Set(document.records.map(\.id)).count == document.records.count else { throw FeedbackError.invalidResponse }
+        // Earlier reviews also stored scores and levels, which are ignored now. A review that
+        // only had a score has nothing left to show.
+        let records = document.records.filter(\.hasLearningSignal)
+        guard records.allSatisfy(\.isValid) else { throw FeedbackError.invalidResponse }
+        return records
     }
 
     func save(_ records: [LearningRecord]) throws {
@@ -66,16 +69,13 @@ final class LearningProgress: ObservableObject {
         LearningFocus.allCases.compactMap { focus in
             let mistakes = records.filter { $0.mistakes.contains(focus) }.count
             let suggestions = records.filter { $0.suggestions.contains(focus) }.count
-            let successes = records.filter { $0.successes.contains(focus) }.count
-            guard mistakes + suggestions + successes > 0 else { return nil }
-            return PatternProgress(focus: focus, corrections: mistakes, suggestions: suggestions, successes: successes)
+            guard mistakes + suggestions > 0 else { return nil }
+            return PatternProgress(focus: focus, corrections: mistakes, suggestions: suggestions)
         }.sorted {
             if $0.corrections != $1.corrections { return $0.corrections > $1.corrections }
             return $0.focus.rawValue < $1.focus.rawValue
         }
     }
-
-    var expressionProfile: ExpressionProfile { ExpressionProfile(records: records) }
 
     func record(_ record: LearningRecord) {
         guard record.isValid else { return }
@@ -141,5 +141,36 @@ final class LearningProgress: ObservableObject {
 
     func finishPendingWrites() async {
         while let task { await task.value }
+    }
+}
+
+/// A mistake category from feedback reviews, with the saved fixes that show it, newest first.
+struct RepeatedMistake: Identifiable {
+    let pattern: PatternProgress
+    let examples: [SavedCorrection]
+    var id: LearningFocus { pattern.focus }
+    /// Reviews where it was a mistake, or else where better wording was suggested.
+    var count: Int { pattern.corrections > 0 ? pattern.corrections : pattern.suggestions }
+}
+
+enum LearningLibrary {
+    /// Most repeated first. Examples come from saved fixes, so no dictated text is kept in progress.
+    static func repeatedMistakes(patterns: [PatternProgress], saved: [SavedCorrection]) -> [RepeatedMistake] {
+        patterns.map { pattern in
+            RepeatedMistake(pattern: pattern, examples: saved.filter { $0.feedback.focus == pattern.focus }
+                .sorted { $0.date > $1.date })
+        }
+    }
+
+    static func fixes(in saved: [SavedCorrection], matching query: String = "") -> [SavedCorrection] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return saved }
+        return saved.filter { item in
+            let feedback = item.feedback
+            let searchable = [feedback.original, feedback.suggestion, feedback.explanation,
+                              feedback.pattern, feedback.focus?.label].compactMap { $0 }
+                + feedback.alternatives.flatMap { [$0.wording, $0.explanation, $0.pattern, $0.focus?.label].compactMap { $0 } }
+            return searchable.contains { $0.localizedStandardContains(query) }
+        }
     }
 }

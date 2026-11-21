@@ -33,32 +33,71 @@ struct SpokenAlternative: Codable, Equatable, Sendable {
 }
 
 struct EnglishFeedback: Codable, Equatable, Sendable {
+    static let alternativeLimit = 3
+
     let kind: FeedbackKind
     let original: String
     let suggestion: String
     let explanation: String
     let practicePrompt: String
-    let alternative: SpokenAlternative?
+    /// Other natural ways to say the suggestion; each explanation says how it differs.
+    let alternatives: [SpokenAlternative]
     let pattern: String?
     let focus: LearningFocus?
 
     init(kind: FeedbackKind, original: String, suggestion: String, explanation: String,
-         practicePrompt: String, alternative: SpokenAlternative? = nil,
+         practicePrompt: String, alternatives: [SpokenAlternative] = [],
          pattern: String? = nil, focus: LearningFocus? = nil) {
         self.kind = kind; self.original = original; self.suggestion = suggestion
         self.explanation = explanation; self.practicePrompt = practicePrompt
-        self.alternative = alternative
+        self.alternatives = alternatives
         self.pattern = pattern; self.focus = focus
+    }
+
+    init(kind: FeedbackKind, original: String, suggestion: String, explanation: String,
+         practicePrompt: String, alternative: SpokenAlternative?,
+         pattern: String? = nil, focus: LearningFocus? = nil) {
+        self.init(kind: kind, original: original, suggestion: suggestion, explanation: explanation,
+                  practicePrompt: practicePrompt, alternatives: alternative.map { [$0] } ?? [],
+                  pattern: pattern, focus: focus)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, original, suggestion, explanation, practicePrompt, alternatives, alternative, pattern, focus
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try values.decode(FeedbackKind.self, forKey: .kind)
+        original = try values.decode(String.self, forKey: .original)
+        suggestion = try values.decode(String.self, forKey: .suggestion)
+        explanation = try values.decode(String.self, forKey: .explanation)
+        practicePrompt = try values.decode(String.self, forKey: .practicePrompt)
+        // Lessons saved before multiple alternatives kept at most one, under `alternative`.
+        alternatives = try values.decodeIfPresent([SpokenAlternative].self, forKey: .alternatives)
+            ?? values.decodeIfPresent(SpokenAlternative.self, forKey: .alternative).map { [$0] } ?? []
+        pattern = try values.decodeIfPresent(String.self, forKey: .pattern)
+        focus = try values.decodeIfPresent(LearningFocus.self, forKey: .focus)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(kind, forKey: .kind)
+        try values.encode(original, forKey: .original)
+        try values.encode(suggestion, forKey: .suggestion)
+        try values.encode(explanation, forKey: .explanation)
+        try values.encode(practicePrompt, forKey: .practicePrompt)
+        if !alternatives.isEmpty { try values.encode(alternatives, forKey: .alternatives) }
+        try values.encodeIfPresent(pattern, forKey: .pattern)
+        try values.encodeIfPresent(focus, forKey: .focus)
     }
 
     var isValid: Bool {
         guard Self.validPattern(pattern) else { return false }
-        if kind == .transcriptionIssue, focus != nil || pattern != nil { return false }
+        if kind == .transcriptionIssue, focus != nil || pattern != nil || !alternatives.isEmpty { return false }
         if kind == .grammar || kind == .construction, let focus, !focus.isGrammar { return false }
-        if let alternative {
-            guard (kind == .grammar || kind == .construction), alternative.isValid,
-                  alternative.wording != suggestion, alternative.wording != original else { return false }
-        }
+        guard alternatives.count <= Self.alternativeLimit, Set(alternatives.map(\.wording)).count == alternatives.count,
+              alternatives.allSatisfy({ $0.isValid && $0.wording != suggestion && $0.wording != original }) else { return false }
         let required = [original, suggestion, explanation]
         return required.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 }
             && original != suggestion && practicePrompt.count <= 240
@@ -93,15 +132,32 @@ struct EnglishFeedback: Codable, Equatable, Sendable {
         let corrections = unique.filter { $0.kind == .grammar || $0.kind == .construction }
         unique.removeAll { finding in
             finding.kind == .phrasing && corrections.contains {
-                $0.original == finding.original && $0.alternative?.wording == finding.suggestion
+                $0.original == finding.original && $0.alternatives.contains { $0.wording == finding.suggestion }
             }
         }
-        // Keep independent fixes to the same excerpt, and retain model order for ties.
-        return unique.enumerated().sorted { lhs, rhs in
-            let left = transcript.range(of: lhs.element.original)!.lowerBound
-            let right = transcript.range(of: rhs.element.original)!.lowerBound
-            return left == right ? lhs.offset < rhs.offset : left < right
-        }.map(\.element)
+        // The model ranks findings most important first; keep that order.
+        return unique
+    }
+}
+
+/// One stretch of the dictation and how a fluent speaker would say it out loud.
+/// `said` quotes the transcript exactly. An unchanged stretch repeats it, and an
+/// empty `natural` drops a false start.
+struct NaturalSentence: Codable, Equatable, Sendable {
+    let said: String
+    let natural: String
+
+    /// Pairs must quote the transcript in order without overlapping. A malformed
+    /// rewrite is dropped on its own so the corrections still reach the speaker.
+    static func validated(_ pairs: [NaturalSentence], for transcript: String) -> [NaturalSentence] {
+        var remaining = transcript.startIndex..<transcript.endIndex
+        for pair in pairs {
+            guard !pair.said.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  pair.said.count <= 2_000, pair.natural.count <= 2_000,
+                  let range = transcript.range(of: pair.said, range: remaining) else { return [] }
+            remaining = range.upperBound..<transcript.endIndex
+        }
+        return pairs
     }
 }
 
@@ -111,7 +167,7 @@ struct SavedCorrection: Codable, Identifiable, Equatable, Sendable {
     let feedback: EnglishFeedback
 }
 
-/// Shared speech normalization for cosmetic-change filtering, practice and assessment.
+/// Shared speech normalization for cosmetic-change filtering, practice and comparisons.
 enum EnglishText {
     static func spokenWords(_ text: String) -> [String] {
         text.lowercased().replacingOccurrences(of: "’", with: "'")
@@ -121,169 +177,53 @@ enum EnglishText {
     static func wordCount(_ text: String) -> Int {
         text.split { !$0.isLetter && $0 != "'" && $0 != "’" }.count
     }
-}
 
-/// Separate edits keep distant corrections scannable without marking unchanged words.
-struct FeedbackWordDiff {
-    struct Change: Equatable {
-        let range: NSRange
-        let original: String
-        let suggestion: String
-    }
-    let changes: [Change]
     private static let tokenPattern = try! NSRegularExpression(pattern: #"\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]"#)
 
-    init(original: String, suggestion: String) {
-        func tokens(_ text: String) -> [String] {
-            Self.tokenPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).map {
-                (text as NSString).substring(with: $0.range)
-            }
-        }
-        let before = tokens(original), after = tokens(suggestion)
-        let difference = after.difference(from: before)
-        var removals = Set<Int>(), insertions = Set<Int>()
-        for change in difference {
-            switch change {
-            case .remove(let offset, _, _): removals.insert(offset)
-            case .insert(let offset, _, _): insertions.insert(offset)
-            }
-        }
-        var result: [Change] = [], i = 0, j = 0, location = 0
-        while i < before.count || j < after.count {
-            let start = location
-            var removed = "", added = ""
-            while i < before.count, removals.contains(i) {
-                removed += before[i]; location += (before[i] as NSString).length; i += 1
-            }
-            while j < after.count, insertions.contains(j) { added += after[j]; j += 1 }
-            if !removed.isEmpty || !added.isEmpty {
-                result.append(Change(range: NSRange(location: start, length: location - start), original: removed, suggestion: added))
-            }
-            if i < before.count, j < after.count {
-                location += (before[i] as NSString).length; i += 1; j += 1
-            }
-        }
-        changes = result
-    }
-}
-
-/// Expand excerpts to their full sentences and combine only compatible edits.
-/// If model findings conflict, show their individual comparisons instead of inventing a rewrite.
-struct FeedbackSentence: Equatable {
-    let original: String
-    let suggestion: String
-
-    struct Group: Equatable {
-        let sentence: FeedbackSentence
-        let findingIndices: [Int]
-    }
-
-    static func comparisons(transcript: String, findings: [EnglishFeedback]) -> [Self] {
-        groups(transcript: transcript, findings: findings).map(\.sentence)
-    }
-
-    /// Keep each explanation attached to exactly the sentence edits it describes.
-    static func groups(transcript: String, findings: [EnglishFeedback]) -> [Group] {
-        let source = transcript as NSString
-        var sentences: [NSRange] = []
-        transcript.enumerateSubstrings(in: transcript.startIndex..., options: .bySentences) { _, range, _, _ in
-            sentences.append(NSRange(range, in: transcript))
-        }
-        struct Entry {
-            let index: Int
-            let excerpt: NSRange
-            let sentence: NSRange
-            let finding: EnglishFeedback
-        }
-        let entries = findings.enumerated().compactMap { index, finding -> Entry? in
-            let excerpt = source.range(of: finding.original)
-            guard excerpt.location != NSNotFound else { return nil }
-            let sentence = sentences.filter { NSIntersectionRange($0, excerpt).length > 0 }.reduce(excerpt, NSUnionRange)
-            return Entry(index: index, excerpt: excerpt, sentence: sentence, finding: finding)
-        }
-        var groups: [[Entry]] = []
-        for entry in entries.sorted(by: { $0.sentence.location < $1.sentence.location }) {
-            if let last = groups.last, last.contains(where: { NSIntersectionRange($0.sentence, entry.sentence).length > 0 }) {
-                groups[groups.count - 1].append(entry)
-            } else { groups.append([entry]) }
-        }
-        let combined = groups.flatMap { group -> [Group] in
-            let range = group.dropFirst().reduce(group[0].sentence) { NSUnionRange($0, $1.sentence) }
-            let original = source.substring(with: range)
-            var edits: [FeedbackWordDiff.Change] = []
-            var conflict = false
-            for entry in group {
-                for change in FeedbackWordDiff(original: entry.finding.original, suggestion: entry.finding.suggestion).changes {
-                    let edit = FeedbackWordDiff.Change(
-                        range: NSRange(location: entry.excerpt.location - range.location + change.range.location, length: change.range.length),
-                        original: change.original, suggestion: change.suggestion)
-                    if edits.contains(edit) { continue }
-                    if edits.contains(where: { NSIntersectionRange($0.range, edit.range).length > 0 || $0.range.location == edit.range.location
-                        || ($0.range.length == 0 && NSLocationInRange($0.range.location, edit.range))
-                        || (edit.range.length == 0 && NSLocationInRange(edit.range.location, $0.range)) }) { conflict = true }
-                    edits.append(edit)
-                }
-            }
-            if conflict {
-                return group.map { entry in
-                    let sentence = source.substring(with: entry.sentence) as NSString
-                    let local = NSRange(location: entry.excerpt.location - entry.sentence.location, length: entry.excerpt.length)
-                    return Group(sentence: Self(original: sentence as String,
-                        suggestion: sentence.replacingCharacters(in: local, with: entry.finding.suggestion)),
-                        findingIndices: [entry.index])
-                }
-            }
-            let corrected = NSMutableString(string: original)
-            for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
-                corrected.replaceCharacters(in: edit.range, with: edit.suggestion)
-            }
-            return [Group(sentence: Self(original: original, suggestion: corrected as String),
-                          findingIndices: group.map(\.index).sorted())]
-        }
-        // Context can be unavailable; still show the supplied comparison and its explanation.
-        let located = Set(entries.map(\.index))
-        return combined + findings.enumerated().compactMap { index, finding in
-            guard !located.contains(index) else { return nil }
-            return Group(sentence: Self(original: finding.original, suggestion: finding.suggestion), findingIndices: [index])
-        }
-    }
-}
-
-/// One replacement phrase keeps an inline review readable when a rewrite changes
-/// several words. Token boundaries preserve source whitespace and punctuation.
-struct FeedbackComparison {
-    let prefix: String
-    let removed: String
-    let added: String
-    let suffix: String
-    private static let endings: Set<String> = [".", "!", "?", "…"]
-    private static let tokenPattern = try! NSRegularExpression(pattern: #"\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]"#)
-
-    init(original: String, suggestion: String) {
-        let before = Self.tokens(original), after = Self.tokens(suggestion)
-        var start = 0
-        while start < min(before.count, after.count), before[start] == after[start] { start += 1 }
-        var beforeEnd = before.count, afterEnd = after.count
-        // A question mark in an optional rewrite shouldn't hide its shared
-        // words. Display the suggested ending after the comparison.
-        if before.last != after.last, let lastBefore = before.last, let lastAfter = after.last,
-           Self.endings.contains(lastBefore), Self.endings.contains(lastAfter) {
-            while beforeEnd > start, Self.endings.contains(before[beforeEnd - 1]) { beforeEnd -= 1 }
-            while afterEnd > start, Self.endings.contains(after[afterEnd - 1]) { afterEnd -= 1 }
-        }
-        var end = 0
-        while end < min(beforeEnd, afterEnd) - start,
-              before[beforeEnd - end - 1] == after[afterEnd - end - 1] { end += 1 }
-        prefix = before.prefix(start).joined()
-        removed = before[start..<(beforeEnd - end)].joined()
-        added = after[start..<(afterEnd - end)].joined()
-        suffix = after[(afterEnd - end)...].joined()
-    }
-
-    private static func tokens(_ text: String) -> [String] {
+    /// Words, whitespace and punctuation, in order; joined they rebuild the text.
+    static func tokens(_ text: String) -> [String] {
         tokenPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
             Range($0.range, in: text).map { String(text[$0]) }
         }
+    }
+}
+
+/// What was said next to the better wording, with the words that differ marked on each side.
+struct FeedbackPairText: Equatable {
+    struct Run: Equatable {
+        let text: String
+        let changed: Bool
+    }
+    let said: [Run]
+    let better: [Run]
+
+    init(said: String, better: String) {
+        let before = EnglishText.tokens(said), after = EnglishText.tokens(better)
+        var removed = Set<Int>(), inserted = Set<Int>()
+        for change in after.difference(from: before) {
+            switch change {
+            case .remove(let offset, _, _): removed.insert(offset)
+            case .insert(let offset, _, _): inserted.insert(offset)
+            }
+        }
+        self.said = Self.runs(before, changed: removed)
+        self.better = Self.runs(after, changed: inserted)
+    }
+
+    private static func runs(_ tokens: [String], changed: Set<Int>) -> [Run] {
+        var runs: [Run] = []
+        for (index, token) in tokens.enumerated() {
+            // A space is marked only inside a changed phrase, so the phrase reads as one mark.
+            let isChanged = token.allSatisfy(\.isWhitespace)
+                ? changed.contains(index - 1) && changed.contains(index + 1)
+                : changed.contains(index)
+            if let last = runs.last, last.changed == isChanged {
+                runs[runs.count - 1] = Run(text: last.text + token, changed: isChanged)
+            } else {
+                runs.append(Run(text: token, changed: isChanged))
+            }
+        }
+        return runs
     }
 }
 

@@ -93,6 +93,10 @@ final class AppController: ObservableObject {
             guard let self, self.isReady, !self.closing, !self.capturingHotkey else { return false }
             return self.feedback.discardReview()
         }
+        hotkeys.onCompareFeedback = { [weak self] in
+            guard let self, self.isReady, !self.closing, !self.capturingHotkey else { return false }
+            return self.feedback.toggleComparison()
+        }
         hotkeys.onCancelDictation = { [weak self] in
             guard let self, self.isReady, !self.closing, !self.capturingHotkey else { return false }
             // Hide immediately, including while the recorder releases its device.
@@ -158,6 +162,9 @@ final class AppController: ObservableObject {
     var finishAndSubmitHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.finishAndSubmitHotkey, fallback: .defaultFinishAndSubmit) }
     var saveFeedbackHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.saveFeedbackHotkey, fallback: .defaultSaveFeedback) }
     var cancelHotkey: HotkeyOption { HotkeyOption.fromRawOrDefault(preferences.cancelHotkey, fallback: .defaultCancel) }
+    var compareFeedbackHotkey: HotkeyOption {
+        HotkeyOption.fromRawOrDefault(preferences.compareFeedbackHotkey, fallback: .defaultCompareFeedback)
+    }
     var model: ModelOption { session.settings.model }
     var outputMode: OutputModeOption { session.settings.outputMode }
     var maxRecordingSeconds: UInt64 { preferences.maxRecordingSeconds }
@@ -240,6 +247,7 @@ final class AppController: ObservableObject {
             _ = session.updateSettings(next.dictation)
             let hotkeysChanged = next.toggleHotkey != preferences.toggleHotkey || next.finishAndSubmitHotkey != preferences.finishAndSubmitHotkey
                 || next.saveFeedbackHotkey != preferences.saveFeedbackHotkey || next.cancelHotkey != preferences.cancelHotkey
+                || next.compareFeedbackHotkey != preferences.compareFeedbackHotkey
             if !next.automaticContextEnabled || next.contextExcludedApps != preferences.contextExcludedApps {
                 feedback.contextPreferencesChanged()
             }
@@ -255,13 +263,14 @@ final class AppController: ObservableObject {
     }
     private func updateHotkeyBindings() {
         hotkeys.updateBindings(toggle: toggleHotkey, finishAndSubmit: finishAndSubmitHotkey,
-                               saveFeedback: saveFeedbackHotkey, cancel: cancelHotkey)
-        feedback.updateShortcuts(save: saveFeedbackHotkey, cancel: cancelHotkey)
+                               saveFeedback: saveFeedbackHotkey, cancel: cancelHotkey, compareFeedback: compareFeedbackHotkey)
+        feedback.updateShortcuts(save: saveFeedbackHotkey, cancel: cancelHotkey, compare: compareFeedbackHotkey)
     }
 
     private func acceptsShortcut(_ value: HotkeyOption, replacing title: String) -> Bool {
         let bindings = [("Start / Stop", toggleHotkey), ("Finish & Send", finishAndSubmitHotkey),
-                        ("Save feedback", saveFeedbackHotkey), ("Cancel / Close", cancelHotkey)]
+                        ("Save feedback", saveFeedbackHotkey), ("Cancel / Close", cancelHotkey),
+                        ("Compare", compareFeedbackHotkey)]
         if let conflict = bindings.first(where: { $0.0 != title && value.overlaps($0.1) }) {
             settingsError = "Choose a shortcut that doesn’t overlap \(conflict.0)."; return false
         }
@@ -292,6 +301,13 @@ final class AppController: ObservableObject {
         }
         guard acceptsShortcut(value, replacing: "Cancel / Close") else { return }
         update { $0.cancelHotkey = value.persistedValue }
+    }
+    func setCompareFeedbackHotkey(_ value: HotkeyOption) {
+        guard value.isValidForSubmit else {
+            settingsError = "Compare needs one key plus a modifier, such as Command + D."; return
+        }
+        guard acceptsShortcut(value, replacing: "Compare") else { return }
+        update { $0.compareFeedbackHotkey = value.persistedValue }
     }
     func setModel(_ value: ModelOption) { update(duringDictation: true) { $0.model = value.rawValue } }
     func setOutputMode(_ value: OutputModeOption) { update(duringDictation: true) { $0.outputMode = value.rawValue } }
@@ -334,6 +350,14 @@ final class AppController: ObservableObject {
             hotkeys.restart()
             hotkeys.setEnabled(!capturingHotkey)
         }
+    }
+
+    func requestMicrophonePermission() async {
+        guard !isBusy, !closing else { return }
+        // Declining the prompt is a permission choice; the row then offers System Settings.
+        try? await Permissions.requestMicrophone()
+        guard !closing else { return }
+        permissions = Permissions.current()
     }
 
     private func observe(_ center: NotificationCenter, _ name: Notification.Name,

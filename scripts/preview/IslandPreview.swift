@@ -39,7 +39,7 @@ private enum IslandScenario: String, CaseIterable, Identifiable {
                     pattern: "why + subject + verb", focus: .questionOrder)
             ])
         case .clean:
-            return .init(feedback: [], assessment: .init(status: .assessed, band: .accurate))
+            return .init(feedback: [], natural: [.init(said: transcript, natural: "Yesterday I went to the office. We went through the proposal together and agreed on the next steps before tomorrow’s team meeting.")])
         }
     }
 }
@@ -447,7 +447,7 @@ private struct IslandGalleryApp: App {
         if CommandLine.arguments.contains("--validate-fixtures") {
             do {
                 for scenario in IslandScenario.allCases {
-                    _ = try scenario.analysis.validated(for: scenario.transcript, knownPatterns: [])
+                    _ = try scenario.analysis.validated(for: scenario.transcript)
                 }
                 print("Validated \(IslandScenario.allCases.count) integrated island fixtures")
                 exit(0)

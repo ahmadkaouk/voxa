@@ -59,33 +59,6 @@ private enum FeedbackPreview {
     @MainActor static func run() async throws {
         try await verifyOverlayLifecycle()
         let now = Date()
-        let designText = "Yesterday I go over the proposal with Maya, and she explain why does the rollout take so long."
-        let designFindings: [EnglishFeedback] = [
-            .init(kind: .grammar, original: "I go over", suggestion: "I went over",
-                  explanation: "Yesterday places the action in the past.", practicePrompt: "Say what you did yesterday.",
-                  pattern: "Yesterday + past-tense verb", focus: .pastTense),
-            .init(kind: .grammar, original: "she explain", suggestion: "she explained",
-                  explanation: "Keep the second action in the past too.", practicePrompt: "Describe what someone explained.", focus: .pastTense),
-            .init(kind: .construction, original: "why does the rollout take so long", suggestion: "why the rollout takes so long",
-                  explanation: "Use statement word order inside an indirect question.", practicePrompt: "Explain why something takes time.",
-                  pattern: "why + subject + verb", focus: .questionOrder)
-        ]
-        let design = try await review(.init(feedback: designFindings, assessment: .tooShort), text: designText, history: [])
-        try await render(FeedbackReviewView(controller: design), name: "review-design-light", scheme: .light)
-        try await render(FeedbackReviewView(controller: design), name: "review-design-dark", scheme: .dark)
-        await design.shutdown()
-        let contextText = "And there's a list of application and time. One of the, there's a chart I was thinking about are the following."
-        let contextual = try await review(.init(feedback: [
-            .init(kind: .grammar, original: "application", suggestion: "applications",
-                  explanation: "Use the plural form when referring to multiple applications.",
-                  practicePrompt: "Describe a list of things.", pattern: "a list of + plural count noun", focus: .plurals),
-            .init(kind: .grammar, original: "are", suggestion: "is",
-                  explanation: "The singular subject a chart takes is, not are.",
-                  practicePrompt: "Describe one chart.", pattern: "A chart I was thinking about is…", focus: .agreement)
-        ]), text: contextText, history: [])
-        try await render(FeedbackReviewView(controller: contextual), name: "review-context-light", scheme: .light)
-        try await render(FeedbackReviewView(controller: contextual), name: "review-context-dark", scheme: .dark)
-        await contextual.shutdown()
         let bar = ActivityOverlayModel()
         bar.phase = .listening; bar.content = .init(title: "Listening", subtitle: nil)
         bar.startedAt = now.addingTimeInterval(-12); bar.level = 0.65
@@ -93,55 +66,70 @@ private enum FeedbackPreview {
         try await render(ActivityOverlayView(model: bar), name: "recorder-dark", scheme: .dark)
         bar.phase = .idle; bar.startedAt = nil
         try await render(ActivityOverlayView(model: bar), name: "recorder-idle", scheme: .light)
-        let sample = "Yesterday I visited the office because we needed to discuss the next release with the team. We considered several options and agreed that a smaller change would be easier to test. Although the deadline is close, I think we can finish on time if we focus on the most important problems and ask for help when we need it."
-        let history: [LearningRecord] = (0..<10).map { index in
-            let band: GrammarBand = index < 3 ? .accurate : (index < 7 ? .minor : .recurring)
-            let observations: [PatternObservation] = index < 3 ? [.init(focus: .pastTense, evidence: "I went home.")] : []
-            let analysis = FeedbackAnalysis(feedback: index < 3 ? [] : [correction, phrasing],
-                assessment: .init(status: .assessed, band: band), successfulPatterns: observations,
-                expression: .init(status: .assessed, purpose: index % 2 == 0 ? .explanation : .narrative,
-                    dimensions: ExpressionDimension.allCases.map { dimension in
-                        .init(dimension: dimension, level: dimension == .accuracy || dimension == .range ? .b1 : .b2,
-                              evidence: "Yesterday I visited the office")
-                    }))
-            let date = now.addingTimeInterval(Double(-index - 1) * 86_400)
-            return LearningRecord(id: UUID(), date: date, analysis: analysis, transcript: sample)
+
+        // A spoken explanation: ranked fixes, repeated mistakes, a misheard phrase and the natural version.
+        let explanation = "If total is equal to target, we return the two index. However, if total is different than target, then we have two options. So the goal here, so the idea, we have two options… since the array is sorted, if I shift the pointer to the right, I will have an element that is smaller. Brute force is O and squared, but here we’ve saw that we go through the array one time, so it’s linear."
+        func fix(_ said: String, _ better: String, _ why: String, kind: FeedbackKind = .grammar,
+                 focus: LearningFocus? = nil, alternatives: [SpokenAlternative] = []) -> EnglishFeedback {
+            .init(kind: kind, original: said, suggestion: better, explanation: why,
+                  practicePrompt: "Say a new sentence with it.", alternatives: alternatives, focus: focus)
         }
-        let result = FeedbackAnalysis(feedback: [correction, phrasing], assessment: .init(status: .assessed, band: .minor))
-        let controller = try await review(result, text: correction.original + " " + phrasing.original, history: history,
-            context: FeedbackTextContext(appName: "Mail", source: .nearbyText, text: "Could we discuss tomorrow's meeting?"))
-        try await render(FeedbackReviewView(controller: controller), name: "review-light", scheme: .light)
-        try await render(FeedbackReviewView(controller: controller), name: "review-dark", scheme: .dark)
-        try await render(FeedbackReviewView(controller: controller, maximumHeight: 450), name: "review-small", scheme: .light)
-        try await render(LearningProgressView(progress: controller.progress).frame(width: 780, height: 650), name: "progress-light", scheme: .light)
-        try await render(LearningProgressView(progress: controller.progress).frame(width: 780, height: 650), name: "progress-dark", scheme: .dark)
-        await controller.shutdown()
+        let explanationFixes = [
+            fix("the two index", "the two indices", "After two, use the plural.", focus: .plurals),
+            fix("if total is different than target", "if the total doesn’t match the target",
+                "Say “the total” and “the target”. “Doesn’t match” is quicker to say.", focus: .articles,
+                alternatives: [.init(wording: "if the sum isn’t equal to the target", explanation: "more precise"),
+                               .init(wording: "if the sum is off", explanation: "casual, shorter")]),
+            fix("we’ve saw", "we’ve seen", "After have, use seen, not saw.", focus: .verbForm),
+            fix("one time", "once", "“Once” is the natural way to say “one time”.", kind: .phrasing),
+            fix("I will have an element", "I get an element", "“Get” is shorter when you describe a result.", kind: .phrasing),
+            EnglishFeedback(kind: .transcriptionIssue, original: "O and squared", suggestion: "O of n squared",
+                            explanation: FeedbackClient.misheardExplanation, practicePrompt: "")
+        ]
+        let natural: [NaturalSentence] = [
+            .init(said: "If total is equal to target, we return the two index.",
+                  natural: "If the sum equals the target, I return their indices."),
+            .init(said: "However, if total is different than target, then we have two options.",
+                  natural: "If it doesn’t, there are two cases."),
+            .init(said: "So the goal here, so the idea, we have two options… since the array is sorted, if I shift the pointer to the right, I will have an element that is smaller.",
+                  natural: "Since the array is sorted, moving the pointer to the right gives me a smaller element."),
+            .init(said: "Brute force is O and squared, but here we’ve saw that we go through the array one time, so it’s linear.",
+                  natural: "Brute force would be O of n squared, but here I only pass through the array once, so it’s linear.")
+        ]
+        let history: [LearningRecord] = (0..<6).map { index in
+            LearningRecord(id: UUID(), date: now.addingTimeInterval(Double(-index - 1) * 86_400),
+                           analysis: .init(feedback: index < 4 ? [correction, explanationFixes[0], explanationFixes[1]] : [phrasing]))
+        }
+        let explained = try await review(.init(feedback: explanationFixes, natural: natural), text: explanation, history: history,
+            context: FeedbackTextContext(appName: "Visual Studio Code", source: .nearbyText, text: "def two_sum(numbers, target):"))
+        try await render(FeedbackReviewView(controller: explained), name: "review-light", scheme: .light)
+        try await render(FeedbackReviewView(controller: explained), name: "review-dark", scheme: .dark)
+        try await render(FeedbackReviewView(controller: explained, maximumHeight: 450), name: "review-small", scheme: .light)
+        guard explained.toggleComparison() else { throw FeedbackError.invalidResponse }
+        try await render(FeedbackReviewView(controller: explained), name: "review-compare", scheme: .light)
+        await explained.shutdown()
+
+        // No mistakes, but a more natural way to say part of it.
+        let fluentText = "Yesterday I went to the office. We reviewed the API changes together."
+        let fluent = try await review(.init(feedback: [], natural: [
+            .init(said: "Yesterday I went to the office.", natural: "Yesterday I went to the office."),
+            .init(said: "We reviewed the API changes together.", natural: "We went through the API changes together.")
+        ]), text: fluentText, history: [])
+        try await render(FeedbackReviewView(controller: fluent), name: "review-nothing-to-fix", scheme: .light)
+        await fluent.shutdown()
 
         let singleCorrection = EnglishFeedback(kind: .grammar,
             original: "What do you mean by keep submitted material versions in Drive?",
             suggestion: "What do you mean by keeping submitted material versions in Drive?",
-            explanation: "After the preposition “by,” use a gerund (the -ing form).",
+            explanation: "After “by”, use the -ing form.",
             practicePrompt: "Ask a new question using What do you mean by + -ing?", focus: .verbForm)
-        let singleAnalysis = FeedbackAnalysis(feedback: [singleCorrection], assessment: .tooShort)
-        let singleHistory = (1...4).map { offset in
-            LearningRecord(id: UUID(), date: now.addingTimeInterval(Double(-offset) * 86_400),
-                           analysis: singleAnalysis, transcript: singleCorrection.original)
-        }
-        let single = try await review(singleAnalysis, text: singleCorrection.original, history: singleHistory,
+        let single = try await review(.init(feedback: [singleCorrection]), text: singleCorrection.original, history: [],
             context: FeedbackTextContext(appName: "ChatGPT", source: .nearbyText, text: "Where should we keep the file versions?"))
         let compactSize = try await render(FeedbackReviewView(controller: single), name: "review-single-light", scheme: .light)
         guard compactSize.height < 520 else { throw FeedbackError.invalidResponse }
         try await render(FeedbackReviewView(controller: single), name: "review-single-dark", scheme: .dark)
         await single.shutdown()
 
-        // Match the alternative-only review that exposed the hierarchy problem:
-        // a long suggestion, reusable template, explanation, original and successes.
-        let followUp = EnglishFeedback(kind: .phrasing,
-            original: "Another question is about the optional phrase or another way to say it.",
-            suggestion: "I have another question about the optional phrase or another way to say it.",
-            explanation: "“I have another question about…” is a natural way to introduce a follow-up question.",
-            practicePrompt: "Introduce a follow-up question about a different topic.",
-            pattern: "I have another question about + topic", focus: .connectingIdeas)
         let earlierLessons: [EnglishFeedback] = [
             .init(kind: .grammar, original: "Can you tell me what is the plan?",
                   suggestion: "Can you tell me what the plan is?", explanation: "Use statement word order.",
@@ -152,40 +140,6 @@ private enum FeedbackPreview {
             .init(kind: .grammar, original: "We discussed about the plan.", suggestion: "We discussed the plan.",
                   explanation: "Use discuss without about.", practicePrompt: "Say what you discussed.", focus: .prepositions)
         ]
-        let earlierPatterns = earlierLessons.enumerated().map { index, lesson in
-            LearningRecord(id: UUID(), date: now.addingTimeInterval(Double(-index - 1) * 86_400),
-                           analysis: .init(feedback: [lesson], assessment: .tooShort), transcript: lesson.original)
-        }
-        let followUpText = followUp.original + " What prompt are we using to generate this?"
-        let alternativeOnly = try await review(.init(feedback: [followUp],
-            assessment: .init(status: .assessed, band: .accurate), successfulPatterns: [
-                .init(focus: .questionOrder, evidence: "What prompt are we using to generate this?"),
-                .init(focus: .articles, evidence: "the optional phrase"),
-                .init(focus: .prepositions, evidence: "about the optional phrase")
-            ]), text: followUpText, history: earlierPatterns,
-            context: FeedbackTextContext(appName: "ChatGPT", source: .nearbyText, text: "How can I ask a follow-up question?"))
-        try await render(FeedbackReviewView(controller: alternativeOnly), name: "review-alternative-light", scheme: .light)
-        try await render(FeedbackReviewView(controller: alternativeOnly), name: "review-alternative-dark", scheme: .dark)
-        try await render(FeedbackReviewView(controller: alternativeOnly, maximumHeight: 450),
-                         name: "review-alternative-small", scheme: .light)
-        await alternativeOnly.shutdown()
-
-        let withoutPattern = EnglishFeedback(kind: .phrasing, original: phrasing.original,
-            suggestion: phrasing.suggestion, explanation: phrasing.explanation, practicePrompt: phrasing.practicePrompt)
-        let noPattern = try await review(.init(feedback: [withoutPattern], assessment: .tooShort),
-                                         text: withoutPattern.original, history: [])
-        try await render(FeedbackReviewView(controller: noPattern), name: "review-alternative-no-pattern", scheme: .light)
-        await noPattern.shutdown()
-
-        let wordChoice = EnglishFeedback(kind: .phrasing,
-            original: "It isn’t installed in some place yet.", suggestion: "It isn’t installed anywhere yet.",
-            explanation: "Use anywhere with a negative when you mean no location.",
-            practicePrompt: "Say that something is unavailable in any location.", pattern: "not + verb + anywhere")
-        let wordReview = try await review(.init(feedback: [wordChoice], assessment: .tooShort),
-                                         text: wordChoice.original, history: [])
-        try await render(FeedbackReviewView(controller: wordReview), name: "review-word-choice", scheme: .light)
-        try await render(FeedbackReviewView(controller: wordReview), name: "review-word-choice-dark", scheme: .dark)
-        await wordReview.shutdown()
 
         let deletion = EnglishFeedback(kind: .grammar, original: "We discussed about the plan.",
             suggestion: "We discussed the plan.", explanation: "Use discuss without about.",
@@ -194,35 +148,37 @@ private enum FeedbackPreview {
             explanation: "Use is before an adjective to describe her state.",
             practicePrompt: "Describe someone’s state.", focus: .verbForm)
         let recognition = EnglishFeedback(kind: .transcriptionIssue, original: "Cash the API response.",
-            suggestion: "Cache the API response.", explanation: "You may have said cache. Check the transcription.",
-            practicePrompt: "")
-        let edgeCases = try await review(.init(feedback: [deletion, insertion, recognition], assessment: .uncertain),
+            suggestion: "Cache the API response.", explanation: FeedbackClient.misheardExplanation, practicePrompt: "")
+        let edgeCases = try await review(.init(feedback: [deletion, insertion, recognition]),
             text: [deletion, insertion, recognition].map(\.original).joined(separator: " "), history: [])
         try await render(FeedbackReviewView(controller: edgeCases), name: "review-insert-delete-recognition", scheme: .light)
         await edgeCases.shutdown()
 
-        try await render(FeedbackLessonView(feedback: correction, onPractice: { _ in }).padding(26).frame(width: 440),
-                         name: "saved-lesson-inline", scheme: .light)
-
-        let paired = try await review(.init(feedback: [correction], assessment: .tooShort),
-                                      text: correction.original, history: [])
-        try await render(FeedbackReviewView(controller: paired), name: "review-paired", scheme: .light)
-        await paired.shutdown()
 
         let rewrite = EnglishFeedback(kind: .construction,
             original: "The project, what I wanted it is for that people can know about why the changes and what the next step would be.",
             suggestion: "I wanted the project to help people understand the changes and the next step.",
-            explanation: "Use “I wanted the project to help” to connect your intention to its purpose.",
+            explanation: "Say what you wanted the project to do: “I wanted the project to help…”.",
             practicePrompt: "Explain what you wanted a project to help people do.", focus: .sentenceStructure)
-        let rewritten = try await review(.init(feedback: [rewrite], assessment: .tooShort), text: rewrite.original, history: [])
+        let rewritten = try await review(.init(feedback: [rewrite]), text: rewrite.original, history: [])
         try await render(FeedbackReviewView(controller: rewritten), name: "review-rewrite", scheme: .light)
         await rewritten.shutdown()
 
-        let cleanText = "Yesterday I went to the office. We reviewed the API changes together and agreed to test the new version again before shipping it tomorrow."
-        let clean = try await review(.init(feedback: [], assessment: .init(status: .assessed, band: .accurate),
-            successfulPatterns: [.init(focus: .pastTense, evidence: "Yesterday I went to the office.")]), text: cleanText, history: history)
-        try await render(FeedbackReviewView(controller: clean), name: "review-clean", scheme: .light)
-        await clean.shutdown()
+        let generalSettings = SettingsSidebarLayout(selection: .constant(.general)) {
+            GeneralSettingsView(permissions: .init(microphone: .notDetermined, accessibility: false, inputMonitoring: false),
+                onRequestMicrophone: {}, onOpenSettings: { _ in })
+        }.frame(width: 820, height: 620)
+        try await render(generalSettings, name: "settings-general-light", scheme: .light)
+        try await render(generalSettings, name: "settings-general-dark", scheme: .dark)
+        for (name, permissions) in [
+            ("missing", Permissions(microphone: .denied, accessibility: false, inputMonitoring: false)),
+            ("enabled", Permissions(microphone: .authorized, accessibility: true, inputMonitoring: true)),
+            ("restricted", Permissions(microphone: .restricted, accessibility: false, inputMonitoring: false))
+        ] {
+            try await render(SettingsSidebarLayout(selection: .constant(.general)) {
+                GeneralSettingsView(permissions: permissions, onRequestMicrophone: {}, onOpenSettings: { _ in })
+            }.frame(width: 760, height: 560), name: "settings-general-\(name)-small", scheme: .light)
+        }
 
         let privacySettings = SettingsSidebarLayout(selection: .constant(.privacy)) {
             PrivacySettingsView(excludedApps: [.init(bundleID: "example.private", name: "Private workspace")],
@@ -255,7 +211,7 @@ private enum FeedbackPreview {
             .frame(width: 1060, height: 680), name: "learning-library-light", scheme: .light)
         try await render(SavedCorrectionsView(controller: library, history: practiceHistory, onShortReview: {})
             .frame(width: 1060, height: 680), name: "learning-library-dark", scheme: .dark)
-        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, initialSection: .phrasing)
+        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, initialSection: .saved)
             .frame(width: 940, height: 560), name: "learning-library-small", scheme: .light)
         try await render(SavedCorrectionsView(controller: library, history: practiceHistory, initialSearch: "indirect")
             .frame(width: 1060, height: 680), name: "learning-search", scheme: .light)
@@ -263,7 +219,7 @@ private enum FeedbackPreview {
             .frame(width: 940, height: 560), name: "learning-search-empty", scheme: .light)
         try await render(SavedCorrectionsView(controller: library, history: practiceHistory, onShortReview: {}, initialSection: .practice)
             .frame(width: 1060, height: 680), name: "learning-practice", scheme: .light)
-        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, initialSection: .progress)
+        try await render(SavedCorrectionsView(controller: library, history: practiceHistory, initialSection: .mistakes)
             .frame(width: 1060, height: 680), name: "learning-progress", scheme: .light)
         await library.shutdown()
 

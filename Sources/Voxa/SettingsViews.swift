@@ -4,10 +4,11 @@ import SwiftUI
 private typealias SettingsState<Value> = SwiftUI.State<Value>
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case shortcuts, privacy, apiKey
+    case general, shortcuts, privacy, apiKey
     var id: Self { self }
     var title: String {
         switch self {
+        case .general: return "General"
         case .shortcuts: return "Shortcuts"
         case .privacy: return "Privacy"
         case .apiKey: return "API Key"
@@ -15,6 +16,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     }
     var symbol: String {
         switch self {
+        case .general: return "gearshape"
         case .shortcuts: return "keyboard"
         case .privacy: return "hand.raised"
         case .apiKey: return "key.horizontal"
@@ -25,6 +27,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let keywords: String
         switch self {
+        case .general: keywords = "permissions microphone accessibility input monitoring access system settings"
         case .shortcuts: keywords = "keyboard start stop finish send save feedback cancel close escape"
         case .privacy: keywords = "English feedback practice nearby text context excluded apps data storage retention"
         case .apiKey: keywords = "OpenAI API key connection credentials storage Keychain"
@@ -41,7 +44,7 @@ struct SettingsSidebarLayout<Content: View>: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                sidebarSection("Settings", panes: [.shortcuts, .privacy])
+                sidebarSection("Settings", panes: [.general, .shortcuts, .privacy])
                 sidebarSection("Connection", panes: [.apiKey])
             }
             .voxaSidebarStyle()
@@ -57,7 +60,7 @@ struct SettingsSidebarLayout<Content: View>: View {
                 content.frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             }
             .background(Color(nsColor: .windowBackgroundColor))
-            .navigationTitle((selection ?? .shortcuts).title)
+            .navigationTitle((selection ?? .general).title)
         }
         .navigationSplitViewStyle(.balanced)
         .searchable(text: $search, placement: .sidebar, prompt: "Search")
@@ -72,7 +75,7 @@ struct SettingsSidebarLayout<Content: View>: View {
             Section(title) {
                 ForEach(matching) { pane in
                     VoxaSidebarLabel(title: pane.title, symbol: pane.symbol,
-                                     isSelected: (selection ?? .shortcuts) == pane).tag(pane)
+                                     isSelected: (selection ?? .general) == pane).tag(pane)
                 }
             }
         }
@@ -189,6 +192,7 @@ struct ShortcutsSettingsView: View {
     let finishAndSubmit: HotkeyOption
     let saveFeedback: HotkeyOption
     let cancel: HotkeyOption
+    var compareFeedback = HotkeyOption.defaultCompareFeedback
     var canEdit = true
     var canSubmit = true
 
@@ -205,7 +209,8 @@ struct ShortcutsSettingsView: View {
                 }
                 Section("Recording and feedback") {
                     row("Cancel / Close", detail: "Discard dictation or close feedback.", current: cancel, target: .cancel)
-                    row("Save feedback", detail: "Save every lesson in the review and close feedback.", current: saveFeedback, target: .saveFeedback)
+                    row("Save feedback", detail: "Save the fixes as lessons and close feedback.", current: saveFeedback, target: .saveFeedback)
+                    row("Compare", detail: "Show or hide your sentences next to the natural version.", current: compareFeedback, target: .compareFeedback)
                 }
                 if let target = recorder.target {
                     Text(target == .cancel
@@ -229,7 +234,7 @@ struct ShortcutsSettingsView: View {
 struct VoxaSettingsView: View {
     @ObservedObject var controller: AppController
     @StateObject private var hotkeyRecorder = HotkeyRecorder()
-    @SettingsState private var selection: SettingsPane? = .shortcuts
+    @SettingsState private var selection: SettingsPane? = .general
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -252,6 +257,7 @@ struct VoxaSettingsView: View {
         }
         .onAppear {
             configureHotkeyRecorder()
+            controller.refreshPermissions()
             if controller.isReady && !controller.isAPIKeySet { selection = .apiKey }
         }
         .onChange(of: selection) { _ in hotkeyRecorder.stop(); controller.apiKeyInput = "" }
@@ -262,11 +268,15 @@ struct VoxaSettingsView: View {
     }
 
     @ViewBuilder private var page: some View {
-        switch selection ?? .shortcuts {
+        switch selection ?? .general {
+        case .general:
+            GeneralSettingsView(permissions: controller.permissions, canRequestMicrophone: !controller.isBusy,
+                onRequestMicrophone: controller.requestMicrophonePermission)
         case .shortcuts:
             ShortcutsSettingsView(recorder: hotkeyRecorder, toggle: controller.toggleHotkey,
                 finishAndSubmit: controller.finishAndSubmitHotkey, saveFeedback: controller.saveFeedbackHotkey,
-                cancel: controller.cancelHotkey, canEdit: !controller.isBusy && controller.isReady,
+                cancel: controller.cancelHotkey, compareFeedback: controller.compareFeedbackHotkey,
+                canEdit: !controller.isBusy && controller.isReady,
                 canSubmit: controller.outputMode == .clipboardAutopaste)
         case .privacy:
             PrivacySettingsView(excludedApps: controller.preferences.contextExcludedApps,
@@ -286,6 +296,7 @@ struct VoxaSettingsView: View {
             case .finishAndSubmit: controller.setFinishAndSubmitHotkey(hotkey)
             case .saveFeedback: controller.setSaveFeedbackHotkey(hotkey)
             case .cancel: controller.setCancelHotkey(hotkey)
+            case .compareFeedback: controller.setCompareFeedbackHotkey(hotkey)
             }
         }
         hotkeyRecorder.onCaptureStateChanged = { controller.setHotkeyCaptureEnabled($0) }
@@ -297,6 +308,7 @@ enum HotkeyRecordingTarget: Equatable {
     case finishAndSubmit
     case saveFeedback
     case cancel
+    case compareFeedback
 }
 
 final class HotkeyRecorder: ObservableObject {

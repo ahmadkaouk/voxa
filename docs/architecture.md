@@ -89,15 +89,18 @@ instructions, a strict `FeedbackAnalysis` schema, and `gpt-6-luna` with low reas
 It uses an ephemeral URLSession, `store: false`, a 60-second timeout, and no
 tools, redirects, or retries.
 Input above 40,000 characters is skipped. Truncated or invalid responses produce
-a quiet menu status; each finding must quote an exact source excerpt. Duplicate
-corrections are removed without capping the array. The output budget is 16,384 tokens.
-Grammar findings may include a nullable spoken `alternative`, saved as part of
-the same lesson. Optional `pattern` templates and stable `LearningFocus` categories
-support reusable expressions and history; older saved lessons without these fields
-remain compatible. The response also contains `GrammarAssessment` and grounded
-`successfulPatterns` observations, plus `ExpressionAssessment`. Only category IDs
-from prior reviews/saved lessons accompany the next dictation transcript, together
-with ephemeral text context when separately enabled. Explicit
+a quiet menu status. The output budget is 16,384 tokens. Feedback covers English only.
+The response has three parts: `corrections` (ranked, most important first, kept to
+eight), each quoting an exact source excerpt with a better wording, a plain-words reason,
+up to three labelled alternatives and a stable `LearningFocus`; `misheard` likely
+recognition errors, mapped to recognition issues that are never lessons; and `natural`,
+the whole dictation as `NaturalSentence` pairs of an exact excerpt and how a fluent
+speaker would say it. Pairs must quote the transcript in order; a malformed rewrite is
+dropped on its own without hiding the corrections. Duplicate corrections are removed.
+Lessons saved with a single `alternative` decode into the alternatives list. Only
+category IDs from prior reviews/saved lessons accompany the next dictation transcript,
+to help rank repeated mistakes, together with ephemeral text context when separately
+enabled. Explicit
 practice requests separately include the selected lesson and the submitted answer.
 
 ### Automatic text context
@@ -126,27 +129,6 @@ is attached to a lesson, progress record, practice check, transcription or timin
 Changing context preferences cancels pending context-bearing feedback as well as
 capture; already-transmitted input cannot be recalled.
 
-The grammar rubric has fixed 2/4/6/8/10 bands, not model confidence or a deduction
-per correction. Code suppresses scores under 20 words, for recognition issues, or
-when the band contradicts the actual errors. The model must also abstain on
-insufficient English or ambiguous transcripts. Optional phrasing cannot lower a
-score. Success observations need exact source evidence and a previously encountered
-category; same-category errors, uncertainty and duplicate observations are excluded.
-These safeguards constrain the response, but do not establish linguistic accuracy.
-
-`ExpressionAssessment` contains exactly one source-grounded observation for accuracy,
-vocabulary, phrasing, range and coherence, with a provisional A1–C2 descriptor per
-dimension and a speaking-purpose category. At least 40 words are required; limited,
-uncertain and non-English speech abstains. A perfect grammar band is not a proficiency
-level. `ExpressionSample` strips source evidence before persistence. Optional new
-fields preserve v1 progress-file compatibility and the parser accepts legacy
-grammar-only responses from older compatible services without inventing a level.
-`ExpressionProfile` selects up to 30 qualifying samples in 90 days, requires six samples,
-300 words and two speaking purposes, takes a median per dimension, then brackets their
-mean with adjacent CEFR descriptors. It compares the latest six with the preceding six
-for a cautious trend. These are documented product heuristics, not a validated test or
-confidence interval. The UI states the calibration and modality limits explicitly.
-
 See [feedback validation](english-feedback.md) for coaching quality checks.
 
 `FeedbackController` owns the findings array, request generation, presentation,
@@ -156,14 +138,16 @@ New transcripts cancel earlier analysis; disabling and shutdown invalidate it.
 the review without saving lesson excerpts. Automatic progress is independent of ⌘S/Esc. Failed writes retain the review, and
 a late save cannot dismiss a newer generation. Neither path changes inserted text.
 
-Live reviews use `FeedbackWordDiff` to lead with individual changes and reusable rules.
-`FeedbackSentence` expands excerpts to full sentences and combines compatible edits;
-conflicting edits remain separate comparisons. The current transcript stays in memory
-for this presentation and never enters saved lessons. Optional wording is always expanded.
-`FeedbackLessonView` retains inline comparisons in saved details and recognition checks.
-One system window background covers the review; Save and text changes use blue.
+`FeedbackReviewView` shows the top four fixes as You said → Better rows. `FeedbackPairText`
+marks the changed words on each side with a token diff, joining adjacent changes into one
+mark. Repeated mistakes come from `LearningProgress` category counts. The natural version
+shows as text or, with `showsComparison` (⌘D), as sentence pairs; `FeedbackSpeech` reads
+it with `AVSpeechSynthesizer` on the Mac. A dictation with no fixes still opens a review
+when its natural version differs. The current transcript and natural version stay in memory
+and never enter saved lessons. `FeedbackFixDetail` and the `FeedbackPairText` styling are
+shared with the learning window.
 Feedback has no automatic dismissal timer and does not close when clicking elsewhere.
-A review stays visible until an explicit Close, Done or Save review action, or a
+A review stays visible until an explicit Close or Got it action, or a
 recording/practice lifecycle transition. Explicit closing clears the current review
 so later delivery and idle callbacks cannot reopen it. Retired auto-close preference
 keys are ignored when loading and omitted when saving preferences.
@@ -172,9 +156,8 @@ keys are ignored when loading and omitted when saving preferences.
 Support/Voxa. A failed load blocks mutations to protect unreadable data. Only
 explicitly accepted lessons reach disk; full transcripts and practice answers do
 not. `LearningProgressStore` separately persists bounded, versioned metadata for up
-to 200 reviews: ID, date, grammar band, unique mistake/suggestion/success categories,
-and optional expression dimensions, word count and speaking-purpose category.
-It never persists the source evidence. `LearningProgress` queues serial writes,
+to 200 reviews: ID, date and unique mistake/suggestion categories. Score and level fields
+from older files are ignored on load, and reviews that only held a score are dropped. `LearningProgress` queues serial writes,
 deduplicates recording IDs, protects corrupt files, and offers retry and clear.
 Recording progress requires validated analysis plus the delivery callback; it never
 waits on lesson acceptance. Failed progress writes do not hide feedback. Disabling
@@ -214,22 +197,23 @@ success/retry affects scheduling; repetition, uncertainty, off-topic answers and
 do not. Saved paired alternatives do not reschedule their primary correction. Intervals
 are 1/3/7/14/30 days, with one day after retry, and early repeated practice cannot advance
 them. Due selection groups duplicate patterns and respects their latest spacing.
-Practice results never enter `LearningProgress` or the expression profile. Deleting
+Practice results never enter `LearningProgress`. Deleting
 lessons queues removal of their review records and cancels an affected active exercise.
 
 ## Settings, credentials, and permissions
 
-`SettingsViews` presents Shortcuts, Privacy, and API Key inside a native navigation
-sidebar. Model, output, recording limit, English feedback, and nearby-text switches
+`SettingsViews` presents General, Shortcuts, Privacy, and API Key inside a native navigation
+sidebar. `GeneralSettingsView` manages microphone, Accessibility, and Input Monitoring
+access without starting a recording. Model, output, recording limit, English feedback, and nearby-text switches
 live in the menu bar. `PrivacySettingsView` keeps app exclusions inline beside data
 details; shortcut editing has a single home in Shortcuts. Settings
 page content is bounded to the available space beneath the heading so scrolling
 reaches the final rows at every supported window size.
-`EnglishLearningView` presents library filters, a searchable lesson list and a
-reading pane, alongside practice and progress destinations. Its detail content
-uses the current native column bounds so nested split views reflow on resize.
-These views use the
-existing controllers and stores; category filters and search never alter history.
+`EnglishLearningView` switches between Repeat mistakes, Saved fixes and Practice in one
+centered column. `LearningLibrary` pairs `LearningProgress` category counts with the
+newest saved fixes in each category, so examples come from lessons the user kept and
+progress still stores no dictated text. These views use the existing controllers and
+stores; search never alters history.
 Shortcut capture stops when leaving its settings pane or deactivating the app.
 
 `PreferencesStore` validates and saves one versioned UserDefaults value under

@@ -28,7 +28,7 @@ struct VoxaApp: App {
         Window("English Learning", id: "english-lessons") {
             VoxaLearningView(controller: appDelegate.controller)
         }
-        .defaultSize(width: 1060, height: 680)
+        .defaultSize(width: 860, height: 700)
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified)
     }

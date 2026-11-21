@@ -4,40 +4,13 @@ import SwiftUI
 private typealias LearningViewState<Value> = SwiftUI.State<Value>
 
 enum LearningSection: String, CaseIterable, Identifiable {
-    case allLessons, corrections, phrasing, practice, progress
+    case mistakes, saved, practice
     var id: Self { self }
     var title: String {
         switch self {
-        case .allLessons: return "All Lessons"
-        case .corrections: return "Corrections"
-        case .phrasing: return "Natural Phrasing"
+        case .mistakes: return "Repeat mistakes"
+        case .saved: return "Saved fixes"
         case .practice: return "Practice"
-        case .progress: return "Progress"
-        }
-    }
-    var symbol: String {
-        switch self {
-        case .allLessons: return "book.closed"
-        case .corrections: return "checkmark.circle"
-        case .phrasing: return "text.bubble"
-        case .practice: return "arrow.triangle.2.circlepath"
-        case .progress: return "chart.bar"
-        }
-    }
-    var isLibrary: Bool { self == .allLessons || self == .corrections || self == .phrasing }
-
-    func lessons(in saved: [SavedCorrection], matching query: String = "") -> [SavedCorrection] {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return saved.filter { item in
-            let feedback = item.feedback
-            let matchesSection = self == .allLessons
-                || (self == .corrections && (feedback.kind == .grammar || feedback.kind == .construction))
-                || (self == .phrasing && (feedback.kind == .phrasing || feedback.alternative != nil))
-            let searchable = [feedback.original, feedback.suggestion, feedback.explanation,
-                              feedback.pattern, feedback.focus?.label, feedback.alternative?.wording,
-                              feedback.alternative?.explanation, feedback.alternative?.pattern,
-                              feedback.alternative?.focus?.label].compactMap { $0 }
-            return matchesSection && (query.isEmpty || searchable.contains { $0.localizedStandardContains(query) })
         }
     }
 }
@@ -52,247 +25,355 @@ struct VoxaLearningView: View {
     }
 }
 
+/// The English Learning window: the mistakes you repeat, the fixes you saved, and practice,
+/// drawn with the same You said → Better rows as the feedback review.
 struct SavedCorrectionsView: View {
     @ObservedObject var controller: FeedbackController
     @ObservedObject var history: PracticeHistory
     var canPractice: Bool
     var onShortReview: (() -> Void)?
-    @LearningViewState private var section: LearningSection?
+    @LearningViewState private var section: LearningSection
     @LearningViewState private var search: String
-    @LearningViewState private var selection: UUID?
+    @LearningViewState private var expanded: String?
     @LearningViewState private var confirmDeleteAll = false
+    @LearningViewState private var confirmClear = false
 
     init(controller: FeedbackController, history: PracticeHistory, canPractice: Bool = true,
-         onShortReview: (() -> Void)? = nil, initialSection: LearningSection = .allLessons,
+         onShortReview: (() -> Void)? = nil, initialSection: LearningSection = .mistakes,
          initialSearch: String = "") {
         self.controller = controller; self.history = history
         self.canPractice = canPractice; self.onShortReview = onShortReview
-        _section = .init(initialValue: initialSection)
+        _section = .init(initialValue: initialSearch.isEmpty ? initialSection : .saved)
         _search = .init(initialValue: initialSearch)
-        _selection = .init(initialValue: initialSection.lessons(in: controller.saved, matching: initialSearch).first?.id)
     }
 
-    private var currentSection: LearningSection { section ?? .allLessons }
-    private var lessons: [SavedCorrection] { currentSection.lessons(in: controller.saved, matching: search) }
+    private var mistakes: [RepeatedMistake] {
+        LearningLibrary.repeatedMistakes(patterns: controller.progress.patterns, saved: controller.saved)
+    }
+    private var fixes: [SavedCorrection] { LearningLibrary.fixes(in: controller.saved, matching: search) }
     private var reviewReady: Bool { canPractice && history.ready && !history.isSaving && history.error == nil }
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $section) {
-                Section("Library") {
-                    ForEach([LearningSection.allLessons, .corrections, .phrasing]) { item in
-                        VoxaSidebarLabel(title: item.title, symbol: item.symbol,
-                                         count: item.lessons(in: controller.saved).count,
-                                         isSelected: currentSection == item)
-                            .tag(item)
-                    }
-                }
-                Section("Learning") {
-                    ForEach([LearningSection.practice, .progress]) { item in
-                        VoxaSidebarLabel(title: item.title, symbol: item.symbol,
-                                         isSelected: currentSection == item).tag(item)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                switch section {
+                case .mistakes: mistakesPage
+                case .saved: savedPage
+                case .practice: practicePage
                 }
             }
-            .voxaSidebarStyle()
-            .safeAreaInset(edge: .bottom) {
-                Label("On this Mac", systemImage: "internaldrive")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(16)
-            }
-            .navigationTitle("English Learning")
-        } detail: {
-            // Constrain nested split and scrolling views to the current native column.
-            GeometryReader { geometry in
-                Group {
-                    if currentSection.isLibrary { library }
-                    else if currentSection == .practice { practice }
-                    else { LearningProgressView(progress: controller.progress) }
-                }
-                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            }
-            .navigationTitle(currentSection.title)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 32)
+            .frame(maxWidth: .infinity)
+            .alert("Clear your mistake history?", isPresented: $confirmClear) {
+                Button("Clear history", role: .destructive) { controller.progress.clear() }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("This removes the mistake counts from this Mac. Your saved fixes and review timing stay available.") }
         }
-        .navigationSplitViewStyle(.balanced)
-        .searchable(text: $search, placement: .sidebar, prompt: "Search lessons")
-        .frame(minWidth: 940, idealWidth: 1060, minHeight: 560, idealHeight: 680, alignment: .topLeading)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle("English Learning")
         .toolbar {
-            if let onShortReview, currentSection.isLibrary {
-                Button(action: onShortReview) { Label("Review", systemImage: "arrow.triangle.2.circlepath") }
-                    .disabled(!reviewReady || controller.saved.isEmpty)
-                    .help("Start a one-minute review")
+            ToolbarItem(placement: .principal) {
+                Picker("Section", selection: $section) {
+                    ForEach(LearningSection.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
             }
-            if currentSection.isLibrary {
+            ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    Button("Delete All Saved Lessons…", role: .destructive) { confirmDeleteAll = true }
+                    Button("Delete All Saved Fixes…", role: .destructive) { confirmDeleteAll = true }
                         .disabled(controller.saved.isEmpty || controller.isSaving || !controller.storageReady)
+                    Button("Clear Mistake History…", role: .destructive) { confirmClear = true }
+                        .disabled(!controller.progress.ready || controller.progress.isSaving || controller.progress.records.isEmpty)
                 } label: { Label("More", systemImage: "ellipsis.circle") }
-                .help("Manage saved lessons")
+                .help("Manage saved fixes and history")
             }
         }
-        .onChange(of: lessons.map(\.id)) { ids in
-            if !ids.contains(where: { $0 == selection }) { selection = ids.first }
-        }
-        .onChange(of: search) { query in
-            if !query.isEmpty && !currentSection.isLibrary { section = .allLessons }
-        }
-        .alert("Delete all saved lessons?", isPresented: $confirmDeleteAll) {
+        .searchable(text: $search, placement: .toolbar, prompt: "Search saved fixes")
+        .onChange(of: search) { query in if !query.isEmpty { section = .saved } }
+        .onChange(of: section) { _ in expanded = nil }
+        .frame(minWidth: 640, idealWidth: 860, minHeight: 520, idealHeight: 700, alignment: .topLeading)
+        .alert("Delete all saved fixes?", isPresented: $confirmDeleteAll) {
             Button("Delete all", role: .destructive) { controller.deleteAll() }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("This removes your saved corrections from this Mac.") }
+        } message: { Text("This removes your saved fixes from this Mac.") }
     }
 
-    private var library: some View {
-        VStack(spacing: 0) {
+    // MARK: Repeat mistakes
+
+    private var mistakesPage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header("What you keep getting wrong", detail: "From your feedback reviews")
+            if let error = controller.progress.error {
+                banner(error, busy: controller.progress.isSaving) { controller.progress.retry() }
+            }
+            if mistakes.isEmpty {
+                emptyState(controller.progress.ready ? "Nothing yet" : "Opening your history…",
+                           detail: "Mistakes from your feedback reviews appear here, with examples from the fixes you save.")
+            } else {
+                columnLabels("How often")
+                ForEach(Array(mistakes.enumerated()), id: \.element.id) { index, mistake in
+                    if index > 0 { rowDivider }
+                    mistakeRow(mistake)
+                }
+            }
+            footnote("Counts come from your feedback reviews; examples come from the fixes you save. Both stay on this Mac.")
+        }
+    }
+
+    private func mistakeRow(_ mistake: RepeatedMistake) -> some View {
+        let key = "mistake-" + mistake.id.rawValue
+        let open = expanded == key
+        let latest = mistake.examples.first
+        return VStack(alignment: .leading, spacing: 12) {
+            Button { expanded = open ? nil : key } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        if let latest { Text(pair(latest).saidText) }
+                        Text(mistake.pattern.focus.label)
+                            .font(latest == nil ? .system(size: 15, weight: .medium) : .system(size: 12))
+                            .foregroundColor(latest == nil ? .primary : .secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    arrow
+                    Group {
+                        if let latest { Text(pair(latest).betterText(size: 15)) }
+                        else { Text("No saved example yet").foregroundColor(.secondary) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("\(mistake.count) \(mistake.count == 1 ? "review" : "reviews")")
+                        .font(.system(size: 13))
+                        .foregroundColor(mistake.count >= 3 ? Color(nsColor: FeedbackInk.again) : .secondary)
+                        .frame(width: 96, alignment: .trailing)
+                }
+                .font(.system(size: 15)).lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(open ? "Hides the details" : "Shows the reason and your examples")
+            if open, let latest {
+                FeedbackFixDetail(feedback: latest.feedback)
+                if mistake.examples.count > 1 { examples(Array(mistake.examples.prefix(3))) }
+                practiceButton(latest)
+            }
+        }
+        .modifier(LearningRowSurface(open: open))
+    }
+
+    private func examples(_ items: [SavedCorrection]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(item.date, format: .dateTime.month(.abbreviated).day())
+                        .font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
+                    Text(pair(item).saidText + AttributedString("  →  ") + pair(item).betterText(size: 13))
+                        .font(.system(size: 13)).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.vertical, 7)
+                .overlay(alignment: .top) { if index > 0 { Rectangle().fill(.primary.opacity(0.06)).frame(height: 0.5) } }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 2)
+        .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: Saved fixes
+
+    private var savedPage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header("Saved fixes", detail: "\(controller.saved.count) \(controller.saved.count == 1 ? "fix" : "fixes")")
             if let error = controller.storageError {
-                HStack {
-                    Label(error, systemImage: "exclamationmark.triangle").font(.callout)
-                    Spacer()
-                    Button("Retry") { controller.reloadSaved() }.disabled(controller.isSaving)
-                }.padding(16)
-                Divider()
+                banner(error, busy: controller.isSaving) { controller.reloadSaved() }
             }
-            HSplitView {
-                VStack(spacing: 0) {
-                    List(lessons, selection: $selection) { item in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(item.feedback.focus?.label ?? item.feedback.kind.label)
-                                .font(.headline).lineLimit(1)
-                            Text(item.feedback.suggestion).font(.callout).lineLimit(2)
-                                .foregroundStyle(.secondary)
-                            Text(item.date, format: .dateTime.month(.abbreviated).day())
-                                .font(.caption).foregroundStyle(.tertiary)
-                        }.padding(.vertical, 8).tag(item.id)
-                    }.listStyle(.inset)
-                    Divider()
-                    Text("\(lessons.count) \(lessons.count == 1 ? "lesson" : "lessons")")
-                        .font(.caption).foregroundStyle(.secondary).padding(10)
-                }
-                .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
-                if let item = lessons.first(where: { $0.id == selection }) {
-                    CorrectionDetailView(item: item, isSaving: controller.isSaving,
-                        canPractice: canPractice, onPractice: { controller.practise(item, alternative: $0) },
-                        onDelete: { controller.delete(item.id) })
-                        .id(item.id)
-                        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    LearningEmptyState(symbol: search.isEmpty ? "bookmark" : "magnifyingglass",
-                        title: controller.isSaving && !controller.storageReady ? "Opening your lessons…" :
-                            !search.isEmpty ? "No matching lessons" : "Your lessons start here",
-                        detail: !search.isEmpty ? "Try another word or clear the search." :
-                            currentSection == .allLessons ? "Choose Save after dictation to keep a useful pattern.\nYou can revisit it and practise here." :
-                            "Lessons in this category will appear here when you save them.")
-                        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+            if fixes.isEmpty {
+                emptyState(controller.isSaving && !controller.storageReady ? "Opening your fixes…"
+                               : search.isEmpty ? "Nothing saved yet" : "No matching fixes",
+                           detail: search.isEmpty ? "Choose Got it after a review to keep its fixes here."
+                               : "Try another word or clear the search.")
+            } else {
+                columnLabels("Saved")
+                ForEach(Array(fixes.enumerated()), id: \.element.id) { index, item in
+                    if index > 0 { rowDivider }
+                    savedRow(item)
                 }
             }
         }
     }
 
-    private var practice: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Practice").font(VoxaAppearance.pageTitle)
-                    Text("Make the patterns you’ve saved part of your everyday English.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                if let error = history.error {
-                    HStack {
-                        Label(error, systemImage: "exclamationmark.triangle").font(.callout)
-                        Button("Retry") { history.retry() }.disabled(history.isSaving)
-                    }
-                }
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Label("One-minute review", systemImage: "arrow.triangle.2.circlepath").font(.headline)
-                        Text("Try up to three patterns in a new sentence. Speak or type your answer.")
-                            .foregroundStyle(.secondary)
-                        if let onShortReview {
-                            Button("Start Review", action: onShortReview).buttonStyle(.borderedProminent)
-                                .disabled(!reviewReady || controller.saved.isEmpty)
+    private func savedRow(_ item: SavedCorrection) -> some View {
+        let key = "saved-" + item.id.uuidString
+        let open = expanded == key
+        return VStack(alignment: .leading, spacing: 12) {
+            Button { expanded = open ? nil : key } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(pair(item).saidText)
+                        if let focus = item.feedback.focus {
+                            Text(focus.label).font(.system(size: 12)).foregroundStyle(.secondary)
                         }
-                    }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    arrow
+                    Text(pair(item).betterText(size: 15)).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(item.date, format: .dateTime.month(.abbreviated).day())
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                        .frame(width: 96, alignment: .trailing)
                 }
-                TimelineView(.periodic(from: .now, by: 60)) { timeline in
-                    let due = history.queue(from: controller.saved, patterns: controller.progress.patterns, now: timeline.date)
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("Next review").font(.headline)
-                        if history.error != nil {
-                            Text("Retry review timing to see what’s due.").foregroundStyle(.secondary)
-                        } else if !history.ready || history.isSaving {
-                            Text("Loading review timing…").foregroundStyle(.secondary)
-                        } else if due.isEmpty {
-                            Text(controller.saved.isEmpty ? "Save a lesson after dictation to start practising." :
-                                "You’re caught up. You can still practise any lesson from your library.")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(due) { target in
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(target.focus?.label ?? target.lesson.feedback.kind.label).font(.headline)
-                                    Text(target.wording).foregroundStyle(.secondary).textSelection(.enabled)
-                                }
-                                Divider()
+                .font(.system(size: 15)).lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("You said: \(item.feedback.original). Better: \(item.feedback.suggestion)")
+            .accessibilityHint(open ? "Hides the details" : "Shows the reason and practice")
+            if open {
+                FeedbackFixDetail(feedback: item.feedback)
+                HStack(spacing: 8) {
+                    practiceButton(item)
+                    Spacer()
+                    Button(role: .destructive) { controller.delete(item.id) } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .buttonStyle(.borderless).disabled(controller.isSaving).help("Delete this saved fix")
+                }
+            }
+        }
+        .modifier(LearningRowSurface(open: open))
+    }
+
+    // MARK: Practice
+
+    private var practicePage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header("Practice", detail: "Use what you saved in a new sentence")
+            if let error = history.error {
+                banner(error, busy: history.isSaving) { history.retry() }
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                Text("One-minute review").font(.system(size: 15, weight: .semibold))
+                Text("Try up to three saved fixes in a new sentence. Speak or type your answer.")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                if let onShortReview {
+                    Button("Start Review", action: onShortReview).buttonStyle(.borderedProminent)
+                        .disabled(!reviewReady || controller.saved.isEmpty).padding(.top, 4)
+                }
+            }
+            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.bottom, 22)
+            TimelineView(.periodic(from: .now, by: 60)) { timeline in
+                let due = history.queue(from: controller.saved, patterns: controller.progress.patterns, now: timeline.date)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Due next").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 14).padding(.bottom, 4)
+                    if history.error != nil {
+                        note("Retry review timing to see what’s due.")
+                    } else if !history.ready || history.isSaving {
+                        note("Loading review timing…")
+                    } else if due.isEmpty {
+                        note(controller.saved.isEmpty ? "Save fixes with Got it after a review to start practising."
+                             : "You’re caught up. You can still practise any saved fix.")
+                    } else {
+                        ForEach(Array(due.enumerated()), id: \.element.id) { index, target in
+                            if index > 0 { rowDivider }
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text(target.focus?.label ?? "Saved fix").font(.system(size: 13)).foregroundStyle(.secondary)
+                                    .frame(width: 150, alignment: .leading)
+                                Text(target.wording).font(.system(size: 15)).textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                            .padding(.horizontal, 14).padding(.vertical, 11)
                         }
                     }
                 }
-                Text("Reviewed patterns return over time. Practice is tracked separately from the level estimated from your dictation.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.frame(maxWidth: 640, alignment: .leading).padding(VoxaAppearance.contentPadding).frame(maxWidth: .infinity)
+            }
+            footnote("Practised fixes come back after 1, 3, 7, 14 and 30 days. Practice is kept apart from your mistake history.")
         }
+    }
+
+    // MARK: Shared pieces
+
+    private func pair(_ item: SavedCorrection) -> FeedbackPairText {
+        FeedbackPairText(said: item.feedback.original, better: item.feedback.suggestion)
+    }
+
+    private func header(_ title: String, detail: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(title).font(.system(size: 22, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            Text(detail).font(.system(size: 13)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14).padding(.bottom, 18)
+    }
+
+    private func columnLabels(_ last: String) -> some View {
+        HStack(spacing: 10) {
+            Text("You said").frame(maxWidth: .infinity, alignment: .leading)
+            Color.clear.frame(width: 14, height: 1)
+            Text("Better").frame(maxWidth: .infinity, alignment: .leading)
+            Text(last).frame(width: 96, alignment: .trailing)
+        }
+        .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+        .padding(.horizontal, 14).padding(.bottom, 4)
+        .accessibilityHidden(true)
+    }
+
+    private var arrow: some View {
+        Image(systemName: "arrow.right").font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.tertiary).frame(width: 14).accessibilityHidden(true)
+    }
+
+    private var rowDivider: some View {
+        Rectangle().fill(.primary.opacity(0.06)).frame(height: 0.5).padding(.horizontal, 14)
+    }
+
+    private func practiceButton(_ item: SavedCorrection) -> some View {
+        Button { controller.practise(item) } label: { Label("Practice this", systemImage: "mic") }
+            .disabled(!canPractice || controller.isSaving)
+            .help("Say it, then use it in a new sentence")
+    }
+
+    private func banner(_ message: String, busy: Bool, retry: @escaping () -> Void) -> some View {
+        HStack {
+            Label(message, systemImage: "exclamationmark.triangle").font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Retry", action: retry).disabled(busy)
+        }
+        .padding(12)
+        .background(Color(nsColor: .systemOrange).opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.bottom, 14)
+    }
+
+    private func emptyState(_ title: String, detail: String) -> some View {
+        VStack(spacing: 8) {
+            Text(title).font(.system(size: 15, weight: .semibold))
+            Text(detail).font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 48)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text).font(.system(size: 13)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.vertical, 8)
+    }
+
+    private func footnote(_ text: String) -> some View {
+        Text(text).font(.system(size: 11)).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14).padding(.top, 22)
     }
 }
 
-private struct LearningEmptyState: View {
-    let symbol: String
-    let title: String
-    let detail: String
+/// An opened row sits on a soft surface so its details read as part of it.
+private struct LearningRowSurface: ViewModifier {
+    let open: Bool
 
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: symbol).font(.system(size: 32, weight: .light)).foregroundStyle(.tertiary)
-            Text(title).font(.title3.weight(.semibold))
-            Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-        }.padding(28)
-    }
-}
-
-private struct CorrectionDetailView: View {
-    let item: SavedCorrection
-    let isSaving: Bool
-    let canPractice: Bool
-    let onPractice: (Bool) -> Void
-    let onDelete: () -> Void
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(item.feedback.focus?.label ?? item.feedback.kind.label).font(VoxaAppearance.pageTitle)
-                        Text(item.date, format: .dateTime.month(.wide).day().year())
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }
-                        .buttonStyle(.borderless).disabled(isSaving).help("Delete lesson")
-                        .accessibilityLabel("Delete this lesson")
-                }
-                FeedbackLessonView(feedback: item.feedback, onPractice: onPractice).disabled(!canPractice)
-                Divider()
-                VStack(alignment: .leading, spacing: 16) {
-                    sentence("Original", item.feedback.original)
-                    sentence(item.feedback.kind == .phrasing ? "Alternative" : "Corrected", item.feedback.suggestion)
-                }.textSelection(.enabled)
-            }.padding(VoxaAppearance.contentPadding).frame(maxWidth: 680, alignment: .leading).frame(maxWidth: .infinity)
-        }
-    }
-
-    private func sentence(_ title: String, _ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(text).font(.body).fixedSize(horizontal: false, vertical: true)
-        }
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(open ? Color.primary.opacity(0.035) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

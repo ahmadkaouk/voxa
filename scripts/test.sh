@@ -73,15 +73,15 @@ PLIST
         Sources/Voxa/DictationTiming.swift Sources/Voxa/Hotkeys.swift Sources/Voxa/GlobalHotkeys.swift
         Sources/Voxa/Preferences.swift Sources/Voxa/Keychain.swift Sources/Voxa/CaptureGuard.swift
         Sources/Voxa/TextContext.swift
-        Sources/Voxa/EnglishFeedback.swift Sources/Voxa/FeedbackEditPresentation.swift Sources/Voxa/FeedbackLessonMapping.swift Sources/Voxa/FeedbackClient.swift
+        Sources/Voxa/EnglishFeedback.swift Sources/Voxa/FeedbackClient.swift
         Sources/Voxa/FeedbackController.swift Sources/Voxa/CorrectionStore.swift Sources/Voxa/IslandPresentation.swift
         Sources/Voxa/LearningAssessment.swift Sources/Voxa/LearningProgress.swift
-        Sources/Voxa/ExpressionAssessment.swift Sources/Voxa/Practice.swift
+        Sources/Voxa/Practice.swift
         Sources/Voxa/PracticeHistory.swift Sources/Voxa/PracticeController.swift
         Tests/VoxaTests/NativeSetupTests.swift Tests/VoxaTests/UnitChecksSupport.swift
         Tests/VoxaTests/NativePipelineChecksSupport.swift Tests/VoxaTests/DictationSessionTests.swift
         Tests/VoxaTests/TranscriptionClientTests.swift Tests/VoxaTests/AsyncTranscriptOutputTests.swift
-        Tests/VoxaTests/FeedbackTests.swift Tests/VoxaTests/FeedbackEditPresentationTests.swift Tests/VoxaTests/IslandPresentationTests.swift Tests/VoxaTests/LearningFeaturesTests.swift
+        Tests/VoxaTests/FeedbackTests.swift Tests/VoxaTests/IslandPresentationTests.swift Tests/VoxaTests/LearningFeaturesTests.swift
         Tests/VoxaTests/TextContextTests.swift)
       ;;
     island)
@@ -103,7 +103,7 @@ if [ "$SUITE" = all ]; then
     case "${test_file##*/}" in
       HotkeyOptionTests.swift|TranscriptOutputTests.swift|DictationSoundTests.swift|AudioRecorderTests.swift) ;;
       DynamicIslandControllerTests.swift) ;;
-      DictationSessionTests.swift|TranscriptionClientTests.swift|AsyncTranscriptOutputTests.swift|NativeSetupTests.swift|FeedbackTests.swift|FeedbackEditPresentationTests.swift|IslandPresentationTests.swift|LearningFeaturesTests.swift|TextContextTests.swift) ;;
+      DictationSessionTests.swift|TranscriptionClientTests.swift|AsyncTranscriptOutputTests.swift|NativeSetupTests.swift|FeedbackTests.swift|IslandPresentationTests.swift|LearningFeaturesTests.swift|TextContextTests.swift) ;;
       *) echo "No standalone harness registered for $test_file; use XCTest or add coverage." >&2; exit 1 ;;
     esac
   done
