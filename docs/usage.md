@@ -87,11 +87,11 @@ with translucent material on older systems.
 Its controls adapt to the system appearance; Reduce Transparency and Increase Contrast use a solid surface.
 Feedback follows the system appearance:
 white in light mode and charcoal in dark mode, with green accents. Drag the orb to move it;
-drag the **English feedback** header to move the popup. Voxa remembers the shared position across recordings and app restarts.
+drag the feedback header to move the popup. Voxa remembers the shared position across recordings and app restarts.
 Feedback grows to
 fit its contents up to a screen-safe height; longer content remains scrollable without
-visible scroll indicators. Compact explanations appear below the sentence list after
-clicking a correction or **Why?**. The popup grows upward from its bottom edge as you
+visible scroll indicators. Click a fix to open its explanation and other ways to say it
+directly below that fix. The popup grows upward from its bottom edge as you
 open an explanation. Reduced Motion removes continuous
 waveform motion. Increased Contrast strengthens the outline and secondary text.
 
