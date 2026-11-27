@@ -23,19 +23,44 @@ enum TranscriptionError: LocalizedError, Equatable {
 /// The key is passed for each request, never persisted or included in error messages.
 struct TranscriptionClient: Sendable {
     static let defaultEndpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
+    /// Mistral accepts the same multipart request and returns the same `text` field.
+    static let defaultMistralEndpoint = URL(string: "https://api.mistral.ai/v1/audio/transcriptions")!
     static let timeout: TimeInterval = 60
     private let endpoint: URL?
+    private let mistralEndpoint: URL?
     private let session: URLSession
 
-    init(endpoint: URL? = Self.defaultEndpoint, session: URLSession? = nil) {
+    init(endpoint: URL? = Self.defaultEndpoint, mistralEndpoint: URL? = Self.defaultMistralEndpoint,
+         session: URLSession? = nil) {
         self.endpoint = endpoint
+        self.mistralEndpoint = mistralEndpoint
         self.session = session ?? URLSession(configuration: Self.configuration())
     }
 
+    /// The client for the running app, honouring the endpoint overrides used for local testing.
+    static func configured(environment: [String: String] = ProcessInfo.processInfo.environment) -> TranscriptionClient {
+        TranscriptionClient(endpoint: configuredEndpoint(environment: environment),
+                            mistralEndpoint: configuredMistralEndpoint(environment: environment))
+    }
+
     static func configuredEndpoint(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
-        guard let raw = environment["VOXA_OPENAI_TRANSCRIPTIONS_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else { return defaultEndpoint }
-        return URL(string: raw)
+        override(environment["VOXA_OPENAI_TRANSCRIPTIONS_URL"]) ?? defaultEndpoint
+    }
+
+    static func configuredMistralEndpoint(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
+        override(environment["VOXA_MISTRAL_TRANSCRIPTIONS_URL"]) ?? defaultMistralEndpoint
+    }
+
+    /// True when neither transcription service has been redirected away from its public API.
+    static func usesDefaultEndpoints(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        configuredEndpoint(environment: environment) == defaultEndpoint
+            && configuredMistralEndpoint(environment: environment) == defaultMistralEndpoint
+    }
+
+    /// nil when unset; an unparsable value stays invalid rather than falling back to a real service.
+    private static func override(_ raw: String?) -> URL?? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        return .some(URL(string: raw))
     }
 
     static func configuration() -> URLSessionConfiguration {
@@ -55,7 +80,8 @@ struct TranscriptionClient: Sendable {
         guard !audio.isEmpty else { throw TranscriptionError.invalidAudio }
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty, !key.utf8.contains(13), !key.utf8.contains(10) else { throw TranscriptionError.authentication }
-        guard let endpoint, ["https", "http"].contains(endpoint.scheme), endpoint.host != nil else {
+        let target = model.provider == .mistral ? mistralEndpoint : endpoint
+        guard let endpoint = target, ["https", "http"].contains(endpoint.scheme), endpoint.host != nil else {
             throw TranscriptionError.invalidEndpoint
         }
         let boundary = "Voxa-\(UUID().uuidString)"

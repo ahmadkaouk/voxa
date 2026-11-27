@@ -91,8 +91,10 @@ This check does not replace or launch either supplied app.
 | `VOXA_DIST_DIR` | Select a separate packaging output and backup directory. |
 | `VOXA_INSTALL_DIR` | Change the installation directory; defaults to `/Applications`. |
 | `VOXA_CODESIGN_IDENTITY` | Select the identity used to sign the app. |
-| `VOXA_OPENAI_TRANSCRIPTIONS_URL` | Override the transcription endpoint for development. |
+| `VOXA_OPENAI_TRANSCRIPTIONS_URL` | Override the OpenAI transcription endpoint for development. |
+| `VOXA_MISTRAL_TRANSCRIPTIONS_URL` | Override the Mistral (Voxtral) transcription endpoint for development. |
 | `OPENAI_API_KEY` | Supply a key for environment mode, or as a fallback when the Keychain item is missing. |
+| `MISTRAL_API_KEY` | The same, for Voxtral transcription. |
 
 Settings and Keychain access are described in the [architecture guide](architecture.md).
 

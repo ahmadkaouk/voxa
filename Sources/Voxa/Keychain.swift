@@ -5,9 +5,9 @@ enum KeychainError: LocalizedError {
     case access(OSStatus), invalidKey, environmentReadOnly
     var errorDescription: String? {
         switch self {
-        case .access(let status): return "Keychain access failed (\(status)). Allow Voxa access to its OpenAI key, then retry setup."
+        case .access(let status): return "Keychain access failed (\(status)). Allow Voxa access to its saved API keys, then retry setup."
         case .invalidKey: return "Enter a non-empty API key without line breaks."
-        case .environmentReadOnly: return "OPENAI_API_KEY is configured through the environment and cannot be edited here."
+        case .environmentReadOnly: return "This key is configured through the environment and cannot be edited here."
         }
     }
 }
@@ -15,7 +15,7 @@ enum KeychainError: LocalizedError {
 /// Security can wait for user authorization. All calls run on this serial worker, never the UI.
 final class Keychain: @unchecked Sendable {
     static let service = "com.voxa"
-    static let account = "OPENAI_API_KEY"
+    static let account = TranscriptionProvider.openAI.environmentVariable
     private let worker = DispatchQueue(label: "com.voxa.keychain", qos: .userInitiated)
     private let read: () throws -> String?
     private let write: (String) throws -> Void
@@ -27,6 +27,12 @@ final class Keychain: @unchecked Sendable {
         self.read = read ?? { try Keychain.readNative(service: service, account: account) }
         self.write = write ?? { try Keychain.writeNative($0, service: service, account: account) }
         self.environment = environment
+    }
+
+    /// One saved key per provider; the account and environment variable share the provider's name.
+    convenience init(provider: TranscriptionProvider) {
+        let name = provider.environmentVariable
+        self.init(account: name, environment: { ProcessInfo.processInfo.environment[name] })
     }
 
     func value(source: String) async throws -> String? {

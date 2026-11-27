@@ -166,7 +166,7 @@ waits for local writes, never for the feedback service. Files use mode 0600 and
 atomic replacement; application-support directories are created with mode 0700.
 
 Existing v1 preferences default a missing `englishFeedbackEnabled` to false.
-A custom transcription endpoint requires an explicit `VOXA_OPENAI_FEEDBACK_URL`
+A custom transcription endpoint (OpenAI or Mistral) requires an explicit `VOXA_OPENAI_FEEDBACK_URL`
 (HTTPS, or HTTP loopback for fixtures), avoiding an implicit fallback to OpenAI.
 
 ## Small practice and reviews
@@ -221,8 +221,11 @@ Shortcut capture stops when leaving its settings pane or deactivating the app.
 A first launch saves the defaults; invalid saved settings produce a recoverable
 setup error. Failed saves restore the previous value.
 
-`Keychain` uses native Security APIs for service `com.voxa`, account
-`OPENAI_API_KEY`. The environment source is read-only. Keychain mode retains the
+`Keychain` uses native Security APIs for service `com.voxa`, with one account per
+transcription provider: `OPENAI_API_KEY` and `MISTRAL_API_KEY`, matching the environment
+variables of the same names. The selected model's provider supplies the transcription key;
+English feedback and practice checks always use the OpenAI key, so with Voxtral a missing
+OpenAI key only reports a feedback error. The environment source is read-only. Keychain mode retains the
 environment fallback for a missing/empty item; denied Keychain access is an error.
 Credentials are not written to preferences or diagnostic logs.
 

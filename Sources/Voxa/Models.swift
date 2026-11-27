@@ -5,9 +5,19 @@ enum RecordingOrigin {
     case hotkeyToggle
 }
 
-enum ModelOption: String, CaseIterable, Identifiable {
+/// The service that receives dictation audio. English feedback and practice checks always use OpenAI.
+enum TranscriptionProvider: String, CaseIterable, Identifiable, Sendable {
+    case openAI, mistral
+
+    var id: String { rawValue }
+    var name: String { self == .openAI ? "OpenAI" : "Mistral" }
+    var environmentVariable: String { self == .openAI ? "OPENAI_API_KEY" : "MISTRAL_API_KEY" }
+}
+
+enum ModelOption: String, CaseIterable, Identifiable, Sendable {
     case gptTranscribe = "gpt-transcribe"
     case gpt4oMiniTranscribe = "gpt-4o-mini-transcribe"
+    case voxtralSmallTranscribe = "voxtral-small-transcribe-3-0"
 
     var id: String { rawValue }
 
@@ -17,6 +27,15 @@ enum ModelOption: String, CaseIterable, Identifiable {
             return "GPT-Transcribe"
         case .gpt4oMiniTranscribe:
             return "GPT-4o Mini Transcribe"
+        case .voxtralSmallTranscribe:
+            return "Voxtral Small Transcribe 3 (Mistral)"
+        }
+    }
+
+    var provider: TranscriptionProvider {
+        switch self {
+        case .gptTranscribe, .gpt4oMiniTranscribe: return .openAI
+        case .voxtralSmallTranscribe: return .mistral
         }
     }
 

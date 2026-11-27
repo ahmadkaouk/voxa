@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// Settings that need more room than the menu bar's quick controls.
 struct PrivacySettingsView: View {
     let excludedApps: [ContextExcludedApp]
+    var transcriptionProvider: TranscriptionProvider = .openAI
     var canEdit = true
     var onExclude: (ContextExcludedApp) -> Void
     var onAllow: (String) -> Void
@@ -36,12 +37,16 @@ struct PrivacySettingsView: View {
                 .disabled(!canEdit)
 
                 Section("Data & privacy") {
-                    detail("Sent to OpenAI", "Audio for transcription. English feedback also sends your dictation and optional nearby text. No screenshots. Coaching uses additional API requests.")
+                    if transcriptionProvider == .mistral {
+                        detail("Sent to Mistral", "Audio for transcription with Voxtral. Nothing else.")
+                        detail("Sent to OpenAI", "English feedback sends your dictation and optional nearby text. No screenshots. Coaching uses additional API requests.")
+                    } else {
+                        detail("Sent to OpenAI", "Audio for transcription. English feedback also sends your dictation and optional nearby text. No screenshots. Coaching uses additional API requests.")
+                    }
                     detail("Practice", "The selected lesson and your answer are sent for feedback. Spoken answers also use transcription.")
                     detail("Stored on this Mac", "Saved lessons, level estimates, pattern counts and review dates. Full dictations, captured context, practice answers and audio aren’t saved.")
                     detail("Your level", "Estimated from your own dictation. Nearby text and practice answers don’t affect it.")
-                    Link("OpenAI data retention details", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
-                }
+                    Link("OpenAI data retention details", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)                }
             }
             .voxaSettingsFormStyle()
         }

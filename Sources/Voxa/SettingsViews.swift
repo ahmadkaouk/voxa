@@ -11,7 +11,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: return "General"
         case .shortcuts: return "Shortcuts"
         case .privacy: return "Privacy"
-        case .apiKey: return "API Key"
+        case .apiKey: return "API Keys"
         }
     }
     var symbol: String {
@@ -30,7 +30,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: keywords = "permissions microphone accessibility input monitoring access system settings"
         case .shortcuts: keywords = "keyboard start stop finish send save feedback cancel close escape"
         case .privacy: keywords = "English feedback practice nearby text context excluded apps data storage retention"
-        case .apiKey: keywords = "OpenAI API key connection credentials storage Keychain"
+        case .apiKey: keywords = "OpenAI Mistral Voxtral API key connection credentials storage Keychain"
         }
         return query.isEmpty || (title + " " + keywords).localizedStandardContains(query)
     }
@@ -132,57 +132,67 @@ struct SettingsShortcutRow: View {
     }
 }
 
+/// One key per transcription service. English feedback and practice checks always use OpenAI.
 struct APIKeySettingsView: View {
-    let configured: Bool
     let source: String
-    @Binding var input: String
+    let selectedProvider: TranscriptionProvider
+    let configured: (TranscriptionProvider) -> Bool
+    @Binding var openAIInput: String
+    @Binding var mistralInput: String
     var busy = false
     var saving = false
-    var error: String?
-    var onSave: () -> Void
+    var errors: [TranscriptionProvider: String] = [:]
+    var onSave: (TranscriptionProvider) -> Void
 
     var body: some View {
-        SettingsPage(title: "API Key", subtitle: "Connect the service used for dictation and English feedback.") {
+        SettingsPage(title: "API Keys", subtitle: "Connect the services used for dictation and English feedback.") {
             Form {
-                Section {
-                    LabeledContent("Status") {
-                        Label(configured ? "Configured" : "Not configured", systemImage: configured ? "checkmark.circle" : "key")
-                            .foregroundStyle(.secondary)
-                    }
-                    LabeledContent("Storage") {
-                        Text(source == "keychain" ? "macOS Keychain" : "Environment").foregroundStyle(.secondary)
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(configured ? "Replace API key" : "API key")
-                        SecureField("Paste your API key", text: $input)
-                            .labelsHidden().textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .disabled(busy || source == "env")
-                            .accessibilityLabel("OpenAI API key")
-                            .accessibilityHint(configured ? "A key is saved. Enter a new key to replace it." : "Enter your API key.")
-                            .onSubmit { if canSave { onSave() } }
-                    }.padding(.vertical, 4)
-                    if let error, !error.isEmpty {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.callout).fixedSize(horizontal: false, vertical: true)
-                    }
-                    HStack {
-                        Spacer()
-                        Button(saving ? "Saving…" : (configured ? "Replace Key" : "Save Key"), action: onSave)
-                            .foregroundStyle(.primary).disabled(!canSave)
-                    }
-                } header: { Text("OpenAI") } footer: {
-                    Text(source == "env"
-                         ? "This key comes from OPENAI_API_KEY. Update it in the environment, then restart Voxa."
-                         : "Paste a new key and choose Save or Replace Key. Your saved key stays private in macOS Keychain.")
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                keySection(.openAI, input: $openAIInput,
+                           use: "Used for English feedback and practice checks, and for dictation with GPT models.")
+                keySection(.mistral, input: $mistralInput,
+                           use: "Used only for dictation with Voxtral. English feedback still needs an OpenAI key.")
             }.voxaSettingsFormStyle()
         }
     }
 
-    private var canSave: Bool {
-        !busy && source != "env" && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private func keySection(_ provider: TranscriptionProvider, input: Binding<String>, use: String) -> some View {
+        let configured = configured(provider)
+        let canSave = !busy && source != "env" && !input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return Section {
+            LabeledContent("Status") {
+                Label(configured ? "Configured" : "Not configured", systemImage: configured ? "checkmark.circle" : "key")
+                    .foregroundStyle(.secondary)
+            }
+            LabeledContent("Storage") {
+                Text(source == "keychain" ? "macOS Keychain" : "Environment").foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(configured ? "Replace API key" : "API key")
+                SecureField("Paste your \(provider.name) API key", text: input)
+                    .labelsHidden().textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .disabled(busy || source == "env")
+                    .accessibilityLabel("\(provider.name) API key")
+                    .accessibilityHint(configured ? "A key is saved. Enter a new key to replace it." : "Enter your API key.")
+                    .onSubmit { if canSave { onSave(provider) } }
+            }.padding(.vertical, 4)
+            if let error = errors[provider], !error.isEmpty {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button(saving ? "Saving…" : (configured ? "Replace Key" : "Save Key")) { onSave(provider) }
+                    .foregroundStyle(.primary).disabled(!canSave)
+            }
+        } header: {
+            Text(provider == selectedProvider ? "\(provider.name) · current dictation model" : provider.name)
+        } footer: {
+            Text(source == "env"
+                 ? "\(use) This key comes from \(provider.environmentVariable). Update it in the environment, then restart Voxa."
+                 : "\(use) Your saved key stays private in macOS Keychain.")
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -260,8 +270,8 @@ struct VoxaSettingsView: View {
             controller.refreshPermissions()
             if controller.isReady && !controller.isAPIKeySet { selection = .apiKey }
         }
-        .onChange(of: selection) { _ in hotkeyRecorder.stop(); controller.apiKeyInput = "" }
-        .onDisappear { hotkeyRecorder.stop(); controller.apiKeyInput = "" }
+        .onChange(of: selection) { _ in hotkeyRecorder.stop(); controller.apiKeyInput = ""; controller.mistralKeyInput = "" }
+        .onDisappear { hotkeyRecorder.stop(); controller.apiKeyInput = ""; controller.mistralKeyInput = "" }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             hotkeyRecorder.stop()
         }
@@ -280,12 +290,14 @@ struct VoxaSettingsView: View {
                 canSubmit: controller.outputMode == .clipboardAutopaste)
         case .privacy:
             PrivacySettingsView(excludedApps: controller.preferences.contextExcludedApps,
+                transcriptionProvider: controller.model.provider,
                 canEdit: controller.canEditDictationSettings,
                 onExclude: controller.excludeContextApp, onAllow: controller.allowContextApp)
         case .apiKey:
-            APIKeySettingsView(configured: controller.isAPIKeySet, source: controller.apiKeySource,
-                input: $controller.apiKeyInput, busy: controller.isBusy, saving: controller.isSavingKey,
-                error: controller.apiKeyError, onSave: controller.saveAPIKey)
+            APIKeySettingsView(source: controller.apiKeySource, selectedProvider: controller.model.provider,
+                configured: controller.isKeySet, openAIInput: $controller.apiKeyInput,
+                mistralInput: $controller.mistralKeyInput, busy: controller.isBusy, saving: controller.isSavingKey,
+                errors: controller.apiKeyErrors, onSave: controller.saveAPIKey(for:))
         }
     }
 

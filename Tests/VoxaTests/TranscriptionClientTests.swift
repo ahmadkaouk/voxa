@@ -163,6 +163,43 @@ enum TranscriptionClientChecks {
         try unitExpect(!config.waitsForConnectivity)
     }
 
+    static func mistralRouting() async throws {
+        let openAIHost = "\(UUID().uuidString.lowercased()).invalid", mistralHost = "\(UUID().uuidString.lowercased()).invalid"
+        let openAI = HTTPFixture(.response(200, Data("{\"text\":\"from openai\"}".utf8)))
+        let mistral = HTTPFixture(.response(200, Data("{\"text\":\" from mistral \",\"language\":\"en\",\"segments\":[]}".utf8)))
+        TranscriptionURLProtocol.register(openAI, host: openAIHost)
+        TranscriptionURLProtocol.register(mistral, host: mistralHost)
+        let config = TranscriptionClient.configuration()
+        config.protocolClasses = [TranscriptionURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer {
+            session.invalidateAndCancel()
+            TranscriptionURLProtocol.remove(host: openAIHost); TranscriptionURLProtocol.remove(host: mistralHost)
+        }
+        let client = TranscriptionClient(endpoint: URL(string: "https://\(openAIHost)/v1/audio/transcriptions")!,
+                                         mistralEndpoint: URL(string: "https://\(mistralHost)/v1/audio/transcriptions")!,
+                                         session: session)
+        try unitEqual(try await client.transcribe(Data([1, 2]), model: .voxtralSmallTranscribe, apiKey: "fixture-mistral"),
+                      "from mistral")
+        try unitEqual(openAI.requests.count, 0)
+        try unitEqual(mistral.requests.count, 1)
+        let (request, body) = mistral.requests[0]
+        try unitEqual(request.url?.path, "/v1/audio/transcriptions")
+        try unitEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-mistral")
+        try unitExpect(body.range(of: Data("name=\"model\"\r\n\r\nvoxtral-small-transcribe-3-0\r\n".utf8)) != nil)
+        try unitEqual(try await client.transcribe(Data([1]), model: .gptTranscribe, apiKey: "fixture-openai"), "from openai")
+        try unitEqual(openAI.requests.count, 1)
+        try unitEqual(mistral.requests.count, 1)
+        let unset = TranscriptionClient(endpoint: URL(string: "https://\(openAIHost)/v1/audio/transcriptions")!,
+                                        mistralEndpoint: nil, session: session)
+        do { _ = try await unset.transcribe(Data([1]), model: .voxtralSmallTranscribe, apiKey: "fixture-mistral"); try unitExpect(false) }
+        catch { try unitEqual(error as? TranscriptionError, .invalidEndpoint) }
+        try unitEqual(openAI.requests.count, 1) // never falls back to the other provider
+        try unitEqual(ModelOption.voxtralSmallTranscribe.provider, .mistral)
+        try unitEqual(ModelOption.gptTranscribe.provider, .openAI)
+        try unitEqual(ModelOption.gpt4oMiniTranscribe.provider, .openAI)
+    }
+
     static func responseErrors() async throws {
         let cases: [(Int, String, TranscriptionError)] = [
             (401, "secret body must not be shown", .authentication), (403, "", .authentication),
@@ -222,7 +259,7 @@ enum TranscriptionClientChecks {
             let output = TranscriptOutput(copy: { copied = $0; return true })
             let session = DictationSession(settings: .init(outputMode: .clipboardOnly), recorder: recorder,
                                            transcriber: client, output: output, timingLog: DictationTimingLog(url: logURL))
-            session.start(prepare: { "fixture-key" })
+            session.start(prepare: { DictationKeys("fixture-key") })
             try await eventually { if case .recording = session.state { return true }; return false }
             session.stop()
             try await eventually { !session.state.isBusy }
@@ -257,6 +294,7 @@ enum TranscriptionClientChecks {
     static let all: [(String, @MainActor () async throws -> Void)] = [
         ("feedback: HTTP contract, authentication, rate limits, timeout and cancellation", feedbackHTTPContract),
         ("transcription: multipart bytes, Unicode response and request limits", multipartAndSuccess),
+        ("transcription: Voxtral goes to Mistral with its own key, GPT models to OpenAI", mistralRouting),
         ("transcription: HTTP, malformed and empty responses without retries", responseErrors),
         ("transcription: transport failures and input validation", transportAndValidation),
         ("transcription: URLSession cancellation", cancellation),
@@ -268,6 +306,7 @@ enum TranscriptionClientChecks {
 final class TranscriptionClientTests: XCTestCase {
     func testFeedbackHTTPContract() async throws { try await TranscriptionClientChecks.feedbackHTTPContract() }
     func testMultipartAndSuccess() async throws { try await TranscriptionClientChecks.multipartAndSuccess() }
+    func testMistralRouting() async throws { try await TranscriptionClientChecks.mistralRouting() }
     func testResponseErrors() async throws { try await TranscriptionClientChecks.responseErrors() }
     func testTransportAndValidation() async throws { try await TranscriptionClientChecks.transportAndValidation() }
     func testCancellation() async throws { try await TranscriptionClientChecks.cancellation() }

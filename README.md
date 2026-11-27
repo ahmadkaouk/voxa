@@ -72,12 +72,15 @@ Enable **English Learning → English feedback** in the menu bar.
 ## Get started
 
 You’ll need **macOS 13 or later**, an **OpenAI API key**, and an internet connection.
-OpenAI API usage is billed separately.
+OpenAI API usage is billed separately. To transcribe with Mistral’s **Voxtral Small
+Transcribe 3** instead, also add a **Mistral API key** and choose it under **Model** in
+the menu bar. English feedback and practice checks still use OpenAI.
 
 Voxa currently installs from source and requires Swift 6.0+ developer tools.
 Follow the [installation guide](docs/usage.md#install), then:
 
-1. Open **Settings… → API Key** from the menu bar and save your OpenAI API key.
+1. Open **Settings… → API Keys** from the menu bar and save your OpenAI API key
+   (and your Mistral API key if you’ll use Voxtral).
 2. Open **Settings → General** to allow **Microphone**, **Accessibility**, and **Input Monitoring**.
 3. Focus a text field, press **Option + F**, speak, and press it again to paste.
 
@@ -96,14 +99,15 @@ shortcuts.
 
 ## Your data
 
-Audio is sent to OpenAI for transcription. English coaching is off by default;
+Audio is sent to OpenAI for transcription, or to Mistral when the Voxtral model is
+selected. English coaching is off by default;
 when enabled, it also sends your dictated text for feedback, with additional API
 usage. Practice sends the selected lesson and your answer for feedback; spoken
 answers also use transcription. Nearby-text context is off by default. When
 enabled, it sends an excerpt from the active app to help feedback fit your work;
 you can exclude apps in **Settings → Privacy**.
 
-Your API key is stored in macOS Keychain. Voxa doesn’t save an audio or full-dictation
+Your API keys are stored in macOS Keychain. Voxa doesn’t save an audio or full-dictation
 history to disk; saved lessons, learning progress, and review timing are stored
 on your Mac.
 [Usage and privacy details](docs/usage.md#audio-and-data).

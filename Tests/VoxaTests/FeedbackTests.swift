@@ -538,6 +538,7 @@ enum FeedbackChecks {
         let input = try JSONSerialization.jsonObject(with: Data(messages[1]["content"]!.utf8)) as! [String: Any]
         try unitEqual(input["transcript"] as? String, hostile)
         try unitExpect(FeedbackClient.configuredEndpoint(environment: ["VOXA_OPENAI_TRANSCRIPTIONS_URL": "http://localhost/transcribe"]) == nil)
+        try unitExpect(FeedbackClient.configuredEndpoint(environment: ["VOXA_MISTRAL_TRANSCRIPTIONS_URL": "http://localhost/transcribe"]) == nil)
 
         func envelope(_ content: String, finish: String = "stop") throws -> Data {
             try JSONSerialization.data(withJSONObject: ["choices": [["finish_reason": finish, "message": ["content": content]]]])
