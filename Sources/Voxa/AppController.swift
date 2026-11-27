@@ -16,12 +16,15 @@ final class AppController: ObservableObject {
     @Published private(set) var setupError: String?
     @Published private(set) var settingsError: String?
     @Published private(set) var permissions = Permissions.current()
-    @Published private(set) var isAPIKeySet = false
-    @Published private(set) var apiKeyError: String?
+    @Published private(set) var isOpenAIKeySet = false
+    @Published private(set) var isMistralKeySet = false
+    @Published private(set) var apiKeyErrors: [TranscriptionProvider: String] = [:]
     @Published var apiKeyInput = ""
+    @Published var mistralKeyInput = ""
 
     private let store: PreferencesStore
     private let keychain: Keychain
+    private let mistralKeychain: Keychain
     private let hotkeys = GlobalHotkeyBridge()
     private lazy var overlay = DynamicIslandController(feedback: feedback)
     private let practiceWindow = PracticeWindowController()
@@ -39,22 +42,24 @@ final class AppController: ObservableObject {
     init() {
         let recorder = AudioRecorder()
         session = DictationSession(recorder: recorder,
-                                   transcriber: TranscriptionClient(endpoint: TranscriptionClient.configuredEndpoint()),
+                                   transcriber: TranscriptionClient.configured(),
                                    timingLog: DictationTimingLog.configured())
         practice = PracticeController(recorder: recorder)
         store = PreferencesStore()
-        keychain = Keychain()
+        keychain = Keychain(provider: .openAI)
+        mistralKeychain = Keychain(provider: .mistral)
         practice.prepare = { [weak self] microphone in
             guard let self, !self.closing, self.session.state.context == nil else { throw CancellationError() }
-            let key: String
-            if microphone { key = try await self.recordingPreparation()() }
+            let model = self.model
+            let keys: DictationKeys
+            if microphone { keys = try await self.recordingPreparation()() }
             else {
-                guard let value = try await self.keychain.value(source: self.preferences.apiKeySource) else {
-                    throw TranscriptionError.authentication
-                }
-                key = value
+                let openAI = try await self.keychain.value(source: self.preferences.apiKeySource)
+                keys = DictationKeys(transcription: openAI ?? "", feedback: openAI)
             }
-            return PracticeCredentials(apiKey: key, model: self.model)
+            // Answers are always checked by OpenAI, whichever service transcribes them.
+            guard let checkKey = keys.feedback else { throw FeedbackError.authentication }
+            return PracticeCredentials(apiKey: checkKey, model: model, transcriptionKey: keys.transcription)
         }
         practice.isSavedLesson = { [weak self] id in self?.feedback.saved.contains { $0.id == id } ?? false }
         feedback.onPractice = { [weak self] target in
@@ -169,6 +174,22 @@ final class AppController: ObservableObject {
     var outputMode: OutputModeOption { session.settings.outputMode }
     var maxRecordingSeconds: UInt64 { preferences.maxRecordingSeconds }
     var apiKeySource: String { preferences.apiKeySource }
+    /// Whether the selected model can transcribe: its provider has a key.
+    var isAPIKeySet: Bool { isKeySet(model.provider) }
+    func isKeySet(_ provider: TranscriptionProvider) -> Bool { provider == .openAI ? isOpenAIKeySet : isMistralKeySet }
+    private func keychain(for provider: TranscriptionProvider) -> Keychain {
+        provider == .openAI ? keychain : mistralKeychain
+    }
+    /// The key for `provider`, or nil. Only the selected provider's Keychain errors are reported,
+    /// so an unused provider can never block setup or recording.
+    private func storedKey(_ provider: TranscriptionProvider, source: String, required: Bool) async throws -> String? {
+        let store = keychain(for: provider)
+        if required { return try await store.value(source: source) }
+        return (try? await store.value(source: source)) ?? nil
+    }
+    private func setKeyPresence(_ provider: TranscriptionProvider, _ present: Bool) {
+        if provider == .openAI { isOpenAIKeySet = present } else { isMistralKeySet = present }
+    }
     var errorMessage: String? {
         if case .failed(_, let message) = session.state { return message }
         return setupError ?? settingsError
@@ -195,10 +216,15 @@ final class AppController: ObservableObject {
                 feedback.setEnabled(loaded.englishFeedbackEnabled)
                 _ = session.updateSettings(loaded.dictation)
                 try CaptureGuard.check()
-                let key = try await keychain.value(source: loaded.apiKeySource)
+                let selected = ModelOption.fromRawOrDefault(loaded.model).provider
+                var keysFound: [TranscriptionProvider: Bool] = [:]
+                for provider in TranscriptionProvider.allCases {
+                    keysFound[provider] = try await storedKey(provider, source: loaded.apiKeySource,
+                                                            required: provider == selected) != nil
+                }
                 try Task.checkCancellation()
                 guard !closing else { return }
-                isAPIKeySet = key != nil
+                for (provider, found) in keysFound { setKeyPresence(provider, found) }
                 isReady = true
                 updateHotkeyBindings()
                 refreshPermissions()
@@ -211,21 +237,24 @@ final class AppController: ObservableObject {
         }
     }
 
-    private func recordingPreparation() -> @MainActor () async throws -> String {
+    private func recordingPreparation() -> @MainActor () async throws -> DictationKeys {
         let source = preferences.apiKeySource
+        let provider = model.provider
         return { [weak self] in
             guard let self, !self.closing else { throw CancellationError() }
             try CaptureGuard.check()
             defer { self.permissions = Permissions.current() }
             try await Permissions.requestMicrophone()
             try Task.checkCancellation()
-            guard let key = try await self.keychain.value(source: source) else {
-                self.isAPIKeySet = false
+            guard let key = try await self.storedKey(provider, source: source, required: true) else {
+                self.setKeyPresence(provider, false)
                 throw TranscriptionError.authentication
             }
+            // Feedback and practice checks use OpenAI; without its key they report that, not dictation.
+            let feedback = provider == .openAI ? key : try await self.storedKey(.openAI, source: source, required: false)
             try Task.checkCancellation()
             try CaptureGuard.check() // Another copy may have launched during a prompt.
-            return key
+            return DictationKeys(transcription: key, feedback: feedback)
         }
     }
 
@@ -323,19 +352,21 @@ final class AppController: ObservableObject {
         update(duringDictation: true) { $0.contextExcludedApps.removeAll { $0.bundleID == bundleID } }
     }
 
-    func saveAPIKey() {
+    func saveAPIKey(for provider: TranscriptionProvider = .openAI) {
         guard !isBusy, !closing else { return }
-        let key = apiKeyInput
+        let key = provider == .openAI ? apiKeyInput : mistralKeyInput
         let source = preferences.apiKeySource
-        isSavingKey = true; apiKeyError = nil
+        let store = keychain(for: provider)
+        isSavingKey = true; apiKeyErrors[provider] = nil
         keyTask = Task {
             do {
-                try await keychain.save(key, source: source)
+                try await store.save(key, source: source)
                 guard !closing else { return }
-                apiKeyInput = ""; isAPIKeySet = true
-            } catch { if !closing { apiKeyError = error.localizedDescription } }
+                if provider == .openAI { apiKeyInput = "" } else { mistralKeyInput = "" }
+                setKeyPresence(provider, true)
+            } catch { if !closing { apiKeyErrors[provider] = error.localizedDescription } }
             isSavingKey = false
-            if !closing, apiKeyError == nil { retrySetup() }
+            if !closing, apiKeyErrors[provider] == nil { retrySetup() }
         }
     }
 
@@ -441,7 +472,7 @@ final class AppController: ObservableObject {
         await session.shutdown()
         await setupTask?.value
         await keyTask?.value
-        apiKeyInput = ""
+        apiKeyInput = ""; mistralKeyInput = ""
     }
     func quit() { NSApplication.shared.terminate(nil) }
 }

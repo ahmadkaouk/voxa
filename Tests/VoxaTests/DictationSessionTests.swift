@@ -122,7 +122,7 @@ final class SessionFixture {
         try await self.pause(seconds)
     }), timingLog: timingLog, textContext: textContext)
     func wait(_ phase: String) async throws { try await eventually { self.session.state.tag == phase } }
-    func record() async throws { session.start(prepare: { "fixture-key" }); try await wait("recording") }
+    func record() async throws { session.start(prepare: { DictationKeys("fixture-key") }); try await wait("recording") }
 }
 
 @MainActor
@@ -276,8 +276,8 @@ enum DictationSessionChecks {
             try unitEqual(f.recorder.cancels, [first])
             try unitExpect(f.session.lastOutcome == nil) // No premature success or restoration claim.
             f.session.cancel(); f.session.stop()
-            if origin == .hotkeyToggle { f.session.toggle(prepare: { "fixture-key" }) }
-            else { f.session.start(origin: origin, prepare: { "fixture-key" }) }
+            if origin == .hotkeyToggle { f.session.toggle(prepare: { DictationKeys("fixture-key") }) }
+            else { f.session.start(origin: origin, prepare: { DictationKeys("fixture-key") }) }
             try await f.wait("recording")
             let second = f.session.state.context!.id
             try unitExpect(second != first)
@@ -354,12 +354,12 @@ enum DictationSessionChecks {
                 catch is CancellationError { interrupted = true; throw CancellationError() }
             }
             let id = f.session.start(origin: .manual,
-                                     prepare: { "fixture-key" })!
+                                     prepare: { DictationKeys("fixture-key") })!
             try await eventually { waiting }
             var shutdown: Task<Void, Never>?
             switch command {
             case "stop": f.session.stop(); f.session.stop()
-            case "toggle": f.session.toggle(prepare: { "ignored" })
+            case "toggle": f.session.toggle(prepare: { DictationKeys("ignored") })
             case "cancel": f.session.cancel(); f.session.stop()
             default: shutdown = Task { await f.session.shutdown() }
             }
@@ -417,13 +417,13 @@ enum DictationSessionChecks {
             let f = SessionFixture()
             let starting = PipelineGate()
             f.recorder.startGate = starting
-            let id = f.session.start(origin: .hotkeyToggle, prepare: { "fixture-key" })!
+            let id = f.session.start(origin: .hotkeyToggle, prepare: { DictationKeys("fixture-key") })!
             try await eventually { starting.entered }
             f.session.stop()
             if cancel { f.session.cancel() }
             f.session.stop() // cannot undo cancellation
             try unitEqual(f.session.state.tag, "starting")
-            try unitExpect(f.session.start(prepare: { "other-key" }) == nil)
+            try unitExpect(f.session.start(prepare: { DictationKeys("other-key") }) == nil)
             starting.open()
             try await f.wait("idle")
             try unitEqual(f.recorder.starts, [id])
@@ -438,14 +438,14 @@ enum DictationSessionChecks {
     static func originsAndBusyCommands() async throws {
         for origin in [RecordingOrigin.manual, .hotkeyToggle] {
             let f = SessionFixture()
-            if origin == .hotkeyToggle { f.session.toggle(prepare: { "fixture-key" }) }
-            else { f.session.start(origin: origin, prepare: { "fixture-key" }) }
+            if origin == .hotkeyToggle { f.session.toggle(prepare: { DictationKeys("fixture-key") }) }
+            else { f.session.start(origin: origin, prepare: { DictationKeys("fixture-key") }) }
             try await f.wait("recording")
             try unitEqual(f.session.state.context?.origin, origin)
-            f.session.start(origin: .hotkeyToggle, prepare: { "other-key" })
+            f.session.start(origin: .hotkeyToggle, prepare: { DictationKeys("other-key") })
             try unitEqual(f.session.state.tag, "recording")
             try unitEqual(f.recorder.starts.count, 1)
-            f.session.toggle(prepare: { "ignored" })
+            f.session.toggle(prepare: { DictationKeys("ignored") })
             try await f.wait("idle")
             try unitEqual(f.recorder.stops.count, 1)
             await f.session.shutdown()
@@ -463,7 +463,7 @@ enum DictationSessionChecks {
         stopping.open()
         try await eventually { cleaning.entered }
         try unitEqual(f.session.state.tag, "finishing")
-        try unitExpect(f.session.start(prepare: { "fixture-key" }) == nil)
+        try unitExpect(f.session.start(prepare: { DictationKeys("fixture-key") }) == nil)
         try unitEqual(f.transcriber.calls.count, 0)
         cleaning.open()
         try await f.wait("idle")
@@ -475,7 +475,7 @@ enum DictationSessionChecks {
         let failedCleanup = PipelineGate()
         f.recorder.startError = AudioRecorderError.noAudio
         f.recorder.cancelGate = failedCleanup
-        f.session.start(prepare: { "fixture-key" })
+        f.session.start(prepare: { DictationKeys("fixture-key") })
         try await eventually { failedCleanup.entered }
         f.session.cancel() // cancellation can arrive after the error but before cleanup finishes
         failedCleanup.open()
@@ -515,7 +515,7 @@ enum DictationSessionChecks {
     static func errorsAndRecovery() async throws {
         let f = SessionFixture()
         f.recorder.startError = AudioRecorderError.microphonePermission
-        f.session.start(prepare: { "fixture-key" })
+        f.session.start(prepare: { DictationKeys("fixture-key") })
         try await f.wait("failed")
         try unitEqual(f.recorder.cancels.count, 1)
         f.recorder.startError = nil
@@ -552,12 +552,12 @@ enum DictationSessionChecks {
         f.transcriber.gate = network
         try await f.record(); f.session.stop()
         try await eventually { network.entered }
-        try unitExpect(!f.session.cancel()); f.session.toggle(prepare: { "other-key" })
+        try unitExpect(!f.session.cancel()); f.session.toggle(prepare: { DictationKeys("other-key") })
         try unitEqual(f.session.state.tag, "transcribing")
         try unitEqual(f.recorder.starts.count, 1)
         let shutdown = Task { await f.session.shutdown() }
         try await f.wait("idle")
-        try unitExpect(f.session.start(prepare: { "fixture-key" }) == nil)
+        try unitExpect(f.session.start(prepare: { DictationKeys("fixture-key") }) == nil)
         network.open() // an uncooperative request returns after shutdown invalidated the ID
         await shutdown.value
         try unitEqual(f.output.calls.count, 0)
@@ -571,7 +571,7 @@ enum DictationSessionChecks {
             let gate = PipelineGate()
             if phase == "starting" { f.recorder.startGate = gate }
             else { f.output.gate = gate }
-            f.session.start(prepare: { "fixture-key" })
+            f.session.start(prepare: { DictationKeys("fixture-key") })
             if phase == "delivering" { try await f.wait("recording"); f.session.stop() }
             try await eventually { gate.entered }
             var returned = false
@@ -590,7 +590,7 @@ enum DictationSessionChecks {
         for command in ["stop", "cancel", "shutdown"] {
             let f = SessionFixture()
             let gate = PipelineGate()
-            f.session.start(origin: .hotkeyToggle, prepare: { await gate.wait(); return "fixture-key" })
+            f.session.start(origin: .hotkeyToggle, prepare: { await gate.wait(); return DictationKeys("fixture-key") })
             try unitEqual(f.session.state.tag, "starting")
             try await eventually { gate.entered }
             var shutdown: Task<Void, Never>?
@@ -613,11 +613,28 @@ enum DictationSessionChecks {
         f.session.start(prepare: { throw TranscriptionError.authentication })
         try await f.wait("failed")
         try unitExpect(f.recorder.starts.isEmpty)
-        f.session.start(prepare: { "fixture-key" })
+        f.session.start(prepare: { DictationKeys("fixture-key") })
         try await f.wait("recording")
         f.session.stop()
         try await f.wait("idle")
         try unitEqual(f.output.calls.count, 1)
+    }
+
+    static func separateTranscriptionAndFeedbackKeys() async throws {
+        let f = SessionFixture()
+        var feedbackKeys: [String] = []
+        f.session.onFeedbackTranscript = { _, _, key, _ in feedbackKeys.append(key) }
+        try unitExpect(f.session.updateSettings(.init(model: .voxtralSmallTranscribe, outputMode: .clipboardOnly,
+                                                      englishFeedbackEnabled: true)))
+        f.session.start(prepare: { DictationKeys(transcription: "fixture-mistral", feedback: "fixture-openai") })
+        try await f.wait("recording"); f.session.stop(); try await f.wait("idle")
+        // Without an OpenAI key, dictation still delivers; feedback gets an empty key and reports it.
+        f.session.start(prepare: { DictationKeys(transcription: "fixture-mistral", feedback: nil) })
+        try await f.wait("recording"); f.session.stop(); try await f.wait("idle")
+        try unitEqual(f.transcriber.calls.map(\.1), [.voxtralSmallTranscribe, .voxtralSmallTranscribe])
+        try unitEqual(f.transcriber.calls.map(\.2), ["fixture-mistral", "fixture-mistral"])
+        try unitEqual(feedbackKeys, ["fixture-openai", ""])
+        try unitEqual(f.output.calls.count, 2)
     }
 
     static func finishAndSubmit() async throws {
@@ -638,7 +655,7 @@ enum DictationSessionChecks {
         try unitEqual(f.output.submitTargets, [123])
         f.output.pasteRead?()
         try unitEqual(f.session.state.tag, "delivering") // Do not start another recording before Enter is sent.
-        try unitExpect(f.session.start(prepare: { "fixture-key" }) == nil)
+        try unitExpect(f.session.start(prepare: { DictationKeys("fixture-key") }) == nil)
         cleanup.open()
         try await f.wait("idle")
         f.output.gate = nil
@@ -651,6 +668,7 @@ enum DictationSessionChecks {
 
     static let all: [(String, @MainActor () async throws -> Void)] = [
         ("session: feedback is independent, opt-in and preserves delivered text", feedbackNeverBlocksDelivery),
+        ("session: Mistral transcription key stays separate from the OpenAI feedback key", separateTranscriptionAndFeedbackKeys),
         ("session: Finish & Send submits only its own recording", finishAndSubmit),
         ("session: timing breakdown, clipboard cleanup and overlapping recordings", timingBreakdownAndOverlappingCleanup),
         ("session: opt-in timing, cancellation, API errors and log failures", timingFailuresAndConfiguration),
@@ -672,6 +690,7 @@ enum DictationSessionChecks {
 #if !VOXA_STANDALONE_TESTS
 final class DictationSessionTests: XCTestCase {
     func testFeedbackNeverBlocksDelivery() async throws { try await DictationSessionChecks.feedbackNeverBlocksDelivery() }
+    func testSeparateTranscriptionAndFeedbackKeys() async throws { try await DictationSessionChecks.separateTranscriptionAndFeedbackKeys() }
     func testFinishAndSubmit() async throws { try await DictationSessionChecks.finishAndSubmit() }
     func testTimingBreakdownAndOverlappingCleanup() async throws { try await DictationSessionChecks.timingBreakdownAndOverlappingCleanup() }
     func testTimingFailuresAndConfiguration() async throws { try await DictationSessionChecks.timingFailuresAndConfiguration() }

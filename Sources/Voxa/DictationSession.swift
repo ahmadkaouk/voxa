@@ -25,6 +25,21 @@ extension AudioRecorder: DictationRecording {}
 extension TranscriptionClient: DictationTranscribing {}
 extension TranscriptOutput: DictationOutputting {}
 
+/// Keys gathered before recording. Transcription uses the selected model's provider; English
+/// feedback always uses OpenAI, so with Mistral transcription it has its own, optional key.
+struct DictationKeys: Equatable, Sendable {
+    let transcription: String
+    let feedback: String?
+
+    init(transcription: String, feedback: String?) {
+        self.transcription = transcription
+        self.feedback = feedback
+    }
+
+    /// One key used for both, as with OpenAI transcription.
+    init(_ key: String) { self.init(transcription: key, feedback: key) }
+}
+
 struct DictationSettings: Equatable {
     var model: ModelOption = .gptTranscribe
     var outputMode: OutputModeOption = .clipboardAutopaste
@@ -139,7 +154,7 @@ final class DictationSession: ObservableObject {
     /// Enter starting before permission/credential work, so stop requests cannot be lost.
     @discardableResult
     func start(origin: RecordingOrigin = .manual,
-               prepare: @escaping @MainActor () async throws -> String) -> UUID? {
+               prepare: @escaping @MainActor () async throws -> DictationKeys) -> UUID? {
         guard !shuttingDown, !state.isBusy else { return nil }
         let id = UUID()
         lastOutcome = nil
@@ -162,7 +177,7 @@ final class DictationSession: ObservableObject {
         return id
     }
 
-    func toggle(prepare: @escaping @MainActor () async throws -> String) {
+    func toggle(prepare: @escaping @MainActor () async throws -> DictationKeys) {
         switch state {
         case .idle, .restoringClipboard, .failed: start(origin: .hotkeyToggle, prepare: prepare)
         case .starting, .recording: stop()
@@ -276,7 +291,7 @@ final class DictationSession: ObservableObject {
     }
 
     private func run(_ context: DictationContext, timing: DictationTiming?,
-                     prepare: @MainActor () async throws -> String) async {
+                     prepare: @MainActor () async throws -> DictationKeys) async {
         var captureReleased = false
         var timingOutcome = DictationTiming.Outcome.cancelled
         defer {
@@ -286,7 +301,8 @@ final class DictationSession: ObservableObject {
         do {
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
-            let apiKey = try await prepare()
+            let keys = try await prepare()
+            let apiKey = keys.transcription
             try ensureCurrent(context)
             if state.isDiscarding { throw CancellationError() }
             // Stopping during a permission prompt must not capture speech after the prompt closes.
@@ -336,7 +352,8 @@ final class DictationSession: ObservableObject {
             if context.settings.englishFeedbackEnabled {
                 let captured = contextCapture?.id == context.id ? contextCapture?.capture.take() : nil
                 clearTextContext()
-                onFeedbackTranscript?(context.id, text, apiKey, captured)
+                // An empty key reports "add an OpenAI key" in the feedback status, not a dictation failure.
+                onFeedbackTranscript?(context.id, text, keys.feedback ?? "", captured)
             }
             timing?.mark(.deliveryStarted)
             let submitTo = submitTarget

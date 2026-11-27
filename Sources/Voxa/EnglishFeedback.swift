@@ -235,7 +235,7 @@ enum FeedbackError: LocalizedError, Equatable {
         case .invalidResponse: return "English feedback could not be read."
         case .incompleteResponse: return "English feedback was cut short. Try a shorter dictation to review all corrections."
         case .network: return "English feedback is temporarily unavailable."
-        case .authentication: return "The API key could not access English feedback."
+        case .authentication: return "English feedback needs a working OpenAI API key. Add one under Settings → API Keys."
         case .rateLimited: return "English feedback reached the service’s usage limit."
         case .tooLong: return "This dictation is too long for English feedback."
         }

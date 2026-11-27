@@ -231,7 +231,7 @@ private final class ContextReaderFixture: ContextAccessibilityReading {
         for change in ["disable", "exclude", "cancel", "failure", "shutdown"] {
             f.session.updateSettings(settings)
             if change == "failure" { f.recorder.startError = AudioRecorderError.noAudio }
-            f.session.start(prepare: { "fixture-key" })
+            f.session.start(prepare: { DictationKeys("fixture-key") })
             if change == "failure" { try await f.wait("failed"); f.recorder.startError = nil }
             else {
                 try await f.wait("recording")

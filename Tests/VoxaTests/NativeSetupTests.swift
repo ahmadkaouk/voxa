@@ -257,6 +257,9 @@ enum NativeSetupChecks {
             value.englishFeedbackEnabled = true
             try store.save(value)
             try unitEqual(try PreferencesStore(defaults: defaults).load(), value)
+            value.model = ModelOption.voxtralSmallTranscribe.rawValue
+            try store.save(value)
+            try unitEqual(try PreferencesStore(defaults: defaults).load().dictation.model, .voxtralSmallTranscribe)
         }
     }
 
@@ -338,6 +341,13 @@ enum NativeSetupChecks {
                       TranscriptionClient.defaultEndpoint)
         try unitEqual(TranscriptionClient.configuredEndpoint(environment: ["VOXA_OPENAI_TRANSCRIPTIONS_URL": " http://localhost:8765/transcribe "]),
                       URL(string: "http://localhost:8765/transcribe"))
+        try unitEqual(TranscriptionClient.configuredMistralEndpoint(environment: [:]), TranscriptionClient.defaultMistralEndpoint)
+        try unitEqual(TranscriptionClient.configuredMistralEndpoint(environment: ["VOXA_MISTRAL_TRANSCRIPTIONS_URL": " http://localhost:8766/t "]),
+                      URL(string: "http://localhost:8766/t"))
+        try unitExpect(TranscriptionClient.usesDefaultEndpoints(environment: [:]))
+        try unitExpect(!TranscriptionClient.usesDefaultEndpoints(environment: ["VOXA_MISTRAL_TRANSCRIPTIONS_URL": "http://localhost:8766/t"]))
+        try unitEqual(TranscriptionProvider.mistral.environmentVariable, "MISTRAL_API_KEY")
+        try unitEqual(Keychain.account, "OPENAI_API_KEY") // existing saved keys keep working
         do {
             _ = try await TranscriptionClient(endpoint: nil).transcribe(Data([1]), model: .gptTranscribe, apiKey: "fixture")
             try unitExpect(false)

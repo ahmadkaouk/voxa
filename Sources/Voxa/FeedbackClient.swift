@@ -121,7 +121,7 @@ struct FeedbackClient: FeedbackAnalyzing {
             return URL(string: raw)
         }
         // A custom transcription service must not silently cause text to be sent to OpenAI.
-        guard TranscriptionClient.configuredEndpoint(environment: environment) == TranscriptionClient.defaultEndpoint else { return nil }
+        guard TranscriptionClient.usesDefaultEndpoints(environment: environment) else { return nil }
         return defaultEndpoint
     }
 

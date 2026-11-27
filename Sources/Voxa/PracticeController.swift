@@ -1,7 +1,17 @@
 import Combine
 import Foundation
 
-struct PracticeCredentials { let apiKey: String; let model: ModelOption }
+/// `apiKey` is the OpenAI key that checks answers; spoken answers are transcribed with
+/// `transcriptionKey`, which differs only when the selected model is not OpenAI's.
+struct PracticeCredentials {
+    let apiKey: String
+    let model: ModelOption
+    let transcriptionKey: String
+
+    init(apiKey: String, model: ModelOption, transcriptionKey: String? = nil) {
+        self.apiKey = apiKey; self.model = model; self.transcriptionKey = transcriptionKey ?? apiKey
+    }
+}
 
 /// A practice recording has no output dependency: it cannot paste, submit, or alter dictation history.
 @MainActor
@@ -36,7 +46,7 @@ final class PracticeController: ObservableObject {
     private var subscription: AnyCancellable?
 
     init(recorder: any DictationRecording = AudioRecorder(),
-         transcriber: any DictationTranscribing = TranscriptionClient(endpoint: TranscriptionClient.configuredEndpoint()),
+         transcriber: any DictationTranscribing = TranscriptionClient.configured(),
          evaluator: any PracticeEvaluating = PracticeClient(),
          historyStore: any PracticeHistoryStoring = PracticeHistoryStore(), clock: DictationClock? = nil) {
         self.recorder = recorder; self.transcriber = transcriber; self.evaluator = evaluator; self.clock = clock ?? DictationClock()
@@ -96,7 +106,7 @@ final class PracticeController: ObservableObject {
                 await self.recorder.cancel(id: id)
                 try self.ensureCurrent(token)
                 self.recordingID = nil; self.level = 0; self.phase = .transcribing
-                let text = try await self.transcriber.transcribe(audio, model: credentials.model, apiKey: credentials.apiKey, timing: nil)
+                let text = try await self.transcriber.transcribe(audio, model: credentials.model, apiKey: credentials.transcriptionKey, timing: nil)
                 try self.ensureCurrent(token)
                 try await self.check(text, target: target, step: step, credentials: credentials, token: token)
             } catch {
